@@ -13,8 +13,6 @@
 #include "stdafx.h"
 #include <win32threadpool.h>
 
-// TODO(Local GC) - The DAC should not include GC headers
-#include <../../gc/handletablepriv.h>
 #include "typestring.h"
 #include <gccover.h>
 #include <virtualcallstub.h>
@@ -817,34 +815,35 @@ ClrDataAccess::GetThreadData(CLRDATA_ADDRESS threadAddr, struct DacpThreadData *
 }
 
 #ifdef FEATURE_REJIT
-void CopyReJitInfoToReJitData(ReJitInfo * pReJitInfo, DacpReJitData * pReJitData)
+void CopyNativeCodeVersionToReJitData(NativeCodeVersion nativeCodeVersion, NativeCodeVersion activeCodeVersion, DacpReJitData * pReJitData)
 {
-    pReJitData->rejitID = pReJitInfo->m_pShared->GetId();
-    pReJitData->NativeCodeAddr = pReJitInfo->m_pCode;
+    pReJitData->rejitID = nativeCodeVersion.GetILCodeVersion().GetVersionId();
+    pReJitData->NativeCodeAddr = nativeCodeVersion.GetNativeCode();
 
-    switch (pReJitInfo->m_pShared->GetState())
+    if (nativeCodeVersion != activeCodeVersion)
     {
-    default:
-        _ASSERTE(!"Unknown SharedRejitInfo state.  DAC should be updated to understand this new state.");
-        pReJitData->flags = DacpReJitData::kUnknown;
-        break;
-
-    case SharedReJitInfo::kStateRequested:
-        pReJitData->flags = DacpReJitData::kRequested;
-        break;
-
-    case SharedReJitInfo::kStateActive:
-        pReJitData->flags = DacpReJitData::kActive;
-        break;
-
-    case SharedReJitInfo::kStateReverted:
         pReJitData->flags = DacpReJitData::kReverted;
-        break;
+    }
+    else
+    {
+        switch (nativeCodeVersion.GetILCodeVersion().GetRejitState())
+        {
+        default:
+            _ASSERTE(!"Unknown SharedRejitInfo state.  DAC should be updated to understand this new state.");
+            pReJitData->flags = DacpReJitData::kUnknown;
+            break;
+
+        case ILCodeVersion::kStateRequested:
+            pReJitData->flags = DacpReJitData::kRequested;
+            break;
+
+        case ILCodeVersion::kStateActive:
+            pReJitData->flags = DacpReJitData::kActive;
+            break;
+        }
     }
 }
 #endif // FEATURE_REJIT
-
-
 
 //---------------------------------------------------------------------------------------
 //
@@ -871,10 +870,10 @@ void CopyReJitInfoToReJitData(ReJitInfo * pReJitInfo, DacpReJitData * pReJitData
 //
 
 HRESULT ClrDataAccess::GetMethodDescData(
-    CLRDATA_ADDRESS methodDesc, 
-    CLRDATA_ADDRESS ip, 
-    struct DacpMethodDescData *methodDescData, 
-    ULONG cRevertedRejitVersions, 
+    CLRDATA_ADDRESS methodDesc,
+    CLRDATA_ADDRESS ip,
+    struct DacpMethodDescData *methodDescData,
+    ULONG cRevertedRejitVersions,
     DacpReJitData * rgRevertedRejitData,
     ULONG * pcNeededRevertedRejitData)
 {
@@ -903,12 +902,12 @@ HRESULT ClrDataAccess::GetMethodDescData(
     }
     else
     {
-        ZeroMemory(methodDescData,sizeof(DacpMethodDescData));
+        ZeroMemory(methodDescData, sizeof(DacpMethodDescData));
         if (rgRevertedRejitData != NULL)
-            ZeroMemory(rgRevertedRejitData, sizeof(*rgRevertedRejitData)*cRevertedRejitVersions);
+            ZeroMemory(rgRevertedRejitData, sizeof(*rgRevertedRejitData) * cRevertedRejitVersions);
         if (pcNeededRevertedRejitData != NULL)
             *pcNeededRevertedRejitData = 0;
-    
+
         methodDescData->requestedIP = ip;
         methodDescData->bHasNativeCode = pMD->HasNativeCode();
         methodDescData->bIsDynamic = (pMD->IsLCGMethod()) ? TRUE : FALSE;
@@ -924,8 +923,7 @@ HRESULT ClrDataAccess::GetMethodDescData(
         {
             methodDescData->NativeCodeAddr = (CLRDATA_ADDRESS)-1;
         }
-        methodDescData->AddressOfNativeCodeSlot = pMD->HasNativeCodeSlot() ?
-            TO_CDADDR(pMD->GetAddrOfNativeCodeSlot()) : NULL;
+        methodDescData->AddressOfNativeCodeSlot = pMD->HasNativeCodeSlot() ? TO_CDADDR(pMD->GetAddrOfNativeCodeSlot()) : NULL;
         methodDescData->MDToken = pMD->GetMemberDef();
         methodDescData->MethodDescPtr = methodDesc;
         methodDescData->MethodTablePtr = HOST_CDADDR(pMD->GetMethodTable());
@@ -938,39 +936,43 @@ HRESULT ClrDataAccess::GetMethodDescData(
         //     * ReJitInfo for the requested IP (for !ip2md and !u)
         //     * ReJitInfos for all reverted versions of the method (up to
         //         cRevertedRejitVersions)
-        //         
+        //
         // Minidumps will not have all this rejit info, and failure to get rejit info
         // should not be fatal.  So enclose all rejit stuff in a try.
 
         EX_TRY
         {
-            ReJitManager * pReJitMgr = pMD->GetReJitManager();
+            CodeVersionManager *pCodeVersionManager = pMD->GetCodeVersionManager();
 
             // Current ReJitInfo
-            ReJitInfo * pReJitInfoCurrent = pReJitMgr->FindNonRevertedReJitInfo(pMD);
-            if (pReJitInfoCurrent != NULL)
+            ILCodeVersion activeILCodeVersion = pCodeVersionManager->GetActiveILCodeVersion(pMD);
+            NativeCodeVersion activeChild = activeILCodeVersion.GetActiveNativeCodeVersion(pMD);
+            CopyNativeCodeVersionToReJitData(activeChild, activeChild, &methodDescData->rejitDataCurrent);
+            
+            if (!activeChild.IsNull())
             {
-                CopyReJitInfoToReJitData(pReJitInfoCurrent, &methodDescData->rejitDataCurrent);
+                // This was already set previously, but MethodDesc::GetNativeCode is potentially not aware of
+                // a new native code version, so this is more accurate.
+                methodDescData->NativeCodeAddr = activeChild.GetNativeCode();
             }
 
             // Requested ReJitInfo
             _ASSERTE(methodDescData->rejitDataRequested.rejitID == 0);
             if (methodDescData->requestedIP != NULL)
             {
-                ReJitInfo * pReJitInfoRequested = pReJitMgr->FindReJitInfo(
-                    pMD, 
-                    CLRDATA_ADDRESS_TO_TADDR(methodDescData->requestedIP),
-                    NULL    /* reJitId */);
+                NativeCodeVersion nativeCodeVersionRequested = pCodeVersionManager->GetNativeCodeVersion(
+                    pMD,
+                    CLRDATA_ADDRESS_TO_TADDR(methodDescData->requestedIP));
 
-                if (pReJitInfoRequested != NULL)
+                if (!nativeCodeVersionRequested.IsNull())
                 {
-                    CopyReJitInfoToReJitData(pReJitInfoRequested, &methodDescData->rejitDataRequested);
+                    CopyNativeCodeVersionToReJitData(nativeCodeVersionRequested, activeChild, &methodDescData->rejitDataRequested);
                 }
             }
 
             // Total number of jitted rejit versions
             ULONG cJittedRejitVersions;
-            if (SUCCEEDED(pReJitMgr->GetReJITIDs(pMD, 0 /* cReJitIds */, &cJittedRejitVersions, NULL /* reJitIds */)))
+            if (SUCCEEDED(ReJitManager::GetReJITIDs(pMD, 0 /* cReJitIds */, &cJittedRejitVersions, NULL /* reJitIds */)))
             {
                 methodDescData->cJittedRejitVersions = cJittedRejitVersions;
             }
@@ -994,31 +996,30 @@ HRESULT ClrDataAccess::GetMethodDescData(
                 // Prepare array to populate with rejitids.  "+ 1" because GetReJITIDs
                 // returns all available rejitids, including the rejitid for the one non-reverted
                 // current version.
-                ReJITID * rgReJitIds = reJitIds.OpenRawBuffer(cRevertedRejitVersions + 1);
+                ReJITID *rgReJitIds = reJitIds.OpenRawBuffer(cRevertedRejitVersions + 1);
                 if (rgReJitIds != NULL)
                 {
-                    hr = pReJitMgr->GetReJITIDs(pMD, cRevertedRejitVersions + 1, &cReJitIds, rgReJitIds);
+                    hr = ReJitManager::GetReJITIDs(pMD, cRevertedRejitVersions + 1, &cReJitIds, rgReJitIds);
                     if (SUCCEEDED(hr))
                     {
                         // Go through rejitids.  For each reverted one, populate a entry in rgRevertedRejitData
                         reJitIds.CloseRawBuffer(cReJitIds);
                         ULONG iRejitDataReverted = 0;
-                        for (COUNT_T i=0; 
-                            (i < cReJitIds) && (iRejitDataReverted < cRevertedRejitVersions);
-                            i++)
+                        ILCodeVersion activeVersion = pCodeVersionManager->GetActiveILCodeVersion(pMD);
+                        for (COUNT_T i = 0;
+                             (i < cReJitIds) && (iRejitDataReverted < cRevertedRejitVersions);
+                             i++)
                         {
-                            ReJitInfo * pRejitInfo = pReJitMgr->FindReJitInfo(
-                                pMD, 
-                                NULL /* pCodeStart */,
-                                reJitIds[i]);
+                            ILCodeVersion ilCodeVersion = pCodeVersionManager->GetILCodeVersion(pMD, reJitIds[i]);
 
-                            if ((pRejitInfo == NULL) || 
-                                (pRejitInfo->m_pShared->GetState() != SharedReJitInfo::kStateReverted))
+                            if ((ilCodeVersion.IsNull()) ||
+                                (ilCodeVersion == activeVersion))
                             {
                                 continue;
                             }
 
-                            CopyReJitInfoToReJitData(pRejitInfo, &rgRevertedRejitData[iRejitDataReverted]);
+                            NativeCodeVersion activeRejitChild = ilCodeVersion.GetActiveNativeCodeVersion(pMD);
+                            CopyNativeCodeVersionToReJitData(activeRejitChild, activeChild, &rgRevertedRejitData[iRejitDataReverted]);
                             iRejitDataReverted++;
                         }
                         // pcNeededRevertedRejitData != NULL as per condition at top of function (cuz rgRevertedRejitData !=
@@ -1034,7 +1035,7 @@ HRESULT ClrDataAccess::GetMethodDescData(
                 *pcNeededRevertedRejitData = 0;
         }
         EX_END_CATCH(SwallowAllExceptions)
-        hr = S_OK;      // Failure to get rejitids is not fatal
+        hr = S_OK; // Failure to get rejitids is not fatal
 #endif // FEATURE_REJIT
 
 #if defined(HAVE_GCCOVER)
@@ -1076,10 +1077,130 @@ HRESULT ClrDataAccess::GetMethodDescData(
                         }
                     }
                 }
-            }            
+            }
         }
     }
 
+    SOSDacLeave();
+    return hr;
+}
+
+HRESULT ClrDataAccess::GetTieredVersions(
+    CLRDATA_ADDRESS methodDesc,
+    int rejitId,
+    struct DacpTieredVersionData *nativeCodeAddrs,
+    int cNativeCodeAddrs,
+    int *pcNativeCodeAddrs)
+{
+    if (methodDesc == 0 || cNativeCodeAddrs == 0 || pcNativeCodeAddrs == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    *pcNativeCodeAddrs = 0;
+
+    SOSDacEnter();
+
+#ifdef FEATURE_REJIT
+    PTR_MethodDesc pMD = PTR_MethodDesc(TO_TADDR(methodDesc));
+
+    // If rejit info is appropriate, get the following:
+    //     * ReJitInfo for the current, active version of the method
+    //     * ReJitInfo for the requested IP (for !ip2md and !u)
+    //     * ReJitInfos for all reverted versions of the method (up to
+    //         cRevertedRejitVersions)
+    //
+    // Minidumps will not have all this rejit info, and failure to get rejit info
+    // should not be fatal.  So enclose all rejit stuff in a try.
+
+    EX_TRY
+    {
+        CodeVersionManager *pCodeVersionManager = pMD->GetCodeVersionManager();
+
+        // Total number of jitted rejit versions
+        ULONG cJittedRejitVersions;
+        if (!SUCCEEDED(ReJitManager::GetReJITIDs(pMD, 0 /* cReJitIds */, &cJittedRejitVersions, NULL /* reJitIds */)))
+        {
+            goto cleanup;
+        }
+
+        if ((ULONG)rejitId >= cJittedRejitVersions)
+        {
+            hr = E_INVALIDARG;
+            goto cleanup;
+        }
+
+        ULONG cReJitIds;
+        StackSArray<ReJITID> reJitIds;
+
+        // Prepare array to populate with rejitids.
+        ReJITID *rgReJitIds = reJitIds.OpenRawBuffer(cJittedRejitVersions);
+        if (rgReJitIds != NULL)
+        {
+            hr = ReJitManager::GetReJITIDs(pMD, cJittedRejitVersions, &cReJitIds, rgReJitIds);
+            if (SUCCEEDED(hr))
+            {
+                reJitIds.CloseRawBuffer(cReJitIds);
+
+                ILCodeVersion ilCodeVersion = pCodeVersionManager->GetILCodeVersion(pMD, reJitIds[rejitId]);
+
+                if (ilCodeVersion.IsNull())
+                {
+                    hr = S_FALSE;
+                    goto cleanup;
+                }
+
+                NativeCodeVersionCollection nativeCodeVersions = ilCodeVersion.GetNativeCodeVersions(pMD);
+                int count = 0;
+                for (NativeCodeVersionIterator iter = nativeCodeVersions.Begin(); iter != nativeCodeVersions.End(); iter++)
+                {
+                    nativeCodeAddrs[count].NativeCodeAddr = (*iter).GetNativeCode();
+                    PTR_NativeCodeVersionNode pNode = (*iter).AsNode();
+                    nativeCodeAddrs[count].NativeCodeVersionNodePtr = TO_CDADDR(PTR_TO_TADDR(pNode));
+
+                    if (pMD->IsEligibleForTieredCompilation())
+                    {
+                        switch ((*iter).GetOptimizationTier())
+                        {
+                        default:
+                            nativeCodeAddrs[count].TieredInfo = DacpTieredVersionData::TIERED_UNKNOWN;
+                            break;
+                        case NativeCodeVersion::OptimizationTier0:
+                            nativeCodeAddrs[count].TieredInfo = DacpTieredVersionData::TIERED_0;
+                            break;
+                        case NativeCodeVersion::OptimizationTier1:
+                            nativeCodeAddrs[count].TieredInfo = DacpTieredVersionData::TIERED_1;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        nativeCodeAddrs[count].TieredInfo = DacpTieredVersionData::NON_TIERED;
+                    }
+
+                    ++count;
+
+                    if (count >= cNativeCodeAddrs)
+                    {
+                        hr = S_FALSE;
+                        break;
+                    }
+                }
+
+                *pcNativeCodeAddrs = count;
+            }
+        }
+    }
+    EX_CATCH
+    {
+        hr = E_FAIL;
+    }
+    EX_END_CATCH(SwallowAllExceptions)
+    
+cleanup:
+    ;
+#endif // FEATURE_REJIT
+    
     SOSDacLeave();
     return hr;
 }
@@ -1100,13 +1221,6 @@ ClrDataAccess::GetMethodDescTransparencyData(CLRDATA_ADDRESS methodDesc, struct 
     else
     {
         ZeroMemory(data, sizeof(DacpMethodDescTransparencyData));
-
-        if (pMD->HasCriticalTransparentInfo())
-        {
-            data->bHasCriticalTransparentInfo = pMD->HasCriticalTransparentInfo();
-            data->bIsCritical = pMD->IsCritical();
-            data->bIsTreatAsSafe = pMD->IsTreatAsSafe();
-        }
     }
 
     SOSDacLeave();
@@ -1857,14 +1971,6 @@ ClrDataAccess::GetMethodTableTransparencyData(CLRDATA_ADDRESS mt, struct DacpMet
     else
     {
         ZeroMemory(pTransparencyData, sizeof(DacpMethodTableTransparencyData));
-
-        EEClass * pClass = pMT->GetClass();
-        if (pClass->HasCriticalTransparentInfo())
-        {
-            pTransparencyData->bHasCriticalTransparentInfo = pClass->HasCriticalTransparentInfo();
-            pTransparencyData->bIsCritical = pClass->IsCritical() || pClass->IsAllCritical();
-            pTransparencyData->bIsTreatAsSafe = pClass->IsTreatAsSafe();
-        }
     }
 
     SOSDacLeave();
@@ -2240,23 +2346,6 @@ ClrDataAccess::GetAppDomainData(CLRDATA_ADDRESS addr, struct DacpAppDomainData *
                     appdomainData->FailedAssemblyCount++;
                 }
             }
-#ifndef FEATURE_PAL
-            // MiniDumpNormal doesn't guarantee to dump the SecurityDescriptor, let it fail.
-            EX_TRY
-            {
-                appdomainData->AppSecDesc = HOST_CDADDR(pAppDomain->GetSecurityDescriptor());
-            }
-            EX_CATCH
-            {
-                HRESULT hrExc = GET_EXCEPTION()->GetHR();
-                if (hrExc != HRESULT_FROM_WIN32(ERROR_READ_FAULT)
-                    && hrExc != CORDBG_E_READVIRTUAL_FAILURE)
-                {
-                    EX_RETHROW;
-                }
-            }
-            EX_END_CATCH(SwallowAllExceptions)
-#endif // FEATURE_PAL
         }
     }
 
@@ -2495,134 +2584,27 @@ HRESULT
 ClrDataAccess::GetApplicationBase(CLRDATA_ADDRESS appDomain, int count,
                                   __out_z __inout_ecount(count) wchar_t *base, unsigned int *pNeeded)
 {
-    if (appDomain == NULL || (base == NULL && pNeeded == NULL) || (base != NULL && count == 0))
-    {
-        return E_INVALIDARG;
-    }
+    // Method is not supported on CoreCLR
 
-    SOSDacEnter();
-    AppDomain* pAppDomain = PTR_AppDomain(TO_TADDR(appDomain));
-
-    // Turn from bytes to wide characters
-    if ((PTR_BaseDomain(pAppDomain) == PTR_BaseDomain(SharedDomain::GetDomain())) ||
-        (PTR_BaseDomain(pAppDomain) == PTR_BaseDomain(SystemDomain::System())))
-    {
-        // Shared domain and SystemDomain don't have this field.
-        if (base)
-            base[0] = 0;
-
-        if (pNeeded)
-            *pNeeded = 1;
-    }
-
-    if (!pAppDomain->m_applicationBase.IsEmpty())
-    {
-        if (!pAppDomain->m_applicationBase.
-            DacGetUnicode(count, base, pNeeded))
-        {
-            hr = E_FAIL;
-        }
-    }
-    else
-    {
-        if (base)
-            base[0] = 0;
-        
-        if (pNeeded)
-            *pNeeded = 1;
-    }
-
-    SOSDacLeave();
-    return hr;
+    return E_FAIL;
 }
 
 HRESULT
 ClrDataAccess::GetPrivateBinPaths(CLRDATA_ADDRESS appDomain, int count,
                                   __out_z __inout_ecount(count) wchar_t *paths, unsigned int *pNeeded)
 {
-    if (appDomain == NULL || (paths == NULL && pNeeded == NULL) || (paths != NULL && count == 0))
-        return E_INVALIDARG;
+    // Method is not supported on CoreCLR
 
-    SOSDacEnter();
-    AppDomain* pAppDomain = PTR_AppDomain(TO_TADDR(appDomain));
-
-    // Turn from bytes to wide characters
-    if ((PTR_BaseDomain(pAppDomain) == PTR_BaseDomain(SharedDomain::GetDomain())) ||
-        (PTR_BaseDomain(pAppDomain) == PTR_BaseDomain(SystemDomain::System())))
-    {
-        // Shared domain and SystemDomain don't have this field.
-        if (pNeeded)
-            *pNeeded = 1;
-
-        if (paths)
-            paths[0] = 0;
-
-        hr = S_OK;
-    }
-
-    if (!pAppDomain->m_privateBinPaths.IsEmpty())
-    {
-        if (!pAppDomain->m_privateBinPaths.DacGetUnicode(count, paths, pNeeded))
-        {
-            hr = E_FAIL;
-        }
-    }
-    else
-    {
-        if (paths)
-            paths[0] = 0;
-
-        if (pNeeded)
-            *pNeeded = 1;
-    }
-
-    SOSDacLeave();
-    return hr;
+    return E_FAIL;
 }
 
 HRESULT
 ClrDataAccess::GetAppDomainConfigFile(CLRDATA_ADDRESS appDomain, int count,
                                       __out_z __inout_ecount(count) wchar_t *configFile, unsigned int *pNeeded)
 {
-    if (appDomain == NULL || (configFile == NULL && pNeeded == NULL) || (configFile != NULL && count == 0))
-    {
-        return E_INVALIDARG;
-    }
+    // Method is not supported on CoreCLR
 
-    SOSDacEnter();
-    AppDomain* pAppDomain = PTR_AppDomain(TO_TADDR(appDomain));
-
-    // Turn from bytes to wide characters
-
-    if ((PTR_BaseDomain(pAppDomain) == PTR_BaseDomain(SharedDomain::GetDomain())) ||
-        (PTR_BaseDomain(pAppDomain) == PTR_BaseDomain(SystemDomain::System())))
-    {
-        // Shared domain and SystemDomain don't have this field.
-        if (configFile)
-            configFile[0] = 0;
-
-        if (pNeeded)
-            *pNeeded = 1;
-    }
-
-    if (!pAppDomain->m_configFile.IsEmpty())
-    {
-        if (!pAppDomain->m_configFile.DacGetUnicode(count, configFile, pNeeded))
-        {
-            hr = E_FAIL;
-        }
-    }
-    else
-    {
-        if (configFile)
-            configFile[0] = 0;
-
-        if (pNeeded)
-            *pNeeded = 1;
-    }
-    
-    SOSDacLeave();
-    return hr;
+    return E_FAIL;
 }
 
 HRESULT
@@ -2653,8 +2635,6 @@ ClrDataAccess::GetAssemblyData(CLRDATA_ADDRESS cdBaseDomainPtr, CLRDATA_ADDRESS 
     assemblyData->AssemblyPtr = HOST_CDADDR(pAssembly);
     assemblyData->ClassLoader = HOST_CDADDR(pAssembly->GetLoader());
     assemblyData->ParentDomain = HOST_CDADDR(pAssembly->GetDomain());
-    if (pDomain != NULL)
-        assemblyData->AssemblySecDesc = HOST_CDADDR(pAssembly->GetSecurityDescriptor(pDomain));
     assemblyData->isDynamic = pAssembly->IsDynamic();
     assemblyData->ModuleCount = 0;
     assemblyData->isDomainNeutral = pAssembly->IsDomainNeutral();
@@ -2929,31 +2909,33 @@ ClrDataAccess::GetGCHeapData(struct DacpGcHeapData *gcheapData)
 
     SOSDacEnter();
 
-    // for server GC-capable builds only, we need to check and see if IGCHeap::gcHeapType
+    // we need to check and see if g_heap_type
     // is GC_HEAP_INVALID, in which case we fail.
-    // IGCHeap::gcHeapType doesn't exist on non-server-GC capable builds.
-#ifdef FEATURE_SVR_GC
-    ULONG32 gcHeapValue = *g_gcDacGlobals->gc_heap_type;
+    ULONG32 gcHeapValue = g_heap_type;
 
     // GC_HEAP_TYPE has three possible values:
     //       GC_HEAP_INVALID = 0,
     //       GC_HEAP_WKS     = 1,
     //       GC_HEAP_SVR     = 2
     // If we get something other than that, we probably read the wrong location.
-    _ASSERTE(gcHeapValue >= IGCHeap::GC_HEAP_INVALID && gcHeapValue <= IGCHeap::GC_HEAP_SVR);
+    _ASSERTE(gcHeapValue >= GC_HEAP_INVALID && gcHeapValue <= GC_HEAP_SVR);
 
-    // we have GC_HEAP_INVALID if gcHeapValue == 0, so we're done
-    if (gcHeapValue == IGCHeap::GC_HEAP_INVALID)
+    // we have GC_HEAP_INVALID if gcHeapValue == 0, so we're done - we haven't
+    // initialized the heap yet.
+    if (gcHeapValue == GC_HEAP_INVALID)
     {
         hr = E_FAIL;
         goto cleanup;
     }
-#endif
 
     // Now we can get other important information about the heap
+    // We can use GCHeapUtilities::IsServerHeap here because we have already validated
+    // that the heap is in a valid state. We couldn't use it above, because IsServerHeap
+    // asserts if the heap type is GC_HEAP_INVALID.
     gcheapData->g_max_generation = *g_gcDacGlobals->max_gen;
-    gcheapData->bServerMode = gcHeapValue == IGCHeap::GC_HEAP_SVR;
+    gcheapData->bServerMode = GCHeapUtilities::IsServerHeap();
     gcheapData->bGcStructuresValid = *g_gcDacGlobals->gc_structures_invalid_cnt == 0;
+
     if (GCHeapUtilities::IsServerHeap())
     {
 #if !defined (FEATURE_SVR_GC)
@@ -2968,10 +2950,8 @@ ClrDataAccess::GetGCHeapData(struct DacpGcHeapData *gcheapData)
         gcheapData->HeapCount = 1;
     }
 
-#ifdef FEATURE_SVR_GC
 cleanup:
     ;
-#endif
 
     SOSDacLeave();
     return hr;
@@ -3069,7 +3049,7 @@ ClrDataAccess::GetGCInterestingInfoStaticData(struct DacpGCInterestingInfoData *
     SOSDacEnter();
     memset(data, 0, sizeof(DacpGCInterestingInfoData));
 
-    if (*g_gcDacGlobals->gc_heap_type != IGCHeap::GC_HEAP_SVR)
+    if (g_heap_type != GC_HEAP_SVR)
     {
         for (int i = 0; i < NUM_GC_DATA_POINTS; i++)
             data->interestingDataPoints[i] = g_gcDacGlobals->interesting_data_per_heap[i];
@@ -3639,9 +3619,9 @@ ClrDataAccess::GetSyncBlockData(unsigned int SBNumber, struct DacpSyncBlockData 
             }
 #endif // FEATURE_COMINTEROP
 
-            pSyncBlockData->MonitorHeld = pBlock->m_Monitor.m_MonitorHeld;
-            pSyncBlockData->Recursion = pBlock->m_Monitor.m_Recursion;
-            pSyncBlockData->HoldingThread = HOST_CDADDR(pBlock->m_Monitor.m_HoldingThread);
+            pSyncBlockData->MonitorHeld = pBlock->m_Monitor.GetMonitorHeldStateVolatile();
+            pSyncBlockData->Recursion = pBlock->m_Monitor.GetRecursionLevel();
+            pSyncBlockData->HoldingThread = HOST_CDADDR(pBlock->m_Monitor.GetHoldingThread());
 
             if (pBlock->GetAppDomainIndex().m_dwIndex)
             {
@@ -3827,6 +3807,7 @@ ClrDataAccess::EnumWksGlobalMemoryRegions(CLRDataEnumMemoryFlags flags)
 
     Dereference(g_gcDacGlobals->ephemeral_heap_segment).EnumMem();
     g_gcDacGlobals->alloc_allocated.EnumMem();
+    g_gcDacGlobals->gc_structures_invalid_cnt.EnumMem();
     Dereference(g_gcDacGlobals->finalize_queue).EnumMem();
 
     // Enumerate the entire generation table, which has variable size
@@ -3953,14 +3934,14 @@ HRESULT ClrDataAccess::GetTLSIndex(ULONG *pIndex)
         return E_INVALIDARG;
 
     SOSDacEnter();
-    if (CExecutionEngine::GetTlsIndex() == TLS_OUT_OF_INDEXES)
+    if (g_TlsIndex == TLS_OUT_OF_INDEXES)
     {
         *pIndex = 0;
         hr = S_FALSE;
     }
     else
     {
-        *pIndex = CExecutionEngine::GetTlsIndex();
+        *pIndex = g_TlsIndex;
     }
 
     SOSDacLeave();

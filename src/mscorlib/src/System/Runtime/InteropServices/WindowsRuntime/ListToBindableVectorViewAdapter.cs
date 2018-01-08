@@ -10,7 +10,6 @@ using System.Reflection;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Diagnostics.Contracts;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 
@@ -27,7 +26,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (list == null)
                 throw new ArgumentNullException(nameof(list));
 
-            Contract.EndContractBlock();
 
             this.list = list;
         }
@@ -38,8 +36,8 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             // that Size > Int32.MaxValue:
             if (((uint)Int32.MaxValue) <= index || index >= (uint)listCapacity)
             {
-                Exception e = new ArgumentOutOfRangeException(nameof(index), Environment.GetResourceString("ArgumentOutOfRange_IndexLargerThanMaxValue"));
-                e.SetErrorCode(__HResults.E_BOUNDS);
+                Exception e = new ArgumentOutOfRangeException(nameof(index), SR.ArgumentOutOfRange_IndexLargerThanMaxValue);
+                e.SetErrorCode(HResults.E_BOUNDS);
                 throw e;
             }
         }
@@ -64,7 +62,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (ArgumentOutOfRangeException ex)
             {
-                throw WindowsRuntimeMarshal.GetExceptionForHR(__HResults.E_BOUNDS, ex, "ArgumentOutOfRange_IndexOutOfRange");
+                throw WindowsRuntimeMarshal.GetExceptionForHR(HResults.E_BOUNDS, ex, "ArgumentOutOfRange_IndexOutOfRange");
             }
         }
 

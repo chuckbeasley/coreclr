@@ -19,7 +19,6 @@ namespace System.Reflection.Emit
     using System.Reflection;
     using CultureInfo = System.Globalization.CultureInfo;
     using System.Runtime.InteropServices;
-    using System.Diagnostics.Contracts;
 
     // 
     // A PropertyBuilder is always associated with a TypeBuilder.  The TypeBuilder.DefineProperty
@@ -44,10 +43,9 @@ namespace System.Reflection.Emit
             if (name == null)
                 throw new ArgumentNullException(nameof(name));
             if (name.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), nameof(name));
+                throw new ArgumentException(SR.Argument_EmptyName, nameof(name));
             if (name[0] == '\0')
-                throw new ArgumentException(Environment.GetResourceString("Argument_IllegalName"), nameof(name));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_IllegalName, nameof(name));
 
             m_name = name;
             m_moduleBuilder = mod;
@@ -153,27 +151,27 @@ namespace System.Reflection.Emit
         // Not supported functions in dynamic module.
         public override Object GetValue(Object obj, Object[] index)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override Object GetValue(Object obj, BindingFlags invokeAttr, Binder binder, Object[] index, CultureInfo culture)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override void SetValue(Object obj, Object value, Object[] index)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override void SetValue(Object obj, Object value, BindingFlags invokeAttr, Binder binder, Object[] index, CultureInfo culture)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override MethodInfo[] GetAccessors(bool nonPublic)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override MethodInfo GetGetMethod(bool nonPublic)
@@ -198,7 +196,7 @@ namespace System.Reflection.Emit
 
         public override ParameterInfo[] GetIndexParameters()
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override Type PropertyType
@@ -223,17 +221,17 @@ namespace System.Reflection.Emit
 
         public override Object[] GetCustomAttributes(bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override Object[] GetCustomAttributes(Type attributeType, bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override bool IsDefined(Type attributeType, bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override String Name

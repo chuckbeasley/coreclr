@@ -1,4 +1,4 @@
-// Licensed to the .NET Foundation under one or more agreements.
+ï»¿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -18,7 +18,6 @@ using System.Globalization;
 using System.Threading;
 using System.Security;
 using System.Collections.Concurrent;
-using System.Diagnostics.Contracts;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
@@ -218,7 +217,7 @@ namespace System.Threading.Tasks
             // Otherwise the scheduler is buggy
             if (bInlined && !(task.IsDelegateInvoked || task.IsCanceled))
             {
-                throw new InvalidOperationException(Environment.GetResourceString("TaskScheduler_InconsistentStateAfterTryExecuteTaskInline"));
+                throw new InvalidOperationException(SR.TaskScheduler_InconsistentStateAfterTryExecuteTaskInline);
             }
 
             return bInlined;
@@ -257,7 +256,7 @@ namespace System.Threading.Tasks
         /// </summary>
         internal void InternalQueueTask(Task task)
         {
-            Contract.Requires(task != null);
+            Debug.Assert(task != null);
 
             if (TplEtwProvider.Log.IsEnabled())
             {
@@ -443,7 +442,7 @@ namespace System.Threading.Tasks
         {
             if (task.ExecutingTaskScheduler != this)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("TaskScheduler_ExecuteTask_WrongTaskScheduler"));
+                throw new InvalidOperationException(SR.TaskScheduler_ExecuteTask_WrongTaskScheduler);
             }
 
             return task.ExecuteEntry();
@@ -565,7 +564,12 @@ namespace System.Threading.Tasks
                 return new TaskScheduler[] { s_defaultTaskScheduler };
             }
 
-            ICollection<TaskScheduler> schedulers = s_activeTaskSchedulers.Keys;
+            List<TaskScheduler> schedulers = new List<TaskScheduler>();
+            foreach (var item in s_activeTaskSchedulers)
+            {
+                schedulers.Add(item.Key);
+            }
+
             if (!schedulers.Contains(s_defaultTaskScheduler))
             {
                 // Make sure the default is included, in case the debugger attached
@@ -573,8 +577,7 @@ namespace System.Threading.Tasks
                 schedulers.Add(s_defaultTaskScheduler);
             }
 
-            var arr = new TaskScheduler[schedulers.Count];
-            schedulers.CopyTo(arr, 0);
+            var arr = schedulers.ToArray();
             foreach (var scheduler in arr)
             {
                 Debug.Assert(scheduler != null, "Table returned an incorrect Count or CopyTo failed");
@@ -594,13 +597,13 @@ namespace System.Threading.Tasks
                 m_taskScheduler = scheduler;
             }
 
-            // returns the scheduler’s Id
+            // returns the schedulerï¿½s Id
             public Int32 Id
             {
                 get { return m_taskScheduler.Id; }
             }
 
-            // returns the scheduler’s GetScheduledTasks
+            // returns the schedulerï¿½s GetScheduledTasks
             public IEnumerable<Task> ScheduledTasks
             {
                 get { return m_taskScheduler.GetScheduledTasks(); }
@@ -631,14 +634,14 @@ namespace System.Threading.Tasks
             // make sure we have a synccontext to work with
             if (synContext == null)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("TaskScheduler_FromCurrentSynchronizationContext_NoCurrent"));
+                throw new InvalidOperationException(SR.TaskScheduler_FromCurrentSynchronizationContext_NoCurrent);
             }
 
             m_synchronizationContext = synContext;
         }
 
         /// <summary>
-        /// Implemetation of <see cref="T:System.Threading.Tasks.TaskScheduler.QueueTask"/> for this scheduler class.
+        /// Implementation of <see cref="T:System.Threading.Tasks.TaskScheduler.QueueTask"/> for this scheduler class.
         /// 
         /// Simply posts the tasks to be executed on the associated <see cref="T:System.Threading.SynchronizationContext"/>.
         /// </summary>
@@ -673,7 +676,7 @@ namespace System.Threading.Tasks
         }
 
         /// <summary>
-        /// Implementes the <see cref="T:System.Threading.Tasks.TaskScheduler.MaximumConcurrencyLevel"/> property for
+        /// Implements the <see cref="T:System.Threading.Tasks.TaskScheduler.MaximumConcurrencyLevel"/> property for
         /// this scheduler class.
         /// 
         /// By default it returns 1, because a <see cref="T:System.Threading.SynchronizationContext"/> based

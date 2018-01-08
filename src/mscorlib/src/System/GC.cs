@@ -24,11 +24,10 @@ using System.Runtime.ConstrainedExecution;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Diagnostics.Contracts;
+using System.Diagnostics;
 
 namespace System
 {
-    [Serializable]
     public enum GCCollectionMode
     {
         Default = 0,
@@ -39,7 +38,6 @@ namespace System
     // !!!!!!!!!!!!!!!!!!!!!!!
     // make sure you change the def in vm\gc.h 
     // if you change this!
-    [Serializable]
     internal enum InternalGCCollectionMode
     {
         NonBlocking = 0x00000001,
@@ -51,7 +49,6 @@ namespace System
     // !!!!!!!!!!!!!!!!!!!!!!!
     // make sure you change the def in vm\gc.h 
     // if you change this!
-    [Serializable]
     public enum GCNotificationStatus
     {
         Succeeded = 0,
@@ -70,11 +67,9 @@ namespace System
         internal static extern int SetGCLatencyMode(int newLatencyMode);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         internal static extern int _StartNoGCRegion(long totalSize, bool lohSizeKnown, long lohSize, bool disallowFullBlockingGC);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         internal static extern int _EndNoGCRegion();
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
@@ -87,11 +82,9 @@ namespace System
         private static extern int GetGenerationWR(IntPtr handle);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern long GetTotalMemory();
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void _Collect(int generation, int mode);
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
@@ -103,10 +96,10 @@ namespace System
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         internal static extern bool IsServerGC();
 
-        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode), SuppressUnmanagedCodeSecurity]
+        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void _AddMemoryPressure(UInt64 bytesAllocated);
 
-        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode), SuppressUnmanagedCodeSecurity]
+        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void _RemoveMemoryPressure(UInt64 bytesAllocated);
 
         public static void AddMemoryPressure(long bytesAllocated)
@@ -114,15 +107,14 @@ namespace System
             if (bytesAllocated <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(bytesAllocated),
-                        Environment.GetResourceString("ArgumentOutOfRange_NeedPosNum"));
+                        SR.ArgumentOutOfRange_NeedPosNum);
             }
 
             if ((4 == IntPtr.Size) && (bytesAllocated > Int32.MaxValue))
             {
                 throw new ArgumentOutOfRangeException("pressure",
-                        Environment.GetResourceString("ArgumentOutOfRange_MustBeNonNegInt32"));
+                    SR.ArgumentOutOfRange_MustBeNonNegInt32);
             }
-            Contract.EndContractBlock();
 
             _AddMemoryPressure((ulong)bytesAllocated);
         }
@@ -132,15 +124,14 @@ namespace System
             if (bytesAllocated <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(bytesAllocated),
-                        Environment.GetResourceString("ArgumentOutOfRange_NeedPosNum"));
+                    SR.ArgumentOutOfRange_NeedPosNum);
             }
 
             if ((4 == IntPtr.Size) && (bytesAllocated > Int32.MaxValue))
             {
                 throw new ArgumentOutOfRangeException(nameof(bytesAllocated),
-                        Environment.GetResourceString("ArgumentOutOfRange_MustBeNonNegInt32"));
+                    SR.ArgumentOutOfRange_MustBeNonNegInt32);
             }
-            Contract.EndContractBlock();
 
             _RemoveMemoryPressure((ulong)bytesAllocated);
         }
@@ -181,15 +172,14 @@ namespace System
         {
             if (generation < 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(generation), Environment.GetResourceString("ArgumentOutOfRange_GenericPositive"));
+                throw new ArgumentOutOfRangeException(nameof(generation), SR.ArgumentOutOfRange_GenericPositive);
             }
 
             if ((mode < GCCollectionMode.Default) || (mode > GCCollectionMode.Optimized))
             {
-                throw new ArgumentOutOfRangeException(nameof(mode), Environment.GetResourceString("ArgumentOutOfRange_Enum"));
+                throw new ArgumentOutOfRangeException(nameof(mode), SR.ArgumentOutOfRange_Enum);
             }
 
-            Contract.EndContractBlock();
 
             int iInternalModes = 0;
 
@@ -217,9 +207,8 @@ namespace System
         {
             if (generation < 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(generation), Environment.GetResourceString("ArgumentOutOfRange_GenericPositive"));
+                throw new ArgumentOutOfRangeException(nameof(generation), SR.ArgumentOutOfRange_GenericPositive);
             }
-            Contract.EndContractBlock();
             return _CollectionCount(generation, 0);
         }
 
@@ -280,7 +269,6 @@ namespace System
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void _WaitForPendingFinalizers();
 
         public static void WaitForPendingFinalizers()
@@ -298,7 +286,6 @@ namespace System
         {
             if (obj == null)
                 throw new ArgumentNullException(nameof(obj));
-            Contract.EndContractBlock();
             _SuppressFinalize(obj);
         }
 
@@ -313,7 +300,6 @@ namespace System
         {
             if (obj == null)
                 throw new ArgumentNullException(nameof(obj));
-            Contract.EndContractBlock();
             _ReRegisterForFinalize(obj);
         }
 
@@ -372,7 +358,7 @@ namespace System
                 throw new ArgumentOutOfRangeException(nameof(maxGenerationThreshold),
                                                       String.Format(
                                                           CultureInfo.CurrentCulture,
-                                                          Environment.GetResourceString("ArgumentOutOfRange_Bounds_Lower_Upper"),
+                                                          SR.ArgumentOutOfRange_Bounds_Lower_Upper,
                                                           1,
                                                           99));
             }
@@ -382,14 +368,14 @@ namespace System
                 throw new ArgumentOutOfRangeException(nameof(largeObjectHeapThreshold),
                                                       String.Format(
                                                           CultureInfo.CurrentCulture,
-                                                          Environment.GetResourceString("ArgumentOutOfRange_Bounds_Lower_Upper"),
+                                                          SR.ArgumentOutOfRange_Bounds_Lower_Upper,
                                                           1,
                                                           99));
             }
 
             if (!_RegisterForFullGCNotification(maxGenerationThreshold, largeObjectHeapThreshold))
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_NotWithConcurrentGC"));
+                throw new InvalidOperationException(SR.InvalidOperation_NotWithConcurrentGC);
             }
         }
 
@@ -397,7 +383,7 @@ namespace System
         {
             if (!_CancelFullGCNotification())
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_NotWithConcurrentGC"));
+                throw new InvalidOperationException(SR.InvalidOperation_NotWithConcurrentGC);
             }
         }
 
@@ -409,7 +395,7 @@ namespace System
         public static GCNotificationStatus WaitForFullGCApproach(int millisecondsTimeout)
         {
             if (millisecondsTimeout < -1)
-                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
 
             return (GCNotificationStatus)_WaitForFullGCApproach(millisecondsTimeout);
         }
@@ -422,7 +408,7 @@ namespace System
         public static GCNotificationStatus WaitForFullGCComplete(int millisecondsTimeout)
         {
             if (millisecondsTimeout < -1)
-                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             return (GCNotificationStatus)_WaitForFullGCComplete(millisecondsTimeout);
         }
 
@@ -444,14 +430,37 @@ namespace System
 
         private static bool StartNoGCRegionWorker(long totalSize, bool hasLohSize, long lohSize, bool disallowFullBlockingGC)
         {
+            if (totalSize <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(totalSize), "totalSize can't be zero or negative");
+            }
+
+            if (hasLohSize)
+            {
+                if (lohSize <= 0)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(lohSize), "lohSize can't be zero or negative");
+                }
+
+                if (lohSize > totalSize)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(lohSize), "lohSize can't be greater than totalSize");
+                }
+            }
+
             StartNoGCRegionStatus status = (StartNoGCRegionStatus)_StartNoGCRegion(totalSize, hasLohSize, lohSize, disallowFullBlockingGC);
-            if (status == StartNoGCRegionStatus.AmountTooLarge)
-                throw new ArgumentOutOfRangeException(nameof(totalSize),
-                    "totalSize is too large. For more information about setting the maximum size, see \"Latency Modes\" in http://go.microsoft.com/fwlink/?LinkId=522706");
-            else if (status == StartNoGCRegionStatus.AlreadyInProgress)
-                throw new InvalidOperationException("The NoGCRegion mode was already in progress");
-            else if (status == StartNoGCRegionStatus.NotEnoughMemory)
-                return false;
+            switch (status)
+            {
+                case StartNoGCRegionStatus.NotEnoughMemory:
+                    return false;
+                case StartNoGCRegionStatus.AlreadyInProgress:
+                    throw new InvalidOperationException("The NoGCRegion mode was already in progress");
+                case StartNoGCRegionStatus.AmountTooLarge:
+                    throw new ArgumentOutOfRangeException(nameof(totalSize),
+                        "totalSize is too large. For more information about setting the maximum size, see \"Latency Modes\" in http://go.microsoft.com/fwlink/?LinkId=522706");
+            }
+
+            Debug.Assert(status == StartNoGCRegionStatus.Succeeded);
             return true;
         }
 

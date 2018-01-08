@@ -30,6 +30,8 @@
 #include "gentree.h"
 // Defines the type ValueNum.
 #include "valuenumtype.h"
+// Defines the type SmallHashTable.
+#include "smallhash.h"
 
 // A "ValueNumStore" represents the "universe" of value numbers used in a single
 // compilation.
@@ -97,26 +99,26 @@ public:
     // VNMap - map from something to ValueNum, where something is typically a constant value or a VNFunc
     //         This class has two purposes - to abstract the implementation and to validate the ValueNums
     //         being stored or retrieved.
-    template <class fromType, class keyfuncs = LargePrimitiveKeyFuncs<fromType>>
-    class VNMap : public SimplerHashTable<fromType, keyfuncs, ValueNum, JitSimplerHashBehavior>
+    template <class fromType, class keyfuncs = JitLargePrimitiveKeyFuncs<fromType>>
+    class VNMap : public JitHashTable<fromType, keyfuncs, ValueNum>
     {
     public:
-        VNMap(IAllocator* alloc) : SimplerHashTable<fromType, keyfuncs, ValueNum, JitSimplerHashBehavior>(alloc)
+        VNMap(CompAllocator* alloc) : JitHashTable<fromType, keyfuncs, ValueNum>(alloc)
         {
         }
         ~VNMap()
         {
-            ~VNMap<fromType, keyfuncs>::SimplerHashTable();
+            ~VNMap<fromType, keyfuncs>::JitHashTable();
         }
 
         bool Set(fromType k, ValueNum val)
         {
             assert(val != RecursiveVN);
-            return SimplerHashTable<fromType, keyfuncs, ValueNum, JitSimplerHashBehavior>::Set(k, val);
+            return JitHashTable<fromType, keyfuncs, ValueNum>::Set(k, val);
         }
         bool Lookup(fromType k, ValueNum* pVal = nullptr) const
         {
-            bool result = SimplerHashTable<fromType, keyfuncs, ValueNum, JitSimplerHashBehavior>::Lookup(k, pVal);
+            bool result = JitHashTable<fromType, keyfuncs, ValueNum>::Lookup(k, pVal);
             assert(!result || *pVal != RecursiveVN);
             return result;
         }
@@ -126,7 +128,7 @@ private:
     Compiler* m_pComp;
 
     // For allocations.  (Other things?)
-    IAllocator* m_alloc;
+    CompAllocator* m_alloc;
 
     // TODO-Cleanup: should transform "attribs" into a struct with bit fields.  That would be simpler...
 
@@ -223,16 +225,19 @@ private:
     unsigned m_numMapSels;
 #endif
 
+// This is the constant value used for the default value of m_mapSelectBudget
+#define DEFAULT_MAP_SELECT_BUDGET 100 // used by JitVNMapSelBudget
+
     // This is the maximum number of MapSelect terms that can be "considered" as part of evaluation of a top-level
     // MapSelect application.
-    unsigned m_mapSelectBudget;
+    int m_mapSelectBudget;
 
 public:
     // Initializes any static variables of ValueNumStore.
     static void InitValueNumStoreStatics();
 
     // Initialize an empty ValueNumStore.
-    ValueNumStore(Compiler* comp, IAllocator* allocator);
+    ValueNumStore(Compiler* comp, CompAllocator* allocator);
 
     // Returns "true" iff "vnf" (which may have been created by a cast from an integral value) represents
     // a legal value number function.
@@ -404,7 +409,7 @@ public:
 
     // A method that does the work for VNForMapSelect and may call itself recursively.
     ValueNum VNForMapSelectWork(
-        ValueNumKind vnk, var_types typ, ValueNum op1VN, ValueNum op2VN, unsigned* pBudget, bool* pUsedRecursiveVN);
+        ValueNumKind vnk, var_types typ, ValueNum op1VN, ValueNum op2VN, int* pBudget, bool* pUsedRecursiveVN);
 
     // A specialized version of VNForFunc that is used for VNF_MapStore and provides some logging when verbose is set
     ValueNum VNForMapStore(var_types typ, ValueNum arg0VN, ValueNum arg1VN, ValueNum arg2VN);
@@ -537,27 +542,39 @@ public:
     // Returns true iff the VN represents an integeral constant.
     bool IsVNInt32Constant(ValueNum vn);
 
-    struct ArrLenUnsignedBoundInfo
+    typedef SmallHashTable<ValueNum, bool, 8U> CheckedBoundVNSet;
+
+    // Returns true if the VN is known or likely to appear as the conservative value number
+    // of the length argument to a GT_ARR_BOUNDS_CHECK node.
+    bool IsVNCheckedBound(ValueNum vn);
+
+    // Record that a VN is known to appear as the conservative value number of the length
+    // argument to a GT_ARR_BOUNDS_CHECK node.
+    void SetVNIsCheckedBound(ValueNum vn);
+
+    // Information about the individual components of a value number representing an unsigned
+    // comparison of some value against a checked bound VN.
+    struct UnsignedCompareCheckedBoundInfo
     {
         unsigned cmpOper;
         ValueNum vnIdx;
-        ValueNum vnLen;
+        ValueNum vnBound;
 
-        ArrLenUnsignedBoundInfo() : cmpOper(GT_NONE), vnIdx(NoVN), vnLen(NoVN)
+        UnsignedCompareCheckedBoundInfo() : cmpOper(GT_NONE), vnIdx(NoVN), vnBound(NoVN)
         {
         }
     };
 
-    struct ArrLenArithBoundInfo
+    struct CompareCheckedBoundArithInfo
     {
-        // (vnArr.len - 1) > vnOp
-        // (vnArr.len arrOper arrOp) cmpOper cmpOp
-        ValueNum vnArray;
+        // (vnBound - 1) > vnOp
+        // (vnBound arrOper arrOp) cmpOper cmpOp
+        ValueNum vnBound;
         unsigned arrOper;
         ValueNum arrOp;
         unsigned cmpOper;
         ValueNum cmpOp;
-        ArrLenArithBoundInfo() : vnArray(NoVN), arrOper(GT_NONE), arrOp(NoVN), cmpOper(GT_NONE), cmpOp(NoVN)
+        CompareCheckedBoundArithInfo() : vnBound(NoVN), arrOper(GT_NONE), arrOp(NoVN), cmpOper(GT_NONE), cmpOp(NoVN)
         {
         }
 #ifdef DEBUG
@@ -567,7 +584,7 @@ public:
             printf(" ");
             printf(vnStore->VNFuncName((VNFunc)cmpOper));
             printf(" ");
-            vnStore->vnDump(vnStore->m_pComp, vnArray);
+            vnStore->vnDump(vnStore->m_pComp, vnBound);
             if (arrOper != GT_NONE)
             {
                 printf(vnStore->VNFuncName((VNFunc)arrOper));
@@ -618,26 +635,26 @@ public:
     // If "vn" is constant bound, then populate the "info" fields for constVal, cmpOp, cmpOper.
     void GetConstantBoundInfo(ValueNum vn, ConstantBoundInfo* info);
 
-    // If "vn" is of the form "(uint)var < (uint)a.len" (or equivalent) return true.
-    bool IsVNArrLenUnsignedBound(ValueNum vn, ArrLenUnsignedBoundInfo* info);
+    // If "vn" is of the form "(uint)var < (uint)len" (or equivalent) return true.
+    bool IsVNUnsignedCompareCheckedBound(ValueNum vn, UnsignedCompareCheckedBoundInfo* info);
 
-    // If "vn" is of the form "var < a.len" or "a.len <= var" return true.
-    bool IsVNArrLenBound(ValueNum vn);
+    // If "vn" is of the form "var < len" or "len <= var" return true.
+    bool IsVNCompareCheckedBound(ValueNum vn);
 
-    // If "vn" is arr len bound, then populate the "info" fields for the arrVn, cmpOp, cmpOper.
-    void GetArrLenBoundInfo(ValueNum vn, ArrLenArithBoundInfo* info);
+    // If "vn" is checked bound, then populate the "info" fields for the boundVn, cmpOp, cmpOper.
+    void GetCompareCheckedBound(ValueNum vn, CompareCheckedBoundArithInfo* info);
 
-    // If "vn" is of the form "a.len +/- var" return true.
-    bool IsVNArrLenArith(ValueNum vn);
+    // If "vn" is of the form "len +/- var" return true.
+    bool IsVNCheckedBoundArith(ValueNum vn);
 
-    // If "vn" is arr len arith, then populate the "info" fields for arrOper, arrVn, arrOp.
-    void GetArrLenArithInfo(ValueNum vn, ArrLenArithBoundInfo* info);
+    // If "vn" is checked bound arith, then populate the "info" fields for arrOper, arrVn, arrOp.
+    void GetCheckedBoundArithInfo(ValueNum vn, CompareCheckedBoundArithInfo* info);
 
-    // If "vn" is of the form "var < a.len +/- k" return true.
-    bool IsVNArrLenArithBound(ValueNum vn);
+    // If "vn" is of the form "var < len +/- k" return true.
+    bool IsVNCompareCheckedBoundArith(ValueNum vn);
 
-    // If "vn" is arr len arith bound, then populate the "info" fields for cmpOp, cmpOper.
-    void GetArrLenArithBoundInfo(ValueNum vn, ArrLenArithBoundInfo* info);
+    // If "vn" is checked bound arith, then populate the "info" fields for cmpOp, cmpOper.
+    void GetCompareCheckedBoundArithInfo(ValueNum vn, CompareCheckedBoundArithInfo* info);
 
     // Returns the flags on the current handle. GTF_ICON_SCOPE_HDL for example.
     unsigned GetHandleFlags(ValueNum vn);
@@ -858,20 +875,19 @@ private:
     // The base VN of the next chunk to be allocated.  Should always be a multiple of ChunkSize.
     ValueNum m_nextChunkBase;
 
-    DECLARE_TYPED_ENUM(ChunkExtraAttribs, BYTE)
+    enum ChunkExtraAttribs : BYTE
     {
-        CEA_None,          // No extra attributes.
-            CEA_Const,     // This chunk contains constant values.
-            CEA_Handle,    // This chunk contains handle constants.
-            CEA_NotAField, // This chunk contains "not a field" values.
-            CEA_Func0,     // Represents functions of arity 0.
-            CEA_Func1,     // ...arity 1.
-            CEA_Func2,     // ...arity 2.
-            CEA_Func3,     // ...arity 3.
-            CEA_Func4,     // ...arity 4.
-            CEA_Count
-    }
-    END_DECLARE_TYPED_ENUM(ChunkExtraAttribs, BYTE);
+        CEA_None,      // No extra attributes.
+        CEA_Const,     // This chunk contains constant values.
+        CEA_Handle,    // This chunk contains handle constants.
+        CEA_NotAField, // This chunk contains "not a field" values.
+        CEA_Func0,     // Represents functions of arity 0.
+        CEA_Func1,     // ...arity 1.
+        CEA_Func2,     // ...arity 2.
+        CEA_Func3,     // ...arity 3.
+        CEA_Func4,     // ...arity 4.
+        CEA_Count
+    };
 
     // A "Chunk" holds "ChunkSize" value numbers, starting at "m_baseVN".  All of these share the same
     // "m_typ" and "m_attribs".  These properties determine the interpretation of "m_defs", as discussed below.
@@ -894,7 +910,7 @@ private:
         // Initialize a chunk, starting at "*baseVN", for the given "typ", "attribs", and "loopNum" (using "alloc" for
         // allocations).
         // (Increments "*baseVN" by ChunkSize.)
-        Chunk(IAllocator*            alloc,
+        Chunk(CompAllocator*         alloc,
               ValueNum*              baseVN,
               var_types              typ,
               ChunkExtraAttribs      attribs,
@@ -915,7 +931,7 @@ private:
         };
     };
 
-    struct VNHandle : public KeyFuncsDefEquals<VNHandle>
+    struct VNHandle : public JitKeyFuncsDefEquals<VNHandle>
     {
         ssize_t  m_cnsVal;
         unsigned m_flags;
@@ -1029,7 +1045,7 @@ private:
     // So we have to be careful about breaking infinite recursion.  We can ignore "recursive" results -- if all the
     // non-recursive results are the same, the recursion indicates that the loop structure didn't alter the result.
     // This stack represents the set of outer phis such that select(phi, ind) is being evaluated.
-    ExpandArrayStack<VNDefFunc2Arg> m_fixedPointMapSels;
+    JitExpandArrayStack<VNDefFunc2Arg> m_fixedPointMapSels;
 
 #ifdef DEBUG
     // Returns "true" iff "m_fixedPointMapSels" is non-empty, and it's top element is
@@ -1040,8 +1056,11 @@ private:
     // Returns true if "sel(map, ind)" is a member of "m_fixedPointMapSels".
     bool SelectIsBeingEvaluatedRecursively(ValueNum map, ValueNum ind);
 
+    // This is the set of value numbers that have been flagged as arguments to bounds checks, in the length position.
+    CheckedBoundVNSet m_checkedBoundVNs;
+
     // This is a map from "chunk number" to the attributes of the chunk.
-    ExpandArrayStack<Chunk*> m_chunks;
+    JitExpandArrayStack<Chunk*> m_chunks;
 
     // These entries indicate the current allocation chunk, if any, for each valid combination of <var_types,
     // ChunkExtraAttribute, loopNumber>.  Valid combinations require attribs==CEA_None or loopNum==MAX_LOOP_NUM.
@@ -1127,7 +1146,7 @@ private:
         return m_handleMap;
     }
 
-    struct LargePrimitiveKeyFuncsFloat : public LargePrimitiveKeyFuncs<float>
+    struct LargePrimitiveKeyFuncsFloat : public JitLargePrimitiveKeyFuncs<float>
     {
         static bool Equals(float x, float y)
         {
@@ -1147,7 +1166,7 @@ private:
     }
 
     // In the JIT we need to distinguish -0.0 and 0.0 for optimizations.
-    struct LargePrimitiveKeyFuncsDouble : public LargePrimitiveKeyFuncs<double>
+    struct LargePrimitiveKeyFuncsDouble : public JitLargePrimitiveKeyFuncs<double>
     {
         static bool Equals(double x, double y)
         {
@@ -1176,7 +1195,7 @@ private:
         return m_byrefCnsMap;
     }
 
-    struct VNDefFunc0ArgKeyFuncs : public KeyFuncsDefEquals<VNDefFunc1Arg>
+    struct VNDefFunc0ArgKeyFuncs : public JitKeyFuncsDefEquals<VNDefFunc1Arg>
     {
         static unsigned GetHashCode(VNDefFunc1Arg val)
         {
@@ -1194,7 +1213,7 @@ private:
         return m_VNFunc0Map;
     }
 
-    struct VNDefFunc1ArgKeyFuncs : public KeyFuncsDefEquals<VNDefFunc1Arg>
+    struct VNDefFunc1ArgKeyFuncs : public JitKeyFuncsDefEquals<VNDefFunc1Arg>
     {
         static unsigned GetHashCode(VNDefFunc1Arg val)
         {
@@ -1212,7 +1231,7 @@ private:
         return m_VNFunc1Map;
     }
 
-    struct VNDefFunc2ArgKeyFuncs : public KeyFuncsDefEquals<VNDefFunc2Arg>
+    struct VNDefFunc2ArgKeyFuncs : public JitKeyFuncsDefEquals<VNDefFunc2Arg>
     {
         static unsigned GetHashCode(VNDefFunc2Arg val)
         {
@@ -1230,7 +1249,7 @@ private:
         return m_VNFunc2Map;
     }
 
-    struct VNDefFunc3ArgKeyFuncs : public KeyFuncsDefEquals<VNDefFunc3Arg>
+    struct VNDefFunc3ArgKeyFuncs : public JitKeyFuncsDefEquals<VNDefFunc3Arg>
     {
         static unsigned GetHashCode(VNDefFunc3Arg val)
         {
@@ -1248,7 +1267,7 @@ private:
         return m_VNFunc3Map;
     }
 
-    struct VNDefFunc4ArgKeyFuncs : public KeyFuncsDefEquals<VNDefFunc4Arg>
+    struct VNDefFunc4ArgKeyFuncs : public JitKeyFuncsDefEquals<VNDefFunc4Arg>
     {
         static unsigned GetHashCode(VNDefFunc4Arg val)
         {

@@ -1380,7 +1380,7 @@ DONE:
 
 /*****************************************************************************
  *
- *  emitIns_valid_imm_for_add() returns true when the immediate 'imm'
+ *  emitins_valid_imm_for_add() returns true when the immediate 'imm'
  *   can be encoded using a single add or sub instruction.
  */
 /*static*/ bool emitter::emitIns_valid_imm_for_add(int imm, insFlags flags)
@@ -1396,12 +1396,53 @@ DONE:
 
 /*****************************************************************************
  *
+ *  emitins_valid_imm_for_cmp() returns true if this 'imm'
+ *   can be encoded as a input operand to an cmp instruction.
+ */
+/*static*/ bool emitter::emitIns_valid_imm_for_cmp(int imm, insFlags flags)
+{
+    if (isModImmConst(imm)) // funky arm immediate
+        return true;
+    if (isModImmConst(-imm)) // funky arm immediate via sub
+        return true;
+    return false;
+}
+
+/*****************************************************************************
+ *
  *  emitIns_valid_imm_for_add_sp() returns true when the immediate 'imm'
  *   can be encoded in "add Rd,SP,i10".
  */
 /*static*/ bool emitter::emitIns_valid_imm_for_add_sp(int imm)
 {
     if ((imm & 0x03fc) == imm)
+        return true;
+    return false;
+}
+
+/*****************************************************************************
+ *
+ *  emitIns_valid_imm_for_ldst_offset() returns true when the immediate 'imm'
+ *   can be encoded as the offset in a ldr/str instruction.
+ */
+/*static*/ bool emitter::emitIns_valid_imm_for_ldst_offset(int imm, emitAttr size)
+{
+    if ((imm & 0x0fff) == imm)
+        return true; // encodable using IF_T2_K1
+    if (unsigned_abs(imm) <= 0x0ff)
+        return true; // encodable using IF_T2_H0
+    return false;
+}
+
+/*****************************************************************************
+ *
+ *  emitIns_valid_imm_for_vldst_offset() returns true when the immediate 'imm'
+ *   can be encoded as the offset in a vldr/vstr instruction, i.e. when it is
+ *   a non-negative multiple of 4 that is less than 1024.
+ */
+/*static*/ bool emitter::emitIns_valid_imm_for_vldst_offset(int imm)
+{
+    if ((imm & 0x3fc) == imm)
         return true;
     return false;
 }
@@ -2351,7 +2392,7 @@ void emitter::emitIns_R_R_I(instruction ins,
             assert(insOptsNone(opt));
 
             // Is it just a mov?
-            if (imm == 0)
+            if ((imm == 0) && insDoesNotSetFlags(flags))
             {
                 // Is the mov even necessary?
                 // Fix 383915 ARM ILGEN
@@ -2417,6 +2458,16 @@ void emitter::emitIns_R_R_I(instruction ins,
                 ins = (ins == INS_add) ? INS_addw : INS_subw;
                 fmt = IF_T2_M0;
                 sf  = INS_FLAGS_NOT_SET;
+            }
+            else if (insDoesNotSetFlags(flags) && (reg1 != REG_SP) && (reg1 != REG_PC))
+            {
+                // movw,movt reg1, imm
+                codeGen->instGen_Set_Reg_To_Imm(attr, reg1, (ins == INS_sub ? -1 : 1) * imm);
+
+                // ins reg1, reg2
+                emitIns_R_R(INS_add, attr, reg1, reg2);
+
+                return;
             }
             else
             {
@@ -3757,19 +3808,12 @@ void emitter::emitIns_C_I(instruction ins, emitAttr attr, CORINFO_FIELD_HANDLE f
  *  The following adds instructions referencing address modes.
  */
 
-void emitter::emitIns_I_AR(
-    instruction ins, emitAttr attr, int val, regNumber reg, int offs, int memCookie, void* clsCookie)
+void emitter::emitIns_I_AR(instruction ins, emitAttr attr, int val, regNumber reg, int offs)
 {
     NYI("emitIns_I_AR");
 }
 
-void emitter::emitIns_R_AR(instruction ins,
-                           emitAttr    attr,
-                           regNumber   ireg,
-                           regNumber   reg,
-                           int         offs,
-                           int         memCookie /* = 0 */,
-                           void*       clsCookie /* = NULL */)
+void emitter::emitIns_R_AR(instruction ins, emitAttr attr, regNumber ireg, regNumber reg, int offs)
 {
     if (ins == INS_mov)
     {
@@ -3839,13 +3883,7 @@ void emitter::emitIns_R_AI(instruction ins, emitAttr attr, regNumber ireg, ssize
     NYI("emitIns_R_AI");
 }
 
-void emitter::emitIns_AR_R(instruction ins,
-                           emitAttr    attr,
-                           regNumber   ireg,
-                           regNumber   reg,
-                           int         offs,
-                           int         memCookie /* = 0 */,
-                           void*       clsCookie /* = NULL */)
+void emitter::emitIns_AR_R(instruction ins, emitAttr attr, regNumber ireg, regNumber reg, int offs)
 {
     if (ins == INS_mov)
     {
@@ -4213,24 +4251,29 @@ void emitter::emitIns_J(instruction ins, BasicBlock* dst, int instrCount /* = 0 
 
 void emitter::emitIns_R_L(instruction ins, emitAttr attr, BasicBlock* dst, regNumber reg)
 {
-    insFormat fmt = IF_NONE;
-
     assert(dst->bbFlags & BBF_JMP_TARGET);
+
+    insFormat     fmt = IF_NONE;
+    instrDescJmp* id;
 
     /* Figure out the encoding format of the instruction */
     switch (ins)
     {
+        case INS_adr:
+            id  = emitNewInstrLbl();
+            fmt = IF_T2_M1;
+            break;
         case INS_movt:
         case INS_movw:
+            id  = emitNewInstrJmp();
             fmt = IF_T2_N1;
             break;
         default:
             unreached();
     }
-    assert(fmt == IF_T2_N1);
+    assert((fmt == IF_T2_M1) || (fmt == IF_T2_N1));
 
-    instrDescJmp* id  = emitNewInstrJmp();
-    insSize       isz = emitInsSize(fmt);
+    insSize isz = emitInsSize(fmt);
 
     id->idIns(ins);
     id->idReg1(reg);
@@ -4247,7 +4290,16 @@ void emitter::emitIns_R_L(instruction ins, emitAttr attr, BasicBlock* dst, regNu
 
     id->idAddr()->iiaBBlabel = dst;
     id->idjShort             = false;
-    id->idjKeepLong          = true;
+
+    if (ins == INS_adr)
+    {
+        id->idReg2(REG_PC);
+        id->idjKeepLong = emitComp->fgInDifferentRegions(emitComp->compCurBB, dst);
+    }
+    else
+    {
+        id->idjKeepLong = true;
+    }
 
     /* Record the jump's IG and offset within it */
 
@@ -4289,14 +4341,12 @@ void emitter::emitIns_R_D(instruction ins, emitAttr attr, unsigned offs, regNumb
     id->idInsFmt(fmt);
     id->idInsSize(isz);
 
-#if RELOC_SUPPORT
     if (emitComp->opts.compReloc)
     {
         // Set the relocation flags - these give hint to zap to perform
         // relocation of the specified 32bit address.
         id->idSetRelocFlags(attr);
     }
-#endif // RELOC_SUPPORT
 
     dispIns(id);
     appendToCurIG(id);
@@ -4306,39 +4356,30 @@ void emitter::emitIns_J_R(instruction ins, emitAttr attr, BasicBlock* dst, regNu
 {
     assert(dst->bbFlags & BBF_JMP_TARGET);
 
-    instrDescJmp* id;
-    if (ins == INS_adr)
+    insFormat fmt = IF_NONE;
+    switch (ins)
     {
-        id = emitNewInstrLbl();
-
-        id->idIns(INS_adr);
-        id->idInsFmt(IF_T2_M1);
-        id->idInsSize(emitInsSize(IF_T2_M1));
-        id->idAddr()->iiaBBlabel = dst;
-        id->idReg1(reg);
-        id->idReg2(REG_PC);
-
-        /* Assume the label reference will be long */
-
-        id->idjShort    = 0;
-        id->idjKeepLong = emitComp->fgInDifferentRegions(emitComp->compCurBB, dst);
+        case INS_cbz:
+        case INS_cbnz:
+            fmt = IF_T1_I;
+            break;
+        default:
+            unreached();
     }
-    else
-    {
-        assert(ins == INS_cbz || INS_cbnz);
-        assert(isLowRegister(reg));
-        id = emitNewInstrJmp();
+    assert(fmt == IF_T1_I);
 
-        id->idIns(ins);
-        id->idInsFmt(IF_T1_I);
-        id->idInsSize(emitInsSize(IF_T1_I));
-        id->idReg1(reg);
+    assert(isLowRegister(reg));
 
-        /* This jump better be short or-else! */
-        id->idjShort             = true;
-        id->idAddr()->iiaBBlabel = dst;
-        id->idjKeepLong          = false;
-    }
+    instrDescJmp* id = emitNewInstrJmp();
+    id->idIns(ins);
+    id->idInsFmt(IF_T1_I);
+    id->idInsSize(emitInsSize(IF_T1_I));
+    id->idReg1(reg);
+
+    /* This jump better be short or-else! */
+    id->idjShort             = true;
+    id->idAddr()->iiaBBlabel = dst;
+    id->idjKeepLong          = false;
 
     /* Record the jump's IG and offset within it */
 
@@ -4461,8 +4502,8 @@ void emitter::emitIns_Call(EmitCallType          callType,
     }
 #endif
 
-    assert(argSize % (int)sizeof(void*) == 0);
-    argCnt = argSize / (int)sizeof(void*);
+    assert(argSize % (int)REGSIZE_BYTES == 0);
+    argCnt = argSize / (int)REGSIZE_BYTES;
 
     /* Managed RetVal: emit sequence point for the call */
     if (emitComp->opts.compDbgInfo && ilOffset != BAD_IL_OFFSET)
@@ -4579,7 +4620,6 @@ void emitter::emitIns_Call(EmitCallType          callType,
             id->idSetIsCallAddr();
         }
 
-#if RELOC_SUPPORT
         if (emitComp->opts.compReloc)
         {
             // Since this is an indirect call through a pointer and we don't
@@ -4588,7 +4628,6 @@ void emitter::emitIns_Call(EmitCallType          callType,
 
             id->idSetIsDspReloc();
         }
-#endif
     }
 
 #ifdef DEBUG
@@ -4600,20 +4639,17 @@ void emitter::emitIns_Call(EmitCallType          callType,
                    VarSetOps::ToString(emitComp, ((instrDescCGCA*)id)->idcGCvars));
         }
     }
-#endif
 
-#if defined(DEBUG) || defined(LATE_DISASM)
     id->idDebugOnlyInfo()->idMemCookie = (size_t)methHnd; // method token
-    id->idDebugOnlyInfo()->idClsCookie = 0;
     id->idDebugOnlyInfo()->idCallSig   = sigInfo;
-#endif
+#endif // DEBUG
 
-#if defined(LATE_DISASM)
+#ifdef LATE_DISASM
     if (addr != nullptr)
     {
         codeGen->getDisAssembler().disSetMethod((size_t)addr, methHnd);
     }
-#endif // defined(LATE_DISASM)
+#endif // LATE_DISASM
 
     dispIns(id);
     appendToCurIG(id);
@@ -5254,7 +5290,6 @@ BYTE* emitter::emitOutputLJ(insGroup* ig, BYTE* dst, instrDesc* i)
             else if (fmt == IF_T2_J2)
             {
                 assert((distVal & 1) == 0);
-#ifdef RELOC_SUPPORT
                 if (emitComp->opts.compReloc && emitJumpCrossHotColdBoundary(srcOffs, dstOffs))
                 {
                     // dst isn't an actual final target location, just some intermediate
@@ -5263,7 +5298,6 @@ BYTE* emitter::emitOutputLJ(insGroup* ig, BYTE* dst, instrDesc* i)
                     // rely on the relocation to do all the work
                 }
                 else
-#endif
                 {
                     assert(distVal >= CALL_DIST_MAX_NEG);
                     assert(distVal <= CALL_DIST_MAX_POS);
@@ -5290,7 +5324,6 @@ BYTE* emitter::emitOutputLJ(insGroup* ig, BYTE* dst, instrDesc* i)
 
             unsigned instrSize = emitOutput_Thumb2Instr(dst, code);
 
-#ifdef RELOC_SUPPORT
             if (emitComp->opts.compReloc)
             {
                 if (emitJumpCrossHotColdBoundary(srcOffs, dstOffs))
@@ -5303,7 +5336,6 @@ BYTE* emitter::emitOutputLJ(insGroup* ig, BYTE* dst, instrDesc* i)
                     }
                 }
             }
-#endif // RELOC_SUPPORT
 
             dst += instrSize;
         }
@@ -5367,7 +5399,7 @@ BYTE* emitter::emitOutputLJ(insGroup* ig, BYTE* dst, instrDesc* i)
             {
                 assert(ins == INS_movt || ins == INS_movw);
                 if ((ins == INS_movt) && emitComp->info.compMatchedVM)
-                    emitRecordRelocation((void*)(dst - 8), (void*)distVal, IMAGE_REL_BASED_THUMB_MOV32);
+                    emitHandlePCRelativeMov32((void*)(dst - 8), (void*)distVal);
             }
         }
         else
@@ -5515,7 +5547,7 @@ size_t emitter::emitOutputInstr(insGroup* ig, instrDesc* id, BYTE** dp)
 
     assert(REG_NA == (int)REG_NA);
 
-    VARSET_TP VARSET_INIT_NOCOPY(GCvars, VarSetOps::UninitVal());
+    VARSET_TP GCvars(VarSetOps::UninitVal());
 
     /* What instruction format have we got? */
 
@@ -5968,9 +6000,7 @@ size_t emitter::emitOutputInstr(insGroup* ig, instrDesc* id, BYTE** dp)
                 assert(!id->idIsLclVar());
                 assert((ins == INS_movw) || (ins == INS_movt));
                 imm += (size_t)emitConsBlock;
-#ifdef RELOC_SUPPORT
                 if (!id->idIsCnsReloc() && !id->idIsDspReloc())
-#endif
                 {
                     goto SPLIT_IMM;
                 }
@@ -5988,16 +6018,14 @@ size_t emitter::emitOutputInstr(insGroup* ig, instrDesc* id, BYTE** dp)
                 }
             }
 
-#ifdef RELOC_SUPPORT
             if (id->idIsCnsReloc() || id->idIsDspReloc())
             {
                 assert((ins == INS_movt) || (ins == INS_movw));
                 dst += emitOutput_Thumb2Instr(dst, code);
                 if ((ins == INS_movt) && emitComp->info.compMatchedVM)
-                    emitRecordRelocation((void*)(dst - 8), (void*)imm, IMAGE_REL_BASED_THUMB_MOV32);
+                    emitHandlePCRelativeMov32((void*)(dst - 8), (void*)imm);
             }
             else
-#endif // RELOC_SUPPORT
             {
                 assert((imm & 0x0000ffff) == imm);
                 code |= (imm & 0x00ff);
@@ -6220,7 +6248,6 @@ size_t emitter::emitOutputInstr(insGroup* ig, instrDesc* id, BYTE** dp)
             }
             code = emitInsCode(ins, fmt);
 
-#ifdef RELOC_SUPPORT
             if (id->idIsDspReloc())
             {
                 callInstrSize = SafeCvtAssert<unsigned char>(emitOutput_Thumb2Instr(dst, code));
@@ -6229,7 +6256,6 @@ size_t emitter::emitOutputInstr(insGroup* ig, instrDesc* id, BYTE** dp)
                     emitRecordRelocation((void*)(dst - 4), addr, IMAGE_REL_BASED_THUMB_BRANCH24);
             }
             else
-#endif // RELOC_SUPPORT
             {
                 addr = (BYTE*)((size_t)addr & ~1); // Clear the lowest bit from target address
 
@@ -6361,7 +6387,7 @@ size_t emitter::emitOutputInstr(insGroup* ig, instrDesc* id, BYTE** dp)
     if (emitInsWritesToLclVarStackLoc(id))
     {
         int       varNum = id->idAddr()->iiaLclVar.lvaVarNum();
-        unsigned  ofs    = AlignDown(id->idAddr()->iiaLclVar.lvaOffset(), sizeof(size_t));
+        unsigned  ofs    = AlignDown(id->idAddr()->iiaLclVar.lvaOffset(), TARGET_POINTER_SIZE);
         regNumber regBase;
         int       adr = emitComp->lvaFrameAddress(varNum, true, &regBase, ofs);
         if (id->idGCref() != GCT_NONE)
@@ -6935,14 +6961,12 @@ void emitter::emitDispInsHelp(
             {
                 if (emitComp->opts.disDiffable)
                     imm = 0xD1FF;
-#if RELOC_SUPPORT
                 if (id->idIsCnsReloc() || id->idIsDspReloc())
                 {
                     if (emitComp->opts.disDiffable)
                         imm = 0xD1FFAB1E;
                     printf("%s RELOC ", (id->idIns() == INS_movw) ? "LOW" : "HIGH");
                 }
-#endif // RELOC_SUPPORT
             }
             emitDispImm(imm, false, (fmt == IF_T2_N));
             break;
@@ -6973,12 +6997,10 @@ void emitter::emitDispInsHelp(
 
                 assert(jdsc != NULL);
 
-#ifdef RELOC_SUPPORT
                 if (id->idIsDspReloc())
                 {
                     printf("reloc ");
                 }
-#endif
                 printf("%s ADDRESS J_M%03u_DS%02u", (id->idIns() == INS_movw) ? "LOW" : "HIGH",
                        Compiler::s_compMethodsCount, imm);
 
@@ -7530,19 +7552,68 @@ void emitter::emitDispFrameRef(int varx, int disp, int offs, bool asmfm)
 
 void emitter::emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataReg, GenTreeIndir* indir)
 {
+    // Handle unaligned floating point loads/stores
+    if ((indir->gtFlags & GTF_IND_UNALIGNED))
+    {
+        if (indir->OperGet() == GT_STOREIND)
+        {
+            var_types type = indir->AsStoreInd()->Data()->TypeGet();
+            if (type == TYP_FLOAT)
+            {
+                regNumber tmpReg = indir->GetSingleTempReg();
+                emitIns_R_R(INS_vmov_f2i, EA_4BYTE, tmpReg, dataReg);
+                emitInsLoadStoreOp(INS_str, EA_4BYTE, tmpReg, indir, 0);
+                return;
+            }
+            else if (type == TYP_DOUBLE)
+            {
+                regNumber tmpReg1 = indir->ExtractTempReg();
+                regNumber tmpReg2 = indir->GetSingleTempReg();
+                emitIns_R_R_R(INS_vmov_d2i, EA_8BYTE, tmpReg1, tmpReg2, dataReg);
+                emitInsLoadStoreOp(INS_str, EA_4BYTE, tmpReg1, indir, 0);
+                emitInsLoadStoreOp(INS_str, EA_4BYTE, tmpReg2, indir, 4);
+                return;
+            }
+        }
+        else if (indir->OperGet() == GT_IND)
+        {
+            var_types type = indir->TypeGet();
+            if (type == TYP_FLOAT)
+            {
+                regNumber tmpReg = indir->GetSingleTempReg();
+                emitInsLoadStoreOp(INS_ldr, EA_4BYTE, tmpReg, indir, 0);
+                emitIns_R_R(INS_vmov_i2f, EA_4BYTE, dataReg, tmpReg);
+                return;
+            }
+            else if (type == TYP_DOUBLE)
+            {
+                regNumber tmpReg1 = indir->ExtractTempReg();
+                regNumber tmpReg2 = indir->GetSingleTempReg();
+                emitInsLoadStoreOp(INS_ldr, EA_4BYTE, tmpReg1, indir, 0);
+                emitInsLoadStoreOp(INS_ldr, EA_4BYTE, tmpReg2, indir, 4);
+                emitIns_R_R_R(INS_vmov_i2d, EA_8BYTE, dataReg, tmpReg1, tmpReg2);
+                return;
+            }
+        }
+    }
+
+    // Proceed with ordinary loads/stores
+    emitInsLoadStoreOp(ins, attr, dataReg, indir, 0);
+}
+
+void emitter::emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataReg, GenTreeIndir* indir, int offset)
+{
     GenTree* addr = indir->Addr();
-    GenTree* data = indir->gtOp.gtOp2;
 
     if (addr->isContained())
     {
         assert(addr->OperGet() == GT_LCL_VAR_ADDR || addr->OperGet() == GT_LEA);
 
-        int   offset = 0;
-        DWORD lsl    = 0;
+        DWORD lsl = 0;
 
         if (addr->OperGet() == GT_LEA)
         {
-            offset = (int)addr->AsAddrMode()->gtOffset;
+            offset += addr->AsAddrMode()->Offset();
             if (addr->AsAddrMode()->gtScale > 0)
             {
                 assert(isPow2(addr->AsAddrMode()->gtScale));
@@ -7554,26 +7625,32 @@ void emitter::emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataR
 
         if (indir->HasIndex())
         {
+            assert(addr->OperGet() == GT_LEA);
+
             GenTree* index = indir->Index();
 
             if (offset != 0)
             {
-                regMaskTP tmpRegMask = indir->gtRsvdRegs;
-                regNumber tmpReg     = genRegNumFromMask(tmpRegMask);
-                noway_assert(tmpReg != REG_NA);
+                regNumber tmpReg = indir->GetSingleTempReg();
+
+                // If the LEA produces a GCREF or BYREF, we need to be careful to mark any temp register
+                // computed with the base register as a BYREF.
+                GenTreeAddrMode* lea                    = addr->AsAddrMode();
+                emitAttr         leaAttr                = emitTypeSize(lea);
+                emitAttr         leaBasePartialAddrAttr = EA_IS_GCREF_OR_BYREF(leaAttr) ? EA_BYREF : EA_PTRSIZE;
 
                 if (emitIns_valid_imm_for_add(offset, INS_FLAGS_DONT_CARE))
                 {
                     if (lsl > 0)
                     {
                         // Generate code to set tmpReg = base + index*scale
-                        emitIns_R_R_R_I(INS_add, EA_PTRSIZE, tmpReg, memBase->gtRegNum, index->gtRegNum, lsl,
-                                        INS_FLAGS_DONT_CARE, INS_OPTS_LSL);
+                        emitIns_R_R_R_I(INS_add, leaBasePartialAddrAttr, tmpReg, memBase->gtRegNum, index->gtRegNum,
+                                        lsl, INS_FLAGS_DONT_CARE, INS_OPTS_LSL);
                     }
                     else // no scale
                     {
                         // Generate code to set tmpReg = base + index
-                        emitIns_R_R_R(INS_add, EA_PTRSIZE, tmpReg, memBase->gtRegNum, index->gtRegNum);
+                        emitIns_R_R_R(INS_add, leaBasePartialAddrAttr, tmpReg, memBase->gtRegNum, index->gtRegNum);
                     }
 
                     noway_assert(emitInsIsLoad(ins) || (tmpReg != dataReg));
@@ -7587,7 +7664,7 @@ void emitter::emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataR
                     codeGen->instGen_Set_Reg_To_Imm(EA_PTRSIZE, tmpReg, offset);
                     // Then add the base register
                     //      rd = rd + base
-                    emitIns_R_R_R(INS_add, EA_PTRSIZE, tmpReg, tmpReg, memBase->gtRegNum);
+                    emitIns_R_R_R(INS_add, leaBasePartialAddrAttr, tmpReg, tmpReg, memBase->gtRegNum);
 
                     noway_assert(emitInsIsLoad(ins) || (tmpReg != dataReg));
                     noway_assert(tmpReg != index->gtRegNum);
@@ -7612,15 +7689,37 @@ void emitter::emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataR
                 }
             }
         }
-        else
+        else // no Index
         {
-            // TODO check offset is valid for encoding
-            emitIns_R_R_I(ins, attr, dataReg, memBase->gtRegNum, offset);
+            if (emitIns_valid_imm_for_ldst_offset(offset, attr))
+            {
+                // Then load/store dataReg from/to [memBase + offset]
+                emitIns_R_R_I(ins, attr, dataReg, memBase->gtRegNum, offset);
+            }
+            else
+            {
+                // We require a tmpReg to hold the offset
+                regNumber tmpReg = indir->GetSingleTempReg();
+
+                // First load/store tmpReg with the large offset constant
+                codeGen->instGen_Set_Reg_To_Imm(EA_PTRSIZE, tmpReg, offset);
+
+                // Then load/store dataReg from/to [memBase + tmpReg]
+                emitIns_R_R_R(ins, attr, dataReg, memBase->gtRegNum, tmpReg);
+            }
         }
     }
     else
     {
-        emitIns_R_R(ins, attr, dataReg, addr->gtRegNum);
+        if (offset != 0)
+        {
+            assert(emitIns_valid_imm_for_add(offset, INS_FLAGS_DONT_CARE));
+            emitIns_R_R_I(ins, attr, dataReg, addr->gtRegNum, offset);
+        }
+        else
+        {
+            emitIns_R_R(ins, attr, dataReg, addr->gtRegNum);
+        }
     }
 }
 
@@ -7658,8 +7757,6 @@ regNumber emitter::emitInsBinary(instruction ins, emitAttr attr, GenTree* dst, G
 
 regNumber emitter::emitInsTernary(instruction ins, emitAttr attr, GenTree* dst, GenTree* src1, GenTree* src2)
 {
-    regNumber result = REG_NA;
-
     // dst can only be a reg
     assert(!dst->isContained());
 
@@ -7706,120 +7803,97 @@ regNumber emitter::emitInsTernary(instruction ins, emitAttr attr, GenTree* dst, 
             assert(!src1->isContained());
         }
     }
-    bool      isMulOverflow = false;
-    bool      isUnsignedMul = false;
-    regNumber extraReg      = REG_NA;
+
+    insFlags flags         = INS_FLAGS_DONT_CARE;
+    bool     isMulOverflow = false;
     if (dst->gtOverflowEx())
     {
-        NYI_ARM("emitInsTernary overflow");
-#if 0
-        if (ins == INS_add)
+        if ((ins == INS_add) || (ins == INS_adc) || (ins == INS_sub) || (ins == INS_sbc))
         {
-            ins = INS_adds;
-        }
-        else if (ins == INS_sub)
-        {
-            ins = INS_subs;
+            flags = INS_FLAGS_SET;
         }
         else if (ins == INS_mul)
         {
             isMulOverflow = true;
-            isUnsignedMul = ((dst->gtFlags & GTF_UNSIGNED) != 0);
             assert(intConst == nullptr); // overflow format doesn't support an int constant operand
         }
         else
         {
             assert(!"Invalid ins for overflow check");
         }
-#endif
     }
+
+    if (dst->gtSetFlags())
+    {
+        assert((ins == INS_add) || (ins == INS_adc) || (ins == INS_sub) || (ins == INS_sbc) || (ins == INS_and) ||
+               (ins == INS_orr) || (ins == INS_eor) || (ins == INS_orn));
+        flags = INS_FLAGS_SET;
+    }
+
     if (intConst != nullptr)
     {
-        emitIns_R_R_I(ins, attr, dst->gtRegNum, nonIntReg->gtRegNum, intConst->IconValue());
+        emitIns_R_R_I(ins, attr, dst->gtRegNum, nonIntReg->gtRegNum, intConst->IconValue(), flags);
     }
     else
     {
         if (isMulOverflow)
         {
-            NYI_ARM("emitInsTernary overflow");
-#if 0
-            // Make sure that we have an internal register
-            assert(genCountBits(dst->gtRsvdRegs) == 2);
+            regNumber extraReg = dst->GetSingleTempReg();
+            assert(extraReg != dst->gtRegNum);
 
-            // There will be two bits set in tmpRegsMask.
-            // Remove the bit for 'dst->gtRegNum' from 'tmpRegsMask'
-            regMaskTP tmpRegsMask = dst->gtRsvdRegs & ~genRegMask(dst->gtRegNum);
-            assert(tmpRegsMask != RBM_NONE);
-            regMaskTP tmpRegMask = genFindLowestBit(tmpRegsMask); // set tmpRegMsk to a one-bit mask
-            extraReg             = genRegNumFromMask(tmpRegMask); // set tmpReg from that mask
-
-            if (isUnsignedMul)
+            if ((dst->gtFlags & GTF_UNSIGNED) != 0)
             {
-                if (attr == EA_4BYTE)
-                {
-                    // Compute 8 byte results from 4 byte by 4 byte multiplication.
-                    emitIns_R_R_R(INS_umull, EA_8BYTE, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
+                // Compute 8 byte result from 4 byte by 4 byte multiplication.
+                emitIns_R_R_R_R(INS_umull, EA_4BYTE, dst->gtRegNum, extraReg, src1->gtRegNum, src2->gtRegNum);
 
-                    // Get the high result by shifting dst.
-                    emitIns_R_R_I(INS_lsr, EA_8BYTE, extraReg, dst->gtRegNum, 32);
-                }
-                else
-                {
-                    assert(attr == EA_8BYTE);
-                    // Compute the high result.
-                    emitIns_R_R_R(INS_umulh, attr, extraReg, src1->gtRegNum, src2->gtRegNum);
-
-                    // Now multiply without skewing the high result.
-                    emitIns_R_R_R(ins, attr, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
-                }
-
-                // zero-sign bit comparision to detect overflow.
+                // Overflow exists if the result's high word is non-zero.
                 emitIns_R_I(INS_cmp, attr, extraReg, 0);
             }
             else
             {
-                int bitShift = 0;
-                if (attr == EA_4BYTE)
-                {
-                    // Compute 8 byte results from 4 byte by 4 byte multiplication.
-                    emitIns_R_R_R(INS_smull, EA_8BYTE, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
+                // Compute 8 byte result from 4 byte by 4 byte multiplication.
+                emitIns_R_R_R_R(INS_smull, EA_4BYTE, dst->gtRegNum, extraReg, src1->gtRegNum, src2->gtRegNum);
 
-                    // Get the high result by shifting dst.
-                    emitIns_R_R_I(INS_lsr, EA_8BYTE, extraReg, dst->gtRegNum, 32);
-
-                    bitShift = 31;
-                }
-                else
-                {
-                    assert(attr == EA_8BYTE);
-                    // Save the high result in a temporary register.
-                    emitIns_R_R_R(INS_smulh, attr, extraReg, src1->gtRegNum, src2->gtRegNum);
-
-                    // Now multiply without skewing the high result.
-                    emitIns_R_R_R(ins, attr, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
-
-                    bitShift = 63;
-                }
-
-                // Sign bit comparision to detect overflow.
-                emitIns_R_R_I(INS_cmp, attr, extraReg, dst->gtRegNum, bitShift, INS_OPTS_ASR);
+                // Overflow exists if the result's high word is not merely a sign bit.
+                emitIns_R_R_I(INS_cmp, attr, extraReg, dst->gtRegNum, 31, INS_FLAGS_DONT_CARE, INS_OPTS_ASR);
             }
-#endif
         }
         else
         {
-            // We can just multiply.
-            emitIns_R_R_R(ins, attr, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum);
+            // We can just do the arithmetic, setting the flags if needed.
+            emitIns_R_R_R(ins, attr, dst->gtRegNum, src1->gtRegNum, src2->gtRegNum, flags);
         }
     }
 
     if (dst->gtOverflowEx())
     {
-        NYI_ARM("emitInsTernary overflow");
-#if 0
         assert(!varTypeIsFloating(dst));
-        codeGen->genCheckOverflow(dst);
+
+        emitJumpKind jumpKind;
+
+        if (dst->OperGet() == GT_MUL)
+        {
+            jumpKind = EJ_ne;
+        }
+        else
+        {
+            bool isUnsignedOverflow = ((dst->gtFlags & GTF_UNSIGNED) != 0);
+            jumpKind                = isUnsignedOverflow ? EJ_lo : EJ_vs;
+            if (jumpKind == EJ_lo)
+            {
+                if ((dst->OperGet() != GT_SUB) &&
+#ifdef LEGACY_BACKEND
+                    (dst->OperGet() != GT_ASG_SUB) &&
 #endif
+                    (dst->OperGet() != GT_SUB_HI))
+                {
+                    jumpKind = EJ_hs;
+                }
+            }
+        }
+
+        // Jump to the block which will throw the exception.
+        codeGen->genJumpToThrowHlpBlk(jumpKind, SCK_OVERFLOW);
     }
 
     return dst->gtRegNum;

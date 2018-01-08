@@ -72,6 +72,8 @@ typedef unsigned short wchar_t;
 
 #include "profilepriv.h"
 
+#include "gcinterface.h"
+
 class ClassLoader;
 class LoaderHeap;
 class IGCHeap;
@@ -95,24 +97,6 @@ class Crst;
 class RCWCleanupList;
 #endif // FEATURE_COMINTEROP
 class BBSweep;
-struct IAssemblyUsageLog;
-
-//
-// object handles are opaque types that track object pointers
-//
-#ifndef DACCESS_COMPILE
-
-struct OBJECTHANDLE__
-{
-    void* unused;
-};
-typedef struct OBJECTHANDLE__* OBJECTHANDLE;
-
-#else
-
-typedef TADDR OBJECTHANDLE;
-
-#endif
 
 //
 // loader handles are opaque types that track object pointers that have a lifetime
@@ -419,12 +403,9 @@ GPTR_DECL(MethodTable,      g_pICastableInterface);
 
 GPTR_DECL(MethodDesc,       g_pExecuteBackoutCodeHelperMethod);
 
-GPTR_DECL(MethodDesc,       g_pObjectCtorMD);
 GPTR_DECL(MethodDesc,       g_pObjectFinalizerMD);
 
-//<TODO> @TODO Remove eventually - determines whether the verifier throws an exception when something fails</TODO>
-EXTERN bool                 g_fVerifierOff;
-
+GVAL_DECL(DWORD,            g_TlsIndex);
 
 // Global System Information
 extern SYSTEM_INFO g_SystemInfo;
@@ -607,14 +588,6 @@ EXTERN const char g_psBaseLibraryTLB[];
 #endif  // FEATURE_COMINTEROP
 #endif // DACCESS_COMPILE
 
-EXTERN const WCHAR g_pwzClickOnceEnv_FullName[];
-EXTERN const WCHAR g_pwzClickOnceEnv_Manifest[];
-EXTERN const WCHAR g_pwzClickOnceEnv_Parameter[];
-
-#ifdef FEATURE_LOADER_OPTIMIZATION
-EXTERN DWORD g_dwGlobalSharePolicy;
-#endif
-
 //
 // Do we own the lifetime of the process, ie. is it an EXE?
 //
@@ -634,17 +607,6 @@ extern const DWORD g_rgPrimes[71];
 //
 extern LPWSTR g_pCachedCommandLine;
 extern LPWSTR g_pCachedModuleFileName;
-
-//
-// Host configuration file. One per process.
-//
-extern LPCWSTR g_pszHostConfigFile;
-extern SIZE_T  g_dwHostConfigFile;
-
-// AppDomainManager type
-extern LPWSTR g_wszAppDomainManagerAsm;
-extern LPWSTR g_wszAppDomainManagerType;
-extern bool g_fDomainManagerInitialized;
 
 //
 // Macros to check debugger and profiler settings.
@@ -880,10 +842,24 @@ extern bool g_fReadyToRunCompilation;
 // Returns true if this is NGen compilation process.
 // This is a superset of CompilationDomain::IsCompilationDomain() as there is more
 // than one AppDomain in ngen (the DefaultDomain)
-BOOL IsCompilationProcess();
+inline BOOL IsCompilationProcess()
+{
+#ifdef CROSSGEN_COMPILE
+    return TRUE;
+#else
+    return FALSE;
+#endif
+}
 
 // Flag for cross-platform ngen: Removes all execution of managed or third-party code in the ngen compilation process.
-BOOL NingenEnabled();
+inline BOOL NingenEnabled()
+{
+#ifdef CROSSGEN_COMPILE
+    return TRUE;
+#else
+    return FALSE;
+#endif
+}
 
 // Passed to JitManager APIs to determine whether to avoid calling into the host. 
 // The profiling API stackwalking uses this to ensure to avoid re-entering the host 

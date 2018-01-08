@@ -12,41 +12,37 @@
 =============================================================================*/
 
 
-using System;
-using System.Runtime.Remoting;
 using System.Runtime.Serialization;
 using System.Runtime.CompilerServices;
-using System.Globalization;
-using System.Runtime.Versioning;
-using System.Diagnostics.Contracts;
 
 namespace System
 {
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public class MissingMemberException : MemberAccessException, ISerializable
     {
         public MissingMemberException()
-            : base(Environment.GetResourceString("Arg_MissingMemberException"))
+            : base(SR.Arg_MissingMemberException)
         {
-            SetErrorCode(__HResults.COR_E_MISSINGMEMBER);
+            HResult = HResults.COR_E_MISSINGMEMBER;
         }
 
         public MissingMemberException(String message)
             : base(message)
         {
-            SetErrorCode(__HResults.COR_E_MISSINGMEMBER);
+            HResult = HResults.COR_E_MISSINGMEMBER;
         }
 
         public MissingMemberException(String message, Exception inner)
             : base(message, inner)
         {
-            SetErrorCode(__HResults.COR_E_MISSINGMEMBER);
+            HResult = HResults.COR_E_MISSINGMEMBER;
         }
 
         protected MissingMemberException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
-            ClassName = (String)info.GetString("MMClassName");
-            MemberName = (String)info.GetString("MMMemberName");
+            ClassName = info.GetString("MMClassName");
+            MemberName = info.GetString("MMMemberName");
             Signature = (byte[])info.GetValue("MMSignature", typeof(byte[]));
         }
 
@@ -61,9 +57,7 @@ namespace System
                 else
                 {
                     // do any desired fixups to classname here.
-                    return Environment.GetResourceString("MissingMember_Name",
-                                                                       ClassName + "." + MemberName +
-                                                                       (Signature != null ? " " + FormatSignature(Signature) : ""));
+                    return SR.Format(SR.MissingMember_Name, ClassName + "." + MemberName + (Signature != null ? " " + FormatSignature(Signature) : ""));
                 }
             }
         }
@@ -80,14 +74,9 @@ namespace System
 
         public override void GetObjectData(SerializationInfo info, StreamingContext context)
         {
-            if (info == null)
-            {
-                throw new ArgumentNullException(nameof(info));
-            }
-            Contract.EndContractBlock();
             base.GetObjectData(info, context);
-            info.AddValue("MMClassName", ClassName, typeof(String));
-            info.AddValue("MMMemberName", MemberName, typeof(String));
+            info.AddValue("MMClassName", ClassName, typeof(string));
+            info.AddValue("MMMemberName", MemberName, typeof(string));
             info.AddValue("MMSignature", Signature, typeof(byte[]));
         }
 

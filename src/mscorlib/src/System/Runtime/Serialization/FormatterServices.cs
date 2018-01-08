@@ -17,7 +17,6 @@ using System.Reflection;
 using System.Collections;
 using System.Collections.Generic;
 using System.Security;
-using System.Runtime.Remoting;
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
 using System.Threading;
@@ -25,11 +24,12 @@ using System.IO;
 using System.Text;
 using System.Globalization;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 namespace System.Runtime.Serialization
 {
-    public static class FormatterServices
+    // This class duplicates a class on CoreFX. We are keeping it here -- just this one method --
+    // as it was widely invoked by reflection to workaround it being missing in .NET Core 1.0
+    internal static class FormatterServices
     {
         // Gets a new instance of the object.  The entire object is initalized to 0 and no 
         // constructors have been run. **THIS MEANS THAT THE OBJECT MAY NOT BE IN A STATE
@@ -44,11 +44,10 @@ namespace System.Runtime.Serialization
             {
                 throw new ArgumentNullException(nameof(type));
             }
-            Contract.EndContractBlock();
 
             if (!(type is RuntimeType))
             {
-                throw new SerializationException(Environment.GetResourceString("Serialization_InvalidType", type.ToString()));
+                throw new SerializationException(SR.Format(SR.Serialization_InvalidType, type.ToString()));
             }
 
             return nativeGetUninitializedObject((RuntimeType)type);
@@ -56,28 +55,6 @@ namespace System.Runtime.Serialization
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         private static extern Object nativeGetUninitializedObject(RuntimeType type);
-        private static Binder s_binder = Type.DefaultBinder;
-
-        /*============================LoadAssemblyFromString============================
-        **Action: Loads an assembly from a given string.  The current assembly loading story
-        **        is quite confusing.  If the assembly is in the fusion cache, we can load it
-        **        using the stringized-name which we transmitted over the wire.  If that fails,
-        **        we try for a lookup of the assembly using the simple name which is the first
-        **        part of the assembly name.  If we can't find it that way, we'll return null
-        **        as our failure result.
-        **Returns: The loaded assembly or null if it can't be found.
-        **Arguments: assemblyName -- The stringized assembly name.
-        **Exceptions: None
-        ==============================================================================*/
-        internal static Assembly LoadAssemblyFromString(String assemblyName)
-        {
-            //
-            // Try using the stringized assembly name to load from the fusion cache.
-            //
-            BCLDebug.Trace("SER", "[LoadAssemblyFromString]Looking for assembly: ", assemblyName);
-            Assembly found = Assembly.Load(assemblyName);
-            return found;
-        }
     }
 }
 

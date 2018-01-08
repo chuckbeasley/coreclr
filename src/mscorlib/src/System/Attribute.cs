@@ -10,13 +10,13 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Globalization;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.Security;
 
 namespace System
 {
     [Serializable]
     [AttributeUsageAttribute(AttributeTargets.All, Inherited = true, AllowMultiple = false)]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public abstract class Attribute
     {
         #region Private Statics
@@ -24,9 +24,9 @@ namespace System
         #region PropertyInfo
         private static Attribute[] InternalGetCustomAttributes(PropertyInfo element, Type type, bool inherit)
         {
-            Contract.Requires(element != null);
-            Contract.Requires(type != null);
-            Contract.Requires(type.IsSubclassOf(typeof(Attribute)) || type == typeof(Attribute));
+            Debug.Assert(element != null);
+            Debug.Assert(type != null);
+            Debug.Assert(type.IsSubclassOf(typeof(Attribute)) || type == typeof(Attribute));
 
             // walk up the hierarchy chain
             Attribute[] attributes = (Attribute[])element.GetCustomAttributes(type, inherit);
@@ -89,7 +89,7 @@ namespace System
 
         private static PropertyInfo GetParentDefinition(PropertyInfo property, Type[] propertyParameters)
         {
-            Contract.Requires(property != null);
+            Debug.Assert(property != null);
 
             // for the current property get the base class of the getter and the setter, they might be different
             // note that this only works for RuntimeMethodInfo
@@ -126,9 +126,9 @@ namespace System
         #region EventInfo
         private static Attribute[] InternalGetCustomAttributes(EventInfo element, Type type, bool inherit)
         {
-            Contract.Requires(element != null);
-            Contract.Requires(type != null);
-            Contract.Requires(type.IsSubclassOf(typeof(Attribute)) || type == typeof(Attribute));
+            Debug.Assert(element != null);
+            Debug.Assert(type != null);
+            Debug.Assert(type.IsSubclassOf(typeof(Attribute)) || type == typeof(Attribute));
 
             // walk up the hierarchy chain
             Attribute[] attributes = (Attribute[])element.GetCustomAttributes(type, inherit);
@@ -157,7 +157,7 @@ namespace System
 
         private static EventInfo GetParentDefinition(EventInfo ev)
         {
-            Contract.Requires(ev != null);
+            Debug.Assert(ev != null);
 
             // note that this only works for RuntimeMethodInfo
             MethodInfo add = ev.GetAddMethod(true);
@@ -175,7 +175,7 @@ namespace System
 
         private static bool InternalIsDefined(EventInfo element, Type attributeType, bool inherit)
         {
-            Contract.Requires(element != null);
+            Debug.Assert(element != null);
 
             // walk up the hierarchy chain
             if (element.IsDefined(attributeType, inherit))
@@ -206,7 +206,7 @@ namespace System
         #region ParameterInfo
         private static ParameterInfo GetParentDefinition(ParameterInfo param)
         {
-            Contract.Requires(param != null);
+            Debug.Assert(param != null);
 
             // note that this only works for RuntimeMethodInfo
             RuntimeMethodInfo rtMethod = param.Member as RuntimeMethodInfo;
@@ -235,7 +235,7 @@ namespace System
 
         private static Attribute[] InternalParamGetCustomAttributes(ParameterInfo param, Type type, bool inherit)
         {
-            Contract.Requires(param != null);
+            Debug.Assert(param != null);
 
             // For ParameterInfo's we need to make sure that we chain through all the MethodInfo's in the inheritance chain that
             // have this ParameterInfo defined. .We pick up all the CustomAttributes for the starting ParameterInfo. We need to pick up only attributes 
@@ -325,8 +325,8 @@ namespace System
 
         private static bool InternalParamIsDefined(ParameterInfo param, Type type, bool inherit)
         {
-            Contract.Requires(param != null);
-            Contract.Requires(type != null);
+            Debug.Assert(param != null);
+            Debug.Assert(type != null);
 
             // For ParameterInfo's we need to make sure that we chain through all the MethodInfo's in the inheritance chain.
             // We pick up all the CustomAttributes for the starting ParameterInfo. We need to pick up only attributes 
@@ -431,7 +431,7 @@ namespace System
                 return AttributeUsageAttribute.Default;
 
             throw new FormatException(
-                Environment.GetResourceString("Format_AttributeUsage", type));
+                SR.Format(SR.Format_AttributeUsage, type));
         }
 
         private static Attribute[] CreateAttributeArrayHelper(Type elementType, int elementCount)
@@ -459,8 +459,7 @@ namespace System
                 throw new ArgumentNullException(nameof(type));
 
             if (!type.IsSubclassOf(typeof(Attribute)) && type != typeof(Attribute))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustHaveAttributeBaseClass"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_MustHaveAttributeBaseClass);
 
             switch (element.MemberType)
             {
@@ -484,7 +483,6 @@ namespace System
         {
             if (element == null)
                 throw new ArgumentNullException(nameof(element));
-            Contract.EndContractBlock();
 
             switch (element.MemberType)
             {
@@ -514,8 +512,7 @@ namespace System
                 throw new ArgumentNullException(nameof(attributeType));
 
             if (!attributeType.IsSubclassOf(typeof(Attribute)) && attributeType != typeof(Attribute))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustHaveAttributeBaseClass"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_MustHaveAttributeBaseClass);
 
             switch (element.MemberType)
             {
@@ -545,7 +542,7 @@ namespace System
             if (attrib.Length == 1)
                 return attrib[0];
 
-            throw new AmbiguousMatchException(Environment.GetResourceString("RFLCT.AmbigCust"));
+            throw new AmbiguousMatchException(SR.RFLCT_AmbigCust);
         }
 
         #endregion
@@ -570,12 +567,11 @@ namespace System
                 throw new ArgumentNullException(nameof(attributeType));
 
             if (!attributeType.IsSubclassOf(typeof(Attribute)) && attributeType != typeof(Attribute))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustHaveAttributeBaseClass"));
+                throw new ArgumentException(SR.Argument_MustHaveAttributeBaseClass);
 
             if (element.Member == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidParameterInfo"), nameof(element));
+                throw new ArgumentException(SR.Argument_InvalidParameterInfo, nameof(element));
 
-            Contract.EndContractBlock();
 
             MemberInfo member = element.Member;
             if (member.MemberType == MemberTypes.Method && inherit)
@@ -590,9 +586,8 @@ namespace System
                 throw new ArgumentNullException(nameof(element));
 
             if (element.Member == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidParameterInfo"), nameof(element));
+                throw new ArgumentException(SR.Argument_InvalidParameterInfo, nameof(element));
 
-            Contract.EndContractBlock();
 
             MemberInfo member = element.Member;
             if (member.MemberType == MemberTypes.Method && inherit)
@@ -616,8 +611,7 @@ namespace System
                 throw new ArgumentNullException(nameof(attributeType));
 
             if (!attributeType.IsSubclassOf(typeof(Attribute)) && attributeType != typeof(Attribute))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustHaveAttributeBaseClass"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_MustHaveAttributeBaseClass);
 
             MemberInfo member = element.Member;
 
@@ -633,8 +627,8 @@ namespace System
                     return element.IsDefined(attributeType, false);
 
                 default:
-                    Debug.Assert(false, "Invalid type for ParameterInfo member in Attribute class");
-                    throw new ArgumentException(Environment.GetResourceString("Argument_InvalidParamInfo"));
+                    Debug.Fail("Invalid type for ParameterInfo member in Attribute class");
+                    throw new ArgumentException(SR.Argument_InvalidParamInfo);
             }
         }
 
@@ -658,7 +652,7 @@ namespace System
             if (attrib.Length == 1)
                 return attrib[0];
 
-            throw new AmbiguousMatchException(Environment.GetResourceString("RFLCT.AmbigCust"));
+            throw new AmbiguousMatchException(SR.RFLCT_AmbigCust);
         }
 
         #endregion
@@ -678,7 +672,6 @@ namespace System
         {
             if (element == null)
                 throw new ArgumentNullException(nameof(element));
-            Contract.EndContractBlock();
 
             return (Attribute[])element.GetCustomAttributes(typeof(Attribute), inherit);
         }
@@ -692,8 +685,7 @@ namespace System
                 throw new ArgumentNullException(nameof(attributeType));
 
             if (!attributeType.IsSubclassOf(typeof(Attribute)) && attributeType != typeof(Attribute))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustHaveAttributeBaseClass"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_MustHaveAttributeBaseClass);
 
             return (Attribute[])element.GetCustomAttributes(attributeType, inherit);
         }
@@ -713,8 +705,7 @@ namespace System
                 throw new ArgumentNullException(nameof(attributeType));
 
             if (!attributeType.IsSubclassOf(typeof(Attribute)) && attributeType != typeof(Attribute))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustHaveAttributeBaseClass"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_MustHaveAttributeBaseClass);
 
             return element.IsDefined(attributeType, false);
         }
@@ -736,7 +727,7 @@ namespace System
             if (attrib.Length == 1)
                 return attrib[0];
 
-            throw new AmbiguousMatchException(Environment.GetResourceString("RFLCT.AmbigCust"));
+            throw new AmbiguousMatchException(SR.RFLCT_AmbigCust);
         }
 
         #endregion
@@ -756,8 +747,7 @@ namespace System
                 throw new ArgumentNullException(nameof(attributeType));
 
             if (!attributeType.IsSubclassOf(typeof(Attribute)) && attributeType != typeof(Attribute))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustHaveAttributeBaseClass"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_MustHaveAttributeBaseClass);
 
             return (Attribute[])element.GetCustomAttributes(attributeType, inherit);
         }
@@ -771,7 +761,6 @@ namespace System
         {
             if (element == null)
                 throw new ArgumentNullException(nameof(element));
-            Contract.EndContractBlock();
 
             return (Attribute[])element.GetCustomAttributes(typeof(Attribute), inherit);
         }
@@ -791,8 +780,7 @@ namespace System
                 throw new ArgumentNullException(nameof(attributeType));
 
             if (!attributeType.IsSubclassOf(typeof(Attribute)) && attributeType != typeof(Attribute))
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustHaveAttributeBaseClass"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_MustHaveAttributeBaseClass);
 
             return element.IsDefined(attributeType, false);
         }
@@ -814,7 +802,7 @@ namespace System
             if (attrib.Length == 1)
                 return attrib[0];
 
-            throw new AmbiguousMatchException(Environment.GetResourceString("RFLCT.AmbigCust"));
+            throw new AmbiguousMatchException(SR.RFLCT_AmbigCust);
         }
 
         #endregion

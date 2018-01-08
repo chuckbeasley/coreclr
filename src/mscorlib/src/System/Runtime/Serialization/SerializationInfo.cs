@@ -15,10 +15,8 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Runtime.Remoting;
 using System.Globalization;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.Security;
 using System.Runtime.CompilerServices;
 
@@ -64,7 +62,6 @@ namespace System.Runtime.Serialization
                 throw new ArgumentNullException(nameof(converter));
             }
 
-            Contract.EndContractBlock();
 
             objectType = type;
             m_fullTypeName = type.FullName;
@@ -93,7 +90,6 @@ namespace System.Runtime.Serialization
                 {
                     throw new ArgumentNullException(nameof(value));
                 }
-                Contract.EndContractBlock();
 
                 m_fullTypeName = value;
                 isFullTypeNameSetExplicit = true;
@@ -112,7 +108,6 @@ namespace System.Runtime.Serialization
                 {
                     throw new ArgumentNullException(nameof(value));
                 }
-                Contract.EndContractBlock();
                 if (requireSameTokenInPartialTrust)
                 {
                     DemandForUnsafeAssemblyNameAssignments(m_assemName, value);
@@ -128,7 +123,6 @@ namespace System.Runtime.Serialization
             {
                 throw new ArgumentNullException(nameof(type));
             }
-            Contract.EndContractBlock();
 
             if (requireSameTokenInPartialTrust)
             {
@@ -234,7 +228,6 @@ namespace System.Runtime.Serialization
             {
                 throw new ArgumentNullException(nameof(type));
             }
-            Contract.EndContractBlock();
 
             AddValueInternal(name, value, type);
         }
@@ -330,8 +323,7 @@ namespace System.Runtime.Serialization
         {
             if (m_nameToIndex.ContainsKey(name))
             {
-                BCLDebug.Trace("SER", "[SerializationInfo.AddValue]Tried to add ", name, " twice to the SI.");
-                throw new SerializationException(Environment.GetResourceString("Serialization_SameNameTwice"));
+                throw new SerializationException(SR.Serialization_SameNameTwice);
             }
             m_nameToIndex.Add(name, m_currMember);
 
@@ -390,8 +382,6 @@ namespace System.Runtime.Serialization
             {
                 throw new ArgumentNullException(nameof(name));
             }
-            Contract.EndContractBlock();
-            BCLDebug.Trace("SER", "[SerializationInfo.FindElement]Looking for ", name, " CurrMember is: ", m_currMember);
             int index;
             if (m_nameToIndex.TryGetValue(name, out index))
             {
@@ -415,7 +405,7 @@ namespace System.Runtime.Serialization
             int index = FindElement(name);
             if (index == -1)
             {
-                throw new SerializationException(Environment.GetResourceString("Serialization_NotFound", name));
+                throw new SerializationException(SR.Format(SR.Serialization_NotFound, name));
             }
 
             Debug.Assert(index < m_data.Length, "[SerializationInfo.GetElement]index<m_data.Length");
@@ -454,11 +444,10 @@ namespace System.Runtime.Serialization
             {
                 throw new ArgumentNullException(nameof(type));
             }
-            Contract.EndContractBlock();
 
             RuntimeType rt = type as RuntimeType;
             if (rt == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType);
 
             Type foundType;
             Object value;

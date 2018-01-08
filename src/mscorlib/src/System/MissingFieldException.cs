@@ -11,7 +11,6 @@
 
 
 using System;
-using System.Runtime.Remoting;
 using System.Runtime.Serialization;
 using System.Runtime.CompilerServices;
 using System.Globalization;
@@ -19,24 +18,25 @@ using System.Globalization;
 namespace System
 {
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public class MissingFieldException : MissingMemberException, ISerializable
     {
         public MissingFieldException()
-            : base(Environment.GetResourceString("Arg_MissingFieldException"))
+            : base(SR.Arg_MissingFieldException)
         {
-            SetErrorCode(__HResults.COR_E_MISSINGFIELD);
+            HResult = HResults.COR_E_MISSINGFIELD;
         }
 
         public MissingFieldException(String message)
             : base(message)
         {
-            SetErrorCode(__HResults.COR_E_MISSINGFIELD);
+            HResult = HResults.COR_E_MISSINGFIELD;
         }
 
         public MissingFieldException(String message, Exception inner)
             : base(message, inner)
         {
-            SetErrorCode(__HResults.COR_E_MISSINGFIELD);
+            HResult = HResults.COR_E_MISSINGFIELD;
         }
 
         protected MissingFieldException(SerializationInfo info, StreamingContext context) : base(info, context)
@@ -54,9 +54,7 @@ namespace System
                 else
                 {
                     // do any desired fixups to classname here.
-                    return Environment.GetResourceString("MissingField_Name",
-                                                                       (Signature != null ? FormatSignature(Signature) + " " : "") +
-                                                                       ClassName + "." + MemberName);
+                    return SR.Format(SR.MissingField_Name, (Signature != null ? FormatSignature(Signature) + " " : "") + ClassName + "." + MemberName);
                 }
             }
         }

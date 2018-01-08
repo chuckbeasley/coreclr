@@ -72,10 +72,6 @@
 
 #include "lazycow.h"
 
-#include "compatibilityflags.h"
-extern BOOL GetCompatibilityFlag(CompatibilityFlag flag);
-extern DWORD* GetGlobalCompatibilityFlags();
-
 #include "strongname.h"
 #include "stdmacros.h"
 
@@ -304,7 +300,6 @@ namespace Loader
 #include "eeconfig.h"
 
 #include "spinlock.h"
-#include "objecthandle.h"
 #include "cgensys.h"
 #include "declsec.h"
 
@@ -319,7 +314,6 @@ namespace Loader
 
 #include "eehash.h"
 
-#include "handletable.h"
 #include "vars.hpp"
 #include "eventstore.hpp"
 
@@ -392,7 +386,6 @@ extern DummyGlobalContract ___contract;
 #include "ceeload.inl"
 #include "clsload.inl"
 #include "domainfile.inl"
-#include "handletable.inl"
 #include "clsload.inl"
 #include "method.inl"
 #include "stackprobe.inl"

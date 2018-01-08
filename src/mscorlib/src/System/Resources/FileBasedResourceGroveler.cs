@@ -26,7 +26,6 @@ namespace System.Resources
     using System.Text;
     using System.Threading;
     using System.Diagnostics;
-    using System.Diagnostics.Contracts;
 
     internal class FileBasedResourceGroveler : IResourceGroveler
     {
@@ -62,7 +61,7 @@ namespace System.Resources
                     {
                         // We really don't think this should happen - we always
                         // expect the neutral locale's resources to be present.
-                        throw new MissingManifestResourceException(Environment.GetResourceString("MissingManifestResource_NoNeutralDisk") + Environment.NewLine + "baseName: " + _mediator.BaseNameField + "  locationInfo: " + (_mediator.LocationInfo == null ? "<null>" : _mediator.LocationInfo.FullName) + "  fileName: " + _mediator.GetResourceFileName(culture));
+                        throw new MissingManifestResourceException(SR.MissingManifestResource_NoNeutralDisk + Environment.NewLine + "baseName: " + _mediator.BaseNameField + "  locationInfo: " + (_mediator.LocationInfo == null ? "<null>" : _mediator.LocationInfo.FullName) + "  fileName: " + _mediator.GetResourceFileName(culture));
                     }
                 }
             }
@@ -90,26 +89,12 @@ namespace System.Resources
             // qualified name, append path to that.
             if (_mediator.ModuleDir != null)
             {
-#if _DEBUG
-                if (ResourceManager.DEBUG >= 3)
-                    BCLDebug.Log("FindResourceFile: checking module dir: \"" + _mediator.ModuleDir + '\"');
-#endif
-
                 String path = Path.Combine(_mediator.ModuleDir, fileName);
                 if (File.Exists(path))
                 {
-#if _DEBUG
-                    if (ResourceManager.DEBUG >= 3)
-                        BCLDebug.Log("Found resource file in module dir!  " + path);
-#endif
                     return path;
                 }
             }
-
-#if _DEBUG
-            if (ResourceManager.DEBUG >= 3)
-                BCLDebug.Log("Couldn't find resource file in module dir, checking .\\" + fileName);
-#endif
 
             // look in .
             if (File.Exists(fileName))
@@ -118,18 +103,13 @@ namespace System.Resources
             return null;  // give up.
         }
 
-        // Constructs a new ResourceSet for a given file name.  The logic in
-        // here avoids a ReflectionPermission check for our RuntimeResourceSet
-        // for perf and working set reasons.
+        // Constructs a new ResourceSet for a given file name.
         private ResourceSet CreateResourceSet(String file)
         {
             Debug.Assert(file != null, "file shouldn't be null; check caller");
 
             if (_mediator.UserResourceSet == null)
             {
-                // Explicitly avoid CreateInstance if possible, because it
-                // requires ReflectionPermission to call private & protected
-                // constructors.  
                 return new RuntimeResourceSet(file);
             }
             else
@@ -142,7 +122,7 @@ namespace System.Resources
                 }
                 catch (MissingMethodException e)
                 {
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ResMgrBadResSet_Type", _mediator.UserResourceSet.AssemblyQualifiedName), e);
+                    throw new InvalidOperationException(SR.Format(SR.InvalidOperation_ResMgrBadResSet_Type, _mediator.UserResourceSet.AssemblyQualifiedName), e);
                 }
             }
         }

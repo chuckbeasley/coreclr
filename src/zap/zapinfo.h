@@ -326,7 +326,6 @@ public:
     DWORD getThreadTLSIndex(void **ppIndirection);
     const void * getInlinedCallFrameVptr(void **ppIndirection);
     LONG * getAddrOfCaptureThreadGlobal(void **ppIndirection);
-    SIZE_T* getAddrModuleDomainID(CORINFO_MODULE_HANDLE   module);
 
     // get slow lazy string literal helper to use (CORINFO_HELP_STRCNS*). 
     // Returns CORINFO_HELP_UNDEF if lazy string literal helper cannot be used.
@@ -506,6 +505,8 @@ public:
 
     CorInfoType asCorInfoType(CORINFO_CLASS_HANDLE cls);
     const char* getClassName(CORINFO_CLASS_HANDLE cls);
+    const char* getClassNameFromMetadata(CORINFO_CLASS_HANDLE cls, const char** namespaceName);
+    CORINFO_CLASS_HANDLE getTypeInstantiationArgument(CORINFO_CLASS_HANDLE cls, unsigned index);
     const char* getHelperName(CorInfoHelpFunc ftnNum);
     int appendClassName(__deref_inout_ecount(*pnBufLen) WCHAR** ppBuf, int* pnBufLen,
                                   CORINFO_CLASS_HANDLE    cls,
@@ -558,7 +559,7 @@ public:
     void getReadyToRunDelegateCtorHelper(
             CORINFO_RESOLVED_TOKEN * pTargetMethod,
             CORINFO_CLASS_HANDLE     delegateType,
-            CORINFO_CONST_LOOKUP *   pLookup
+            CORINFO_LOOKUP *   pLookup
             );
 
     CorInfoInitClassResult initClass(
@@ -572,8 +573,12 @@ public:
     CORINFO_METHOD_HANDLE mapMethodDeclToMethodImpl(CORINFO_METHOD_HANDLE methHnd);
     CORINFO_CLASS_HANDLE getBuiltinClass(CorInfoClassId classId);
     CorInfoType getTypeForPrimitiveValueClass(CORINFO_CLASS_HANDLE cls);
+    CorInfoType getTypeForPrimitiveNumericClass(CORINFO_CLASS_HANDLE cls);
     BOOL canCast(CORINFO_CLASS_HANDLE child, CORINFO_CLASS_HANDLE parent);
     BOOL areTypesEquivalent(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2);
+    TypeCompareState compareTypesForCast(CORINFO_CLASS_HANDLE fromClass, CORINFO_CLASS_HANDLE toClass);
+    TypeCompareState compareTypesForEquality(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2);
+
     CORINFO_CLASS_HANDLE mergeClasses(CORINFO_CLASS_HANDLE cls1,
                                 CORINFO_CLASS_HANDLE cls2);
     BOOL shouldEnforceCallvirtRestriction(CORINFO_MODULE_HANDLE scope);
@@ -617,6 +622,10 @@ public:
 
     const char* getMethodName(CORINFO_METHOD_HANDLE ftn,
                                         const char **moduleName);
+    const char* getMethodNameFromMetadata(CORINFO_METHOD_HANDLE ftn,
+                                          const char **className,
+                                          const char **namespaceName);
+
     unsigned getMethodHash(CORINFO_METHOD_HANDLE ftn);
     DWORD getMethodAttribs(CORINFO_METHOD_HANDLE ftn);
     void setMethodAttribs(CORINFO_METHOD_HANDLE ftn, CorInfoMethodRuntimeFlags attribs);
@@ -663,12 +672,24 @@ public:
 
     void getMethodVTableOffset(CORINFO_METHOD_HANDLE method,
                                unsigned * pOffsetOfIndirection,
-                               unsigned * pOffsetAfterIndirection);
+                               unsigned * pOffsetAfterIndirection,
+                               bool * isRelative);
 
     CORINFO_METHOD_HANDLE resolveVirtualMethod(
         CORINFO_METHOD_HANDLE virtualMethod,
-        CORINFO_CLASS_HANDLE implementingClass
-        );
+        CORINFO_CLASS_HANDLE implementingClass,
+        CORINFO_CONTEXT_HANDLE ownerType);
+
+    CORINFO_METHOD_HANDLE getUnboxedEntry(
+        CORINFO_METHOD_HANDLE ftn,
+        bool* requiresInstMethodTableArg);
+
+    CORINFO_CLASS_HANDLE getDefaultEqualityComparerClass(
+        CORINFO_CLASS_HANDLE elemType);
+
+    void expandRawHandleIntrinsic(
+        CORINFO_RESOLVED_TOKEN *        pResolvedToken,
+        CORINFO_GENERICHANDLE_RESULT *  pResult);
 
     CorInfoIntrinsics getIntrinsicID(CORINFO_METHOD_HANDLE method,
                                      bool * pMustExpand = NULL);
@@ -686,9 +707,6 @@ public:
                               CORINFO_METHOD_HANDLE method,
                               CORINFO_CLASS_HANDLE delegateCls,
                               BOOL* pfIsOpenDelegate);
-
-    BOOL isDelegateCreationAllowed(CORINFO_CLASS_HANDLE        delegateHnd,
-                                   CORINFO_METHOD_HANDLE       calleeHnd);
 
     void getGSCookie(GSCookie * pCookieVal, 
                      GSCookie** ppCookieVal);

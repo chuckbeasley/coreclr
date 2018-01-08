@@ -12,7 +12,6 @@
 #include "method.hpp"
 #include "typehandle.h"
 #include "field.h"
-#include "security.h"
 #include "eeconfig.h"
 #include "vars.hpp"
 #include "jitinterface.h"
@@ -36,13 +35,13 @@
 // it's used for both method and field to signify that no access is allowed
 #define INVOCATION_FLAGS_NO_INVOKE                  0x00000002
 
-#define INVOCATION_FLAGS_NEED_SECURITY              0x00000004
+// #define unused                                   0x00000004
 
 // because field and method are different we can reuse the same bits
 //method
 #define INVOCATION_FLAGS_IS_CTOR                    0x00000010
 #define INVOCATION_FLAGS_RISKY_METHOD               0x00000020
-#define INVOCATION_FLAGS_W8P_API                    0x00000040
+// #define unused                                   0x00000040
 #define INVOCATION_FLAGS_IS_DELEGATE_CTOR           0x00000080
 #define INVOCATION_FLAGS_CONTAINS_STACK_POINTERS    0x00000100
 // field
@@ -74,24 +73,6 @@ static TypeHandle NullableTypeOfByref(TypeHandle th) {
         return TypeHandle();
             
     return subType;
-}
-
-static void TryDemand(DWORD whatPermission, RuntimeExceptionKind reKind, LPCWSTR wszTag) {
-    CONTRACTL {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_COOPERATIVE;
-    }
-    CONTRACTL_END;
-
-
-    EX_TRY {
-        Security::SpecialDemand(SSWT_LATEBOUND_LINKDEMAND, whatPermission);
-    } 
-    EX_CATCH {
-        COMPlusThrow(reKind, wszTag);
-    }
-    EX_END_CATCH_UNREACHABLE
 }
 
 static void TryCallMethodWorker(MethodDescCallSite* pMethodCallSite, ARG_SLOT* args, Frame* pDebuggerCatchFrame)
@@ -128,7 +109,7 @@ static void TryCallMethodWorker(MethodDescCallSite* pMethodCallSite, ARG_SLOT* a
 // then transfers that data to the newly produced TargetInvocationException. This one
 // doesn't take those same steps. 
 //
-static void TryCallMethod(MethodDescCallSite* pMethodCallSite, ARG_SLOT* args) {
+static void TryCallMethod(MethodDescCallSite* pMethodCallSite, ARG_SLOT* args, bool wrapExceptions) {
     CONTRACTL {
         THROWS;
         GC_TRIGGERS;
@@ -136,32 +117,39 @@ static void TryCallMethod(MethodDescCallSite* pMethodCallSite, ARG_SLOT* args) {
     }
     CONTRACTL_END;
 
-    OBJECTREF ppException = NULL;
-    GCPROTECT_BEGIN(ppException);
-
-    // The sole purpose of having this frame is to tell the debugger that we have a catch handler here 
-    // which may swallow managed exceptions.  The debugger needs this in order to send a 
-    // CatchHandlerFound (CHF) notification.
-    FrameWithCookie<DebuggerU2MCatchHandlerFrame> catchFrame;
-    EX_TRY {
-        TryCallMethodWorker(pMethodCallSite, args, &catchFrame);
-    } 
-    EX_CATCH {
-        ppException = GET_THROWABLE();
-        _ASSERTE(ppException);
-    }
-    EX_END_CATCH(RethrowTransientExceptions)
-    catchFrame.Pop();
-
-    // It is important to re-throw outside the catch block because re-throwing will invoke
-    // the jitter and managed code and will cause us to use more than the backout stack limit.
-    if (ppException != NULL) 
+    if (wrapExceptions)
     {
-        // If we get here we need to throw an TargetInvocationException
-        OBJECTREF except = InvokeUtil::CreateTargetExcept(&ppException);
-        COMPlusThrow(except);
+        OBJECTREF ppException = NULL;
+        GCPROTECT_BEGIN(ppException);
+
+        // The sole purpose of having this frame is to tell the debugger that we have a catch handler here
+        // which may swallow managed exceptions.  The debugger needs this in order to send a
+        // CatchHandlerFound (CHF) notification.
+        FrameWithCookie<DebuggerU2MCatchHandlerFrame> catchFrame;
+        EX_TRY{
+            TryCallMethodWorker(pMethodCallSite, args, &catchFrame);
+        }
+            EX_CATCH{
+                ppException = GET_THROWABLE();
+                _ASSERTE(ppException);
+        }
+            EX_END_CATCH(RethrowTransientExceptions)
+            catchFrame.Pop();
+
+        // It is important to re-throw outside the catch block because re-throwing will invoke
+        // the jitter and managed code and will cause us to use more than the backout stack limit.
+        if (ppException != NULL)
+        {
+            // If we get here we need to throw an TargetInvocationException
+            OBJECTREF except = InvokeUtil::CreateTargetExcept(&ppException);
+            COMPlusThrow(except);
+        }
+        GCPROTECT_END();
     }
-    GCPROTECT_END();
+    else
+    {
+        pMethodCallSite->CallWithValueTypes(args);
+    }
 }
 
 
@@ -222,55 +210,6 @@ FCIMPL5(Object*, RuntimeFieldHandle::GetValue, ReflectFieldObject *pFieldUNSAFE,
 }
 FCIMPLEND
 
-FCIMPL5(void, ReflectionInvocation::PerformVisibilityCheckOnField, FieldDesc *pFieldDesc, Object *target, ReflectClassBaseObject *pDeclaringTypeUNSAFE, DWORD attr, DWORD invocationFlags) {
-    CONTRACTL {
-        FCALL_CHECK;
-        PRECONDITION(CheckPointer(pFieldDesc));
-        PRECONDITION(CheckPointer(pDeclaringTypeUNSAFE));
-    }
-    CONTRACTL_END;
-
-
-    REFLECTCLASSBASEREF refDeclaringType = (REFLECTCLASSBASEREF)ObjectToOBJECTREF(pDeclaringTypeUNSAFE);
-
-    TypeHandle declaringType = refDeclaringType->GetType();
-    OBJECTREF targetObj = ObjectToOBJECTREF(target);
-
-    HELPER_METHOD_FRAME_BEGIN_2(targetObj, refDeclaringType);
-
-    if ((invocationFlags & INVOCATION_FLAGS_SPECIAL_FIELD) != 0) {
-        // Verify that this is not a Final Field
-        if (IsFdInitOnly(attr))
-            TryDemand(SECURITY_SERIALIZATION, kFieldAccessException, W("Acc_ReadOnly"));
-        if (IsFdHasFieldRVA(attr))
-            TryDemand(SECURITY_SKIP_VER, kFieldAccessException, W("Acc_RvaStatic"));
-    }
-
-    if ((invocationFlags & INVOCATION_FLAGS_NEED_SECURITY) != 0) {
-        // Verify the callee/caller access
-
-        bool targetRemoted = FALSE;
-
-
-        RefSecContext sCtx(InvokeUtil::GetInvocationAccessCheckType(targetRemoted));
-
-        MethodTable* pInstanceMT = NULL;
-        if (targetObj != NULL && !pFieldDesc->IsStatic()) {
-            TypeHandle targetType = targetObj->GetTypeHandle();
-            if (!targetType.IsTypeDesc())
-                pInstanceMT = targetType.AsMethodTable();
-        }
-
-        // Perform the normal access check (caller vs field).
-        InvokeUtil::CanAccessField(&sCtx,
-                                   declaringType.GetMethodTable(),
-                                   pInstanceMT,
-                                   pFieldDesc);
-    }
-    HELPER_METHOD_FRAME_END();
-}
-FCIMPLEND
-
 FCIMPL2(FC_BOOL_RET, ReflectionInvocation::CanValueSpecialCast, ReflectClassBaseObject *pValueTypeUNSAFE, ReflectClassBaseObject *pTargetTypeUNSAFE) {
     CONTRACTL {
         FCALL_CHECK;
@@ -296,9 +235,7 @@ FCIMPL2(FC_BOOL_RET, ReflectionInvocation::CanValueSpecialCast, ReflectClassBase
         // the object must be an IntPtr or a System.Reflection.Pointer
         if (valueType == TypeHandle(MscorlibBinder::GetClass(CLASS__INTPTR))) {
             //
-            // it's an IntPtr, it's good. Demand SkipVerification and proceed
-
-            Security::SpecialDemand(SSWT_LATEBOUND_LINKDEMAND, SECURITY_SKIP_VER);
+            // it's an IntPtr, it's good.
         }
         //
         // it's a System.Reflection.Pointer object
@@ -307,13 +244,7 @@ FCIMPL2(FC_BOOL_RET, ReflectionInvocation::CanValueSpecialCast, ReflectClassBase
         else if (!InvokeUtil::IsVoidPtr(targetType)) {
             if (!valueType.CanCastTo(targetType))
                 ret = FALSE;
-            else
-                // demand SkipVerification and proceed
-                Security::SpecialDemand(SSWT_LATEBOUND_LINKDEMAND, SECURITY_SKIP_VER);
         }
-        else
-            // demand SkipVerification and proceed
-            Security::SpecialDemand(SSWT_LATEBOUND_LINKDEMAND, SECURITY_SKIP_VER);
     } else {
         // the field type is an enum or a primitive. To have any chance of assignement the object type must
         // be an enum or primitive as well.
@@ -470,21 +401,18 @@ FCIMPL1(Object*, RuntimeTypeHandle::Allocate, ReflectClassBaseObject* pTypeUNSAF
 }//Allocate
 FCIMPLEND
 
-FCIMPL6(Object*, RuntimeTypeHandle::CreateInstance, ReflectClassBaseObject* refThisUNSAFE,
+FCIMPL5(Object*, RuntimeTypeHandle::CreateInstance, ReflectClassBaseObject* refThisUNSAFE,
                                                     CLR_BOOL publicOnly,
-                                                    CLR_BOOL securityOff,
+                                                    CLR_BOOL wrapExceptions,
                                                     CLR_BOOL* pbCanBeCached,
-                                                    MethodDesc** pConstructor,
-                                                    CLR_BOOL *pbNeedSecurityCheck) {
+                                                    MethodDesc** pConstructor) {
     CONTRACTL {
         FCALL_CHECK;
         PRECONDITION(CheckPointer(refThisUNSAFE));
         PRECONDITION(CheckPointer(pbCanBeCached));
-        PRECONDITION(CheckPointer(pbNeedSecurityCheck));
         PRECONDITION(CheckPointer(pConstructor));
         PRECONDITION(*pbCanBeCached == false);
         PRECONDITION(*pConstructor == NULL);
-        PRECONDITION(*pbNeedSecurityCheck == true);
     }
     CONTRACTL_END;
 
@@ -508,7 +436,6 @@ FCIMPL6(Object*, RuntimeTypeHandle::CreateInstance, ReflectClassBaseObject* refT
     HELPER_METHOD_FRAME_BEGIN_RET_2(rv, refThis);
 
     MethodTable* pVMT;
-    bool bNeedAccessCheck;
 
     // Get the type information associated with refThis
     if (thisTH.IsNull() || thisTH.IsTypeDesc())
@@ -517,8 +444,6 @@ FCIMPL6(Object*, RuntimeTypeHandle::CreateInstance, ReflectClassBaseObject* refT
     pVMT = thisTH.AsMethodTable();
 
     pVMT->EnsureInstanceActive();
-
-    bNeedAccessCheck = false;
 
 #ifdef FEATURE_COMINTEROP
     // If this is __ComObject then create the underlying COM object.
@@ -529,10 +454,6 @@ FCIMPL6(Object*, RuntimeTypeHandle::CreateInstance, ReflectClassBaseObject* refT
         void* pClassFactory = (void*)pSyncBlock->GetInteropInfo()->GetComClassFactory();
         if (!pClassFactory)
             COMPlusThrow(kInvalidComObjectException, IDS_EE_NO_BACKING_CLASS_FACTORY);
-
-        // Check for the required permissions (SecurityPermission.UnmanagedCode),
-        // since arbitrary unmanaged code in the class factory will execute below).
-        Security::SpecialDemand(SSWT_LATEBOUND_LINKDEMAND, SECURITY_UNMANAGED_CODE);
 
         // create an instance of the Com Object
         rv = ((ComClassFactory*)pClassFactory)->CreateInstance(NULL);
@@ -546,11 +467,6 @@ FCIMPL6(Object*, RuntimeTypeHandle::CreateInstance, ReflectClassBaseObject* refT
     else
 #endif // FEATURE_COMINTEROP
     {
-        // If we are creating a COM object which has backing metadata we still
-        // need to ensure that the caller has unmanaged code access permission.
-        if (pVMT->IsComObjectType())
-            Security::SpecialDemand(SSWT_LATEBOUND_LINKDEMAND, SECURITY_UNMANAGED_CODE);
-
         // if this is an abstract class then we will fail this
         if (pVMT->IsAbstract())  {
             if (pVMT->IsInterface())
@@ -577,74 +493,32 @@ FCIMPL6(Object*, RuntimeTypeHandle::CreateInstance, ReflectClassBaseObject* refT
                 COMPlusThrow(kMissingMethodException,W("Arg_NoDefCTor"));
             }
 
-            if (!securityOff)
-            {
-                {
-                    // Public critical types cannot be accessed by transparent callers
-                    bNeedAccessCheck = !pVMT->IsExternallyVisible() || Security::TypeRequiresTransparencyCheck(pVMT);
-                }
-
-                if (bNeedAccessCheck)
-                {
-                    RefSecContext sCtx(InvokeUtil::GetInvocationAccessCheckType());
-                    InvokeUtil::CanAccessClass(&sCtx, pVMT, TRUE);
-                }
-            }
-
-                // Handle the nullable<T> special case
+            // Handle the nullable<T> special case
             if (Nullable::IsNullableType(thisTH)) {
                 rv = Nullable::BoxedNullableNull(thisTH);
             }
             else 
                 rv = pVMT->Allocate();
 
-            // Since no security checks will be performed on cached value types without default ctors,
-            // we cannot cache those types that require access checks.
-            // In fact, we don't even need to set pbNeedSecurityCheck to false here.
-            if (!pVMT->Collectible() && !bNeedAccessCheck)
+            if (!pVMT->Collectible())
             {
                 *pbCanBeCached = true;
-                *pbNeedSecurityCheck = false;
             }
         }
         else // !pVMT->HasDefaultConstructor()
         {
             pMeth = pVMT->GetDefaultConstructor();
-            
+
             // Validate the method can be called by this caller
             DWORD attr = pMeth->GetAttrs();
 
             if (!IsMdPublic(attr) && publicOnly)
-                COMPlusThrow(kMissingMethodException,W("Arg_NoDefCTor"));
-
-            if (!securityOff)
-            {
-                // If the type is critical or the constructor we're using is critical, we need to ensure that
-                // the caller is allowed to invoke it.
-                bool needsTransparencyCheck = Security::TypeRequiresTransparencyCheck(pVMT) ||
-                                               (Security::IsMethodCritical(pMeth) && !Security::IsMethodSafeCritical(pMeth));
-
-                // We also need to do a check if the method or type is not public
-                bool needsVisibilityCheck = !IsMdPublic(attr) || !pVMT->IsExternallyVisible();
-
-                // If the visiblity, transparency, or legacy LinkDemands on the type or constructor dictate that
-                // we need to check the caller, then do that now.
-                bNeedAccessCheck = needsTransparencyCheck ||
-                    needsVisibilityCheck ||
-                    pMeth->RequiresLinktimeCheck();
-
-                if (bNeedAccessCheck)
-                {
-                    // this security context will be used in cast checking as well
-                    RefSecContext sCtx(InvokeUtil::GetInvocationAccessCheckType());
-                    InvokeUtil::CanAccessMethod(pMeth, pVMT, NULL, &sCtx);
-                }
-            }
+                COMPlusThrow(kMissingMethodException, W("Arg_NoDefCTor"));
 
             // We've got the class, lets allocate it and call the constructor
             OBJECTREF o;
             bool remoting = false;
-        
+
             o = AllocateObject(pVMT);
             GCPROTECT_BEGIN(o);
 
@@ -658,17 +532,18 @@ FCIMPL6(Object*, RuntimeTypeHandle::CreateInstance, ReflectClassBaseObject* refT
                 arg = ObjToArgSlot(o);
 
             // Call the method
-            TryCallMethod(&ctor, &arg);
+            TryCallMethod(&ctor, &arg, wrapExceptions);
 
             rv = o;
             GCPROTECT_END();
 
-            // No need to set these if they cannot be cached
-            if (!remoting && !pVMT->Collectible())
+            // No need to set these if they cannot be cached. In particular, if the type is a value type with a custom
+            // parameterless constructor, don't allow caching and have subsequent calls come back here to allocate an object and
+            // call the constructor.
+            if (!remoting && !pVMT->Collectible() && !pVMT->IsValueType())
             {
                 *pbCanBeCached = true;
                 *pConstructor = pMeth;
-                *pbNeedSecurityCheck = bNeedAccessCheck;
             }
         }
     }
@@ -722,7 +597,7 @@ FCIMPL2(Object*, RuntimeTypeHandle::CreateInstanceForGenericType, ReflectClassBa
     ARG_SLOT arg = ObjToArgSlot(gc.rv); 
 
     // Call the method
-    TryCallMethod(&ctor, &arg);
+    TryCallMethod(&ctor, &arg, true);
 
     HELPER_METHOD_FRAME_END();
     return OBJECTREFToObject(gc.rv);
@@ -815,15 +690,6 @@ FCIMPL1(DWORD, ReflectionInvocation::GetSpecialSecurityFlags, ReflectMethodObjec
     if (InvokeUtil::IsDangerousMethod(pMethod))
         dwFlags |= INVOCATION_FLAGS_RISKY_METHOD;
 
-    // Is there a link demand?
-    if (pMethod->RequiresLinktimeCheck()) {
-        dwFlags |= INVOCATION_FLAGS_NEED_SECURITY;
-    }
-    else
-    if (Security::IsMethodCritical(pMethod) && !Security::IsMethodSafeCritical(pMethod)) {
-        dwFlags |= INVOCATION_FLAGS_NEED_SECURITY;
-    }
-
     HELPER_METHOD_FRAME_END();
     return dwFlags;
 }
@@ -894,8 +760,6 @@ OBJECTREF InvokeArrayConstructor(ArrayTypeDesc* arrayDesc, MethodDesc* pMeth, PT
     // If we're trying to create an array of pointers or function pointers,
     // check that the caller has skip verification permission.
     CorElementType et = arrayDesc->GetArrayElementTypeHandle().GetVerifierCorElementType();
-    if (et == ELEMENT_TYPE_PTR || et == ELEMENT_TYPE_FNPTR)
-        Security::SpecialDemand(SSWT_LATEBOUND_LINKDEMAND, SECURITY_SKIP_VER);
 
     // Validate the argCnt an the Rank. Also allow nested SZARRAY's.
     _ASSERTE(argCnt == (int) arrayDesc->GetRank() || argCnt == (int) arrayDesc->GetRank() * 2 ||
@@ -1170,8 +1034,9 @@ void DECLSPEC_NORETURN ThrowInvokeMethodException(MethodDesc * pMethod, OBJECTRE
     GCPROTECT_END();
 }
 
-FCIMPL4(Object*, RuntimeMethodHandle::InvokeMethod, 
-    Object *target, PTRArray *objs, SignatureNative* pSigUNSAFE, CLR_BOOL fConstructor)
+FCIMPL5(Object*, RuntimeMethodHandle::InvokeMethod,
+    Object *target, PTRArray *objs, SignatureNative* pSigUNSAFE,
+    CLR_BOOL fConstructor, CLR_BOOL fWrapExceptions)
 {
     FCALL_CONTRACT;
 
@@ -1256,7 +1121,7 @@ FCIMPL4(Object*, RuntimeMethodHandle::InvokeMethod,
 
     // Make sure we have enough room on the stack for this. Note that we will need the stack amount twice - once to build the stack
     // and second time to actually make the call.
-    INTERIOR_STACK_PROBE_FOR(pThread, 1 + static_cast<UINT>((2 * nAllocaSize) / OS_PAGE_SIZE) + static_cast<UINT>(HOLDER_CODE_NORMAL_STACK_LIMIT));
+    INTERIOR_STACK_PROBE_FOR(pThread, 1 + static_cast<UINT>((2 * nAllocaSize) / GetOsPageSize()) + static_cast<UINT>(HOLDER_CODE_NORMAL_STACK_LIMIT));
 
     LPBYTE pAlloc = (LPBYTE)_alloca(nAllocaSize);
 
@@ -1477,30 +1342,38 @@ FCIMPL4(Object*, RuntimeMethodHandle::InvokeMethod,
             FrameWithCookie<ProtectValueClassFrame>(pThread, pValueClasses);
     }
 
-    // The sole purpose of having this frame is to tell the debugger that we have a catch handler here 
-    // which may swallow managed exceptions.  The debugger needs this in order to send a 
-    // CatchHandlerFound (CHF) notification.
-    FrameWithCookie<DebuggerU2MCatchHandlerFrame> catchFrame(pThread);
-
     // Call the method
     bool fExceptionThrown = false;
-    EX_TRY_THREAD(pThread) {
-        CallDescrWorkerReflectionWrapper(&callDescrData, &catchFrame);
-    } EX_CATCH {
-        // Rethrow transient exceptions for constructors for backward compatibility
-        if (fConstructor && GET_EXCEPTION()->IsTransient())
-        {
-            EX_RETHROW;
-        }
+    if (fWrapExceptions)
+    {
+        // The sole purpose of having this frame is to tell the debugger that we have a catch handler here
+        // which may swallow managed exceptions.  The debugger needs this in order to send a
+        // CatchHandlerFound (CHF) notification.
+        FrameWithCookie<DebuggerU2MCatchHandlerFrame> catchFrame(pThread);
+
+        EX_TRY_THREAD(pThread) {
+            CallDescrWorkerReflectionWrapper(&callDescrData, &catchFrame);
+        } EX_CATCH{
+            // Rethrow transient exceptions for constructors for backward compatibility
+            if (fConstructor && GET_EXCEPTION()->IsTransient())
+            {
+                EX_RETHROW;
+            }
 
         // Abuse retval to store the exception object
         gc.retVal = GET_THROWABLE();
         _ASSERTE(gc.retVal);
 
         fExceptionThrown = true;
-    } EX_END_CATCH(SwallowAllExceptions);
+        } EX_END_CATCH(SwallowAllExceptions);
 
-    catchFrame.Pop(pThread);
+        catchFrame.Pop(pThread);
+    }
+    else
+    {
+        CallDescrWorkerWithHandler(&callDescrData);
+    }
+
 
     // Now that we are safely out of the catch block, we can create and raise the
     // TargetInvocationException.
@@ -1874,12 +1747,6 @@ FCIMPL5(void, RuntimeFieldHandle::SetValueDirect, ReflectFieldObject *pFieldUNSA
 
         // Verify that this is not a Final Field
         DWORD attr = pField->GetAttributes(); // should we cache?
-        if (IsFdInitOnly(attr)) {
-            TryDemand(SECURITY_SERIALIZATION, kFieldAccessException, W("Acc_ReadOnly"));
-        }
-        if (IsFdHasFieldRVA(attr)) {
-            TryDemand(SECURITY_SKIP_VER, kFieldAccessException, W("Acc_RvaStatic"));
-        }
         if (IsFdLiteral(attr))
             COMPlusThrow(kFieldAccessException,W("Acc_ReadOnly"));
 
@@ -2126,33 +1993,6 @@ FCIMPL1(void, ReflectionInvocation::RunModuleConstructor, ReflectModuleBaseObjec
         pDomainFile->EnsureActive();
         HELPER_METHOD_FRAME_END();
     }
-}
-FCIMPLEND
-
-
-FCIMPL1(void, ReflectionInvocation::PrepareContractedDelegate, Object * delegateUNSAFE)
-{
-    CONTRACTL {
-        FCALL_CHECK;
-        PRECONDITION(CheckPointer(delegateUNSAFE, NULL_OK));
-    }
-    CONTRACTL_END;
-    
-}
-FCIMPLEND
-
-
-FCIMPL0(void, ReflectionInvocation::ProbeForSufficientStack)
-{
-    FCALL_CONTRACT;
-
-#ifdef FEATURE_STACK_PROBE
-    // probe for our entry point amount and throw if not enough stack
-    RetailStackProbe(ADJUST_PROBE(DEFAULT_ENTRY_PROBE_AMOUNT));
-#else
-    FCUnique(0x69);
-#endif
-
 }
 FCIMPLEND
 
@@ -2655,10 +2495,6 @@ FCIMPL8(Object*, ReflectionInvocation::InvokeDispMethod, ReflectClassBaseObject*
 
     _ASSERTE(gc.target != NULL);
     _ASSERTE(gc.target->GetMethodTable()->IsComObjectType());
-
-    // Unless security is turned off, we need to validate that the calling code
-    // has unmanaged code access privilege.
-    Security::SpecialDemand(SSWT_LATEBOUND_LINKDEMAND, SECURITY_UNMANAGED_CODE);
 
     WORD flags = 0;
     if (invokeAttr & BINDER_InvokeMethod)

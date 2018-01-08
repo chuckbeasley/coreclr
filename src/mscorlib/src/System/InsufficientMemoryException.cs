@@ -23,24 +23,25 @@ using System.Runtime.Serialization;
 namespace System
 {
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public sealed class InsufficientMemoryException : OutOfMemoryException
     {
         public InsufficientMemoryException()
             : base(GetMessageFromNativeResources(ExceptionMessageKind.OutOfMemory))
         {
-            SetErrorCode(__HResults.COR_E_INSUFFICIENTMEMORY);
+            HResult = HResults.COR_E_INSUFFICIENTMEMORY;
         }
 
         public InsufficientMemoryException(String message)
             : base(message)
         {
-            SetErrorCode(__HResults.COR_E_INSUFFICIENTMEMORY);
+            HResult = HResults.COR_E_INSUFFICIENTMEMORY;
         }
 
         public InsufficientMemoryException(String message, Exception innerException)
             : base(message, innerException)
         {
-            SetErrorCode(__HResults.COR_E_INSUFFICIENTMEMORY);
+            HResult = HResults.COR_E_INSUFFICIENTMEMORY;
         }
 
         private InsufficientMemoryException(SerializationInfo info, StreamingContext context) : base(info, context)

@@ -34,6 +34,7 @@
 #include "excep.h"
 #include "fcall.h"
 #include "nlsinfo.h"
+#include "clrconfignative.h"
 #include "commodule.h"
 #include "marshalnative.h"
 #include "system.h"
@@ -71,8 +72,6 @@
 #include "mdaassistants.h"
 #endif
 
-#include "coverage.h"
-
 #ifdef FEATURE_COMINTEROP
 #include "variant.h"
 #include "oavariant.h"
@@ -94,7 +93,12 @@
 
 #if defined(FEATURE_EVENTSOURCE_XPLAT)
 #include "nativeeventsource.h"
+#include "eventpipe.h"
 #endif //defined(FEATURE_EVENTSOURCE_XPLAT)
+
+#ifdef FEATURE_PERFTRACING
+#include "eventpipe.h"
+#endif //FEATURE_PERFTRACING
 
 #endif // CROSSGEN_MSCORLIB
 

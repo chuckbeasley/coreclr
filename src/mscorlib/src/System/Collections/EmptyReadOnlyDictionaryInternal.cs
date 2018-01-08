@@ -13,12 +13,10 @@
 ** 
 ===========================================================*/
 
-using System.Diagnostics.Contracts;
 
 namespace System.Collections
 {
     ///    This is a simple implementation of IDictionary that is empty and readonly.
-    [Serializable]
     internal sealed class EmptyReadOnlyDictionaryInternal : IDictionary
     {
         // Note that this class must be agile with respect to AppDomains.  See its usage in
@@ -43,14 +41,13 @@ namespace System.Collections
                 throw new ArgumentNullException(nameof(array));
 
             if (array.Rank != 1)
-                throw new ArgumentException(Environment.GetResourceString("Arg_RankMultiDimNotSupported"));
+                throw new ArgumentException(SR.Arg_RankMultiDimNotSupported);
 
             if (index < 0)
-                throw new ArgumentOutOfRangeException(nameof(index), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException(nameof(index), SR.ArgumentOutOfRange_NeedNonNegNum);
 
             if (array.Length - index < this.Count)
-                throw new ArgumentException(Environment.GetResourceString("ArgumentOutOfRange_Index"), nameof(index));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.ArgumentOutOfRange_Index, nameof(index));
 
             // the actual copy is a NOP
         }
@@ -87,26 +84,24 @@ namespace System.Collections
             {
                 if (key == null)
                 {
-                    throw new ArgumentNullException(nameof(key), Environment.GetResourceString("ArgumentNull_Key"));
+                    throw new ArgumentNullException(nameof(key), SR.ArgumentNull_Key);
                 }
-                Contract.EndContractBlock();
                 return null;
             }
             set
             {
                 if (key == null)
                 {
-                    throw new ArgumentNullException(nameof(key), Environment.GetResourceString("ArgumentNull_Key"));
+                    throw new ArgumentNullException(nameof(key), SR.ArgumentNull_Key);
                 }
 
                 if (!key.GetType().IsSerializable)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_NotSerializable"), nameof(key));
+                    throw new ArgumentException(SR.Argument_NotSerializable, nameof(key));
 
                 if ((value != null) && (!value.GetType().IsSerializable))
-                    throw new ArgumentException(Environment.GetResourceString("Argument_NotSerializable"), nameof(value));
-                Contract.EndContractBlock();
+                    throw new ArgumentException(SR.Argument_NotSerializable, nameof(value));
 
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ReadOnly"));
+                throw new InvalidOperationException(SR.InvalidOperation_ReadOnly);
             }
         }
 
@@ -114,7 +109,7 @@ namespace System.Collections
         {
             get
             {
-                return EmptyArray<Object>.Value;
+                return Array.Empty<Object>();
             }
         }
 
@@ -122,7 +117,7 @@ namespace System.Collections
         {
             get
             {
-                return EmptyArray<Object>.Value;
+                return Array.Empty<Object>();
             }
         }
 
@@ -135,22 +130,21 @@ namespace System.Collections
         {
             if (key == null)
             {
-                throw new ArgumentNullException(nameof(key), Environment.GetResourceString("ArgumentNull_Key"));
+                throw new ArgumentNullException(nameof(key), SR.ArgumentNull_Key);
             }
 
             if (!key.GetType().IsSerializable)
-                throw new ArgumentException(Environment.GetResourceString("Argument_NotSerializable"), nameof(key));
+                throw new ArgumentException(SR.Argument_NotSerializable, nameof(key));
 
             if ((value != null) && (!value.GetType().IsSerializable))
-                throw new ArgumentException(Environment.GetResourceString("Argument_NotSerializable"), nameof(value));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_NotSerializable, nameof(value));
 
-            throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ReadOnly"));
+            throw new InvalidOperationException(SR.InvalidOperation_ReadOnly);
         }
 
         public void Clear()
         {
-            throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ReadOnly"));
+            throw new InvalidOperationException(SR.InvalidOperation_ReadOnly);
         }
 
         public bool IsReadOnly
@@ -176,7 +170,7 @@ namespace System.Collections
 
         public void Remove(Object key)
         {
-            throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ReadOnly"));
+            throw new InvalidOperationException(SR.InvalidOperation_ReadOnly);
         }
 
         private sealed class NodeEnumerator : IDictionaryEnumerator
@@ -196,7 +190,7 @@ namespace System.Collections
             {
                 get
                 {
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_EnumOpCantHappen"));
+                    throw new InvalidOperationException(SR.InvalidOperation_EnumOpCantHappen);
                 }
             }
 
@@ -210,7 +204,7 @@ namespace System.Collections
             {
                 get
                 {
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_EnumOpCantHappen"));
+                    throw new InvalidOperationException(SR.InvalidOperation_EnumOpCantHappen);
                 }
             }
 
@@ -218,7 +212,7 @@ namespace System.Collections
             {
                 get
                 {
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_EnumOpCantHappen"));
+                    throw new InvalidOperationException(SR.InvalidOperation_EnumOpCantHappen);
                 }
             }
 
@@ -226,7 +220,7 @@ namespace System.Collections
             {
                 get
                 {
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_EnumOpCantHappen"));
+                    throw new InvalidOperationException(SR.InvalidOperation_EnumOpCantHappen);
                 }
             }
         }

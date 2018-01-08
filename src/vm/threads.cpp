@@ -28,7 +28,6 @@
 #include "corhost.h"
 #include "win32threadpool.h"
 #include "jitinterface.h"
-#include "appdomainstack.inl"
 #include "eventtrace.h"
 #include "comutilnative.h"
 #include "finalizerthread.h"
@@ -54,6 +53,10 @@
 #include "olecontexthelpers.h"
 #endif // FEATURE_COMINTEROP_APARTMENT_SUPPORT
 
+#ifdef FEATURE_PERFTRACING
+#include "eventpipebuffermanager.h"
+#endif // FEATURE_PERFTRACING
+
 
 
 SPTR_IMPL(ThreadStore, ThreadStore, s_pThreadStore);
@@ -65,10 +68,6 @@ CLREvent *ThreadStore::s_pWaitForStackCrawlEvent;
 
 
 BOOL Thread::s_fCleanFinalizedThread = FALSE;
-
-#ifdef ENABLE_GET_THREAD_GENERIC_FULL_CHECK
-BOOL Thread::s_fEnforceEEThreadNotRequiredContracts = FALSE;
-#endif
 
 Volatile<LONG> Thread::s_threadPoolCompletionCountOverflow = 0;
 
@@ -285,9 +284,6 @@ bool Thread::DetectHandleILStubsForDebugger()
     return false;
 }
 
-
-#ifdef FEATURE_IMPLICIT_TLS
-
 extern "C" {
 #ifndef __llvm__
 __declspec(thread)
@@ -299,26 +295,15 @@ ThreadLocalInfo gCurrentThreadInfo =
                                                   NULL,    // m_pThread
                                                   NULL,    // m_pAppDomain
                                                   NULL,    // m_EETlsData
-#if defined(FEATURE_MERGE_JIT_AND_ENGINE)
-                                                  NULL,    // m_pCompiler
-#endif
                                               };
 } // extern "C"
 // index into TLS Array. Definition added by compiler
 EXTERN_C UINT32 _tls_index;
 
-#else // FEATURE_IMPLICIT_TLS
-extern "C" {
-GVAL_IMPL_INIT(DWORD, gThreadTLSIndex, TLS_OUT_OF_INDEXES);      // index ( (-1) == uninitialized )
-GVAL_IMPL_INIT(DWORD, gAppDomainTLSIndex, TLS_OUT_OF_INDEXES);   // index ( (-1) == uninitialized )
-}
-#endif // FEATURE_IMPLICIT_TLS
-
 #ifndef DACCESS_COMPILE
-#ifdef FEATURE_IMPLICIT_TLS
 BOOL SetThread(Thread* t)
 {
-	LIMITED_METHOD_CONTRACT
+    LIMITED_METHOD_CONTRACT
 
     gCurrentThreadInfo.m_pThread = t;
     return TRUE;
@@ -326,51 +311,11 @@ BOOL SetThread(Thread* t)
 
 BOOL SetAppDomain(AppDomain* ad)
 {
-	LIMITED_METHOD_CONTRACT
+    LIMITED_METHOD_CONTRACT
 
     gCurrentThreadInfo.m_pAppDomain = ad;
     return TRUE;
 }
-
-#if defined(FEATURE_MERGE_JIT_AND_ENGINE)
-extern "C"
-{
-
-void* GetJitTls()
-{
-    LIMITED_METHOD_CONTRACT
-
-    return gCurrentThreadInfo.m_pJitTls;
-}
-
-void SetJitTls(void* v)
-{
-    LIMITED_METHOD_CONTRACT
-    gCurrentThreadInfo.m_pJitTls = v;
-}
-
-}
-#endif // defined(FEATURE_MERGE_JIT_AND_ENGINE)
-
-#define ThreadInited()          (TRUE)
-
-#else // FEATURE_IMPLICIT_TLS
-BOOL SetThread(Thread* t)
-{
-    WRAPPER_NO_CONTRACT
-    return UnsafeTlsSetValue(GetThreadTLSIndex(), t);
-}
-
-BOOL SetAppDomain(AppDomain* ad)
-{
-    WRAPPER_NO_CONTRACT
-    return UnsafeTlsSetValue(GetAppDomainTLSIndex(), ad);
-}
-
-#define ThreadInited()          (gThreadTLSIndex != TLS_OUT_OF_INDEXES)
-
-#endif // FEATURE_IMPLICIT_TLS
-
 
 BOOL Thread::Alert ()
 {
@@ -492,7 +437,6 @@ void Thread::ChooseThreadCPUGroupAffinity()
     }
     CONTRACTL_END;
 
-#ifndef FEATURE_PAL
     if (!CPUGroupInfo::CanEnableGCCPUGroups() || !CPUGroupInfo::CanEnableThreadUseAllCpuGroups()) 
          return;
 
@@ -512,7 +456,6 @@ void Thread::ChooseThreadCPUGroupAffinity()
     CPUGroupInfo::SetThreadGroupAffinity(GetThreadHandle(), &groupAffinity, NULL);
     m_wCPUGroup = groupAffinity.Group;
     m_pAffinityMask = groupAffinity.Mask;
-#endif // !FEATURE_PAL
 }
 
 void Thread::ClearThreadCPUGroupAffinity()
@@ -524,7 +467,6 @@ void Thread::ClearThreadCPUGroupAffinity()
     }
     CONTRACTL_END;
 
-#ifndef FEATURE_PAL
     if (!CPUGroupInfo::CanEnableGCCPUGroups() || !CPUGroupInfo::CanEnableThreadUseAllCpuGroups()) 
          return;
 
@@ -542,7 +484,6 @@ void Thread::ClearThreadCPUGroupAffinity()
 
     m_wCPUGroup = 0;
     m_pAffinityMask = 0;
-#endif // !FEATURE_PAL
 }
 
 DWORD Thread::StartThread()
@@ -680,7 +621,6 @@ Thread* SetupThread(BOOL fInternal)
     }
     CONTRACTL_END;
 
-    _ASSERTE(ThreadInited());
     Thread* pThread;
     if ((pThread = GetThread()) != NULL)
         return pThread;
@@ -780,18 +720,6 @@ Thread* SetupThread(BOOL fInternal)
     if (!pThread->InitThread(fInternal) ||
         !pThread->PrepareApartmentAndContext())
         ThrowOutOfMemory();
-
-#ifndef FEATURE_IMPLICIT_TLS
-    // make sure we will not fail when we store in TLS in the future.
-    if (!UnsafeTlsSetValue(gThreadTLSIndex, NULL))
-    {
-        ThrowOutOfMemory();
-    }
-    if (!UnsafeTlsSetValue(GetAppDomainTLSIndex(), NULL))
-    {
-        ThrowOutOfMemory();
-    }
-#endif
 
     // reset any unstarted bits on the thread object
     FastInterlockAnd((ULONG *) &pThread->m_State, ~Thread::TS_Unstarted);
@@ -914,7 +842,6 @@ Thread* SetupUnstartedThread(BOOL bRequiresTSL)
     }
     CONTRACTL_END;
 
-    _ASSERTE(ThreadInited());
     Thread* pThread = new Thread();
 
     FastInterlockOr((ULONG *) &pThread->m_State,
@@ -924,14 +851,6 @@ Thread* SetupUnstartedThread(BOOL bRequiresTSL)
 
     return pThread;
 }
-
-FCIMPL0(INT32, GetRuntimeId_Wrapper)
-{
-    FCALL_CONTRACT;
-
-    return GetRuntimeId();
-}
-FCIMPLEND
 
 //-------------------------------------------------------------------------
 // Public function: DestroyThread()
@@ -982,6 +901,16 @@ void DestroyThread(Thread *th)
 #error Unsupported platform
 #endif // _TARGET_X86_
 #endif // WIN64EXCEPTIONS
+
+#ifdef FEATURE_PERFTRACING
+    // Before the thread dies, mark its buffers as no longer owned
+    // so that they can be cleaned up after the thread dies.
+    EventPipeBufferList *pBufferList = th->GetEventPipeBufferList();
+    if(pBufferList != NULL)
+    {
+        pBufferList->SetOwnedByThread(false);
+    }
+#endif // FEATURE_PERFTRACING
 
     if (g_fEEShutDown == 0) 
     {
@@ -1084,6 +1013,16 @@ HRESULT Thread::DetachThread(BOOL fDLLThreadDetach)
     m_pClrDebugState = NULL;
 #endif //ENABLE_CONTRACTS_DATA
 
+#ifdef FEATURE_PERFTRACING
+    // Before the thread dies, mark its buffers as no longer owned
+    // so that they can be cleaned up after the thread dies.
+    EventPipeBufferList *pBufferList = m_pEventPipeBufferList.Load();
+    if(pBufferList != NULL)
+    {
+        pBufferList->SetOwnedByThread(false);
+    }
+#endif // FEATURE_PERFTRACING
+
     FastInterlockOr((ULONG*)&m_State, (int) (Thread::TS_Detached | Thread::TS_ReportDead));
     // Do not touch Thread object any more.  It may be destroyed.
 
@@ -1099,42 +1038,11 @@ HRESULT Thread::DetachThread(BOOL fDLLThreadDetach)
     return S_OK;
 }
 
-#ifndef FEATURE_IMPLICIT_TLS
-//---------------------------------------------------------------------------
-// Returns the TLS index for the Thread. This is strictly for the use of
-// our ASM stub generators that generate inline code to access the Thread.
-// Normally, you should use GetThread().
-//---------------------------------------------------------------------------
-DWORD GetThreadTLSIndex()
-{
-    LIMITED_METHOD_CONTRACT;
-
-    return gThreadTLSIndex;
-}
-
-//---------------------------------------------------------------------------
-// Returns the TLS index for the AppDomain. This is strictly for the use of
-// our ASM stub generators that generate inline code to access the AppDomain.
-// Normally, you should use GetAppDomain().
-//---------------------------------------------------------------------------
-DWORD GetAppDomainTLSIndex()
-{
-    LIMITED_METHOD_CONTRACT;
-
-    return gAppDomainTLSIndex;
-}
-#endif
-
 DWORD GetRuntimeId()
 {
     LIMITED_METHOD_CONTRACT;
 
-#ifndef FEATURE_IMPLICIT_TLS
-    _ASSERTE(GetThreadTLSIndex() != TLS_OUT_OF_INDEXES);
-    return GetThreadTLSIndex() + 3;
-#else
     return _tls_index;
-#endif
 }
 
 //---------------------------------------------------------------------------
@@ -1178,165 +1086,6 @@ Thread* WINAPI CreateThreadBlockThrow()
 DWORD_PTR Thread::OBJREF_HASH = OBJREF_TABSIZE;
 #endif
 
-#ifndef FEATURE_IMPLICIT_TLS
-
-#ifdef ENABLE_GET_THREAD_GENERIC_FULL_CHECK
-
-// ----------------------------------------------------------------------------
-// GetThreadGenericFullCheck
-// 
-// Description:
-//     The non-PAL, x86 / x64 assembly versions of GetThreadGeneric call into this C
-//     function to optionally do some verification before returning the EE Thread object
-//     for the current thread. Currently the primary enforcement this function does is
-//     around the EE_THREAD_(NOT)_REQUIRED contracts. For a definition of these
-//     contracts, how they're used, and how temporary "safe" scopes may be created
-//     using BEGIN_GETTHREAD_ALLOWED / END_GETTHREAD_ALLOWED, see the comments at the top
-//     of contract.h.
-//     
-//     The EE_THREAD_(NOT)_REQUIRED contracts are enforced as follows:
-//         * code:EEContract::DoChecks enforces the following:
-//             * On entry to an EE_THREAD_REQUIRED function, GetThread() != NULL
-//             * An EE_THREAD_REQUIRED function may not be called from an
-//                 EE_THREAD_NOT_REQUIRED function, unless there is an intervening
-//                 BEGIN/END_GETTHREAD_ALLOWED scope
-//         * This function (GetThreadGenericFullCheck) enforces that an
-//             EE_THREAD_NOT_REQUIRED function may not call GetThread(), unless there is
-//             an intervening BEGIN/END_GETTHREAD_ALLOWED scope. While this enforcement
-//             is straightforward below, the tricky part is getting
-//             GetThreadGenericFullCheck() to actually be called when GetThread() is
-//             called, given the optimizations around GetThread():
-//             * code:InitThreadManager ensures that non-PAL, debug, x86/x64 builds that
-//                 run with COMPlus_EnforceEEThreadNotRequiredContracts set are forced to
-//                 use GetThreadGeneric instead of the dynamically generated optimized
-//                 TLS getter.
-//             * The non-PAL, debug, x86/x64 GetThreadGeneric() (implemented in the
-//                 processor-specific assembly files) knows to call
-//                 GetThreadGenericFullCheck() to do the enforcement.
-//    
-Thread * GetThreadGenericFullCheck()
-{
-    // Can not have a dynamic contract here.  Contract depends on GetThreadGeneric.
-    // Contract here causes stack overflow.
-    STATIC_CONTRACT_NOTHROW;
-    STATIC_CONTRACT_GC_NOTRIGGER;
-
-    if (!ThreadInited())
-    {
-        // #GTInfiniteRecursion
-        // 
-        // Normally, we'd want to assert here, but that could lead to infinite recursion.
-        // Bringing up the assert dialog requires a string lookup, which requires getting
-        // the Thread's UI culture ID, which, or course, requires getting the Thread. So
-        // we'll just break instead.
-        DebugBreak();
-    }
-
-    if (g_fEEStarted && 
-
-        // Using ShouldEnforceEEThreadNotRequiredContracts() instead
-        // of directly checking CLRConfig::GetConfigValue, as the latter contains a dynamic
-        // contract and therefore calls GetThread(), which would cause infinite recursion.
-        Thread::ShouldEnforceEEThreadNotRequiredContracts() &&
-
-        // The following verifies that it's safe to call GetClrDebugState() below without
-        // risk of its callees invoking extra error checking or fiber code that could
-        // recursively call GetThread() and overflow the stack
-        (CExecutionEngine::GetTlsData() != NULL))
-    {
-        // It's safe to peek into the debug state, so let's do so, to see if
-        // our caller is really allowed to be calling GetThread(). This enforces
-        // the EE_THREAD_NOT_REQUIRED contract.
-        ClrDebugState * pDbg = GetClrDebugState(FALSE);      // FALSE=don't allocate
-        if ((pDbg != NULL) && (!pDbg->IsGetThreadAllowed()))
-        {
-            // We need to bracket the ASSERTE with BEGIN/END_GETTHREAD_ALLOWED to avoid
-            // infinite recursion (see
-            // code:GetThreadGenericFullCheck#GTInfiniteRecursion). The ASSERTE here will
-            // cause us to reenter this function to get the thread (again). However,
-            // BEGIN/END_GETTHREAD_ALLOWED at least stops the recursion right then and
-            // there, as it prevents us from reentering this block yet again (since
-            // BEGIN/END_GETTHREAD_ALLOWED causes pDbg->IsGetThreadAllowed() to be TRUE).
-            // All such reentries to this function will quickly return the thread without
-            // executing the code below, so the original ASSERTE can proceed.
-            BEGIN_GETTHREAD_ALLOWED;
-            _ASSERTE(!"GetThread() called in a EE_THREAD_NOT_REQUIRED scope.  If the GetThread() call site has a clear code path for a return of NULL, then consider using GetThreadNULLOk() or BEGIN/END_GETTHREAD_ALLOWED");
-            END_GETTHREAD_ALLOWED;
-        }
-    }
-
-    Thread * pThread = (Thread *) UnsafeTlsGetValue(gThreadTLSIndex);
-
-    // set bogus last error to help find places that fail to save it across GetThread calls
-    ::SetLastError(LAST_ERROR_TRASH_VALUE);
-
-    return pThread;
-}
-
-#endif // ENABLE_GET_THREAD_GENERIC_FULL_CHECK
-
-#if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
-//
-// Some platforms have this implemented in assembly
-//
-EXTERN_C Thread* STDCALL GetThreadGeneric(VOID);
-EXTERN_C AppDomain* STDCALL GetAppDomainGeneric(VOID);
-#else
-Thread* STDCALL GetThreadGeneric()
-{
-    // Can not have contract here.  Contract depends on GetThreadGeneric.
-    // Contract here causes stack overflow.
-    //CONTRACTL {
-    //    NOTHROW;
-    //    GC_NOTRIGGER;
-    //}
-    //CONTRACTL_END;
-
-    // see code:GetThreadGenericFullCheck#GTInfiniteRecursion
-    _ASSERTE(ThreadInited());
-
-    Thread* pThread = (Thread*)UnsafeTlsGetValue(gThreadTLSIndex);
-
-    TRASH_LASTERROR;
-
-    return pThread;
-}
-
-AppDomain* STDCALL GetAppDomainGeneric()
-{
-    // No contract.  This function is called during ExitTask.
-    //CONTRACTL {
-    //    NOTHROW;
-    //    GC_NOTRIGGER;
-    //}
-    //CONTRACTL_END;
-
-    _ASSERTE(ThreadInited());
-
-    AppDomain* pAppDomain = (AppDomain*)UnsafeTlsGetValue(GetAppDomainTLSIndex());
-
-    TRASH_LASTERROR;
-
-    return pAppDomain;
-}
-#endif // defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
-
-//
-// FLS getter to avoid unnecessary indirection via execution engine. It will be used if we get high TLS slot
-// from the OS where we cannot use the fast optimized assembly helpers. (It happens pretty often in hosted scenarios).
-//
-LPVOID* ClrFlsGetBlockDirect()
-{
-    LIMITED_METHOD_CONTRACT;
-
-    return (LPVOID*)UnsafeTlsGetValue(CExecutionEngine::GetTlsIndex());
-}
-
-extern "C" void * ClrFlsGetBlock();
-
-#endif // FEATURE_IMPLICIT_TLS
-
-
 extern "C" void STDCALL JIT_PatchedCodeStart();
 extern "C" void STDCALL JIT_PatchedCodeLast();
 
@@ -1352,9 +1101,11 @@ void InitThreadManager()
     }
     CONTRACTL_END;
 
+    InitializeYieldProcessorNormalizedCrst();
+
     // All patched helpers should fit into one page.
     // If you hit this assert on retail build, there is most likely problem with BBT script.
-    _ASSERTE_ALL_BUILDS("clr/src/VM/threads.cpp", (BYTE*)JIT_PatchedCodeLast - (BYTE*)JIT_PatchedCodeStart < PAGE_SIZE);
+    _ASSERTE_ALL_BUILDS("clr/src/VM/threads.cpp", (BYTE*)JIT_PatchedCodeLast - (BYTE*)JIT_PatchedCodeStart < (ptrdiff_t)GetOsPageSize());
 
     // I am using virtual protect to cover the entire range that this code falls in.
     // 
@@ -1372,98 +1123,24 @@ void InitThreadManager()
 
 #ifndef FEATURE_PAL
 
-#ifdef FEATURE_IMPLICIT_TLS
     _ASSERTE(GetThread() == NULL);
 
-    // Mscordbi calculates the address of currentThread pointer using OFFSETOF__TLS__tls_CurrentThread. Ensure that
-    // value is correct.
+    PTEB Teb = NtCurrentTeb();
+    BYTE** tlsArray = (BYTE**)Teb->ThreadLocalStoragePointer;
+    BYTE* tlsData = (BYTE*)tlsArray[_tls_index];
 
-    PTEB Teb;
-    BYTE* tlsData;
-    BYTE** tlsArray;
+    size_t offsetOfCurrentThreadInfo = (BYTE*)&gCurrentThreadInfo - tlsData;
 
-    Teb = NtCurrentTeb();
-    tlsArray = (BYTE**)Teb->ThreadLocalStoragePointer;
-    tlsData = (BYTE*)tlsArray[_tls_index];
+    _ASSERTE(offsetOfCurrentThreadInfo < 0x8000);
+    _ASSERTE(_tls_index < 0x10000);
 
-    Thread **ppThread = (Thread**) (tlsData + OFFSETOF__TLS__tls_CurrentThread);
-    _ASSERTE_ALL_BUILDS("clr/src/VM/Threads.cpp",
-                        (&(gCurrentThreadInfo.m_pThread) == ppThread) &&
-                        "Offset of m_pThread as specified by OFFSETOF__TLS__tls_CurrentThread is not correct. "
-                        "This can change due to addition/removal of declspec(Thread) thread local variables.");
+    // Save gCurrentThreadInfo location for debugger
+    g_TlsIndex = (DWORD)(_tls_index + (offsetOfCurrentThreadInfo << 16) + 0x80000000);
 
-   _ASSERTE_ALL_BUILDS("clr/src/VM/Threads.cpp",
-                       ((BYTE*)&(gCurrentThreadInfo.m_EETlsData) == tlsData + OFFSETOF__TLS__tls_EETlsData) &&
-                       "Offset of m_EETlsData as specified by OFFSETOF__TLS__tls_EETlsData is not correct. "
-                       "This can change due to addition/removal of declspec(Thread) thread local variables.");
-#else
-    _ASSERTE(gThreadTLSIndex == TLS_OUT_OF_INDEXES);
-#endif
     _ASSERTE(g_TrapReturningThreads == 0);
 #endif // !FEATURE_PAL
 
-    // Consult run-time switches that choose whether to use generic or optimized
-    // versions of GetThread and GetAppDomain
-
-    BOOL fUseGenericTlsGetters = FALSE;
-
-#ifdef ENABLE_GET_THREAD_GENERIC_FULL_CHECK
-    // Debug builds allow user to throw a switch to force use of the generic GetThread
-    // for the sole purpose of enforcing EE_THREAD_NOT_REQUIRED contracts
-    if (CLRConfig::GetConfigValue(CLRConfig::INTERNAL_EnforceEEThreadNotRequiredContracts) != 0)
-    {
-        // Set this static on Thread so this value can be safely read later on by
-        // code:GetThreadGenericFullCheck
-        Thread::s_fEnforceEEThreadNotRequiredContracts = TRUE;
-
-        fUseGenericTlsGetters = TRUE;
-    }
-#endif
-
-#ifndef FEATURE_IMPLICIT_TLS
-    // Now, we setup GetThread and GetAppDomain to point to their optimized or generic versions. Irrespective
-    // of the version they call into, we write opcode sequence into the dummy GetThread/GetAppDomain
-    // implementations (living in jithelp.s/.asm) via the MakeOptimizedTlsGetter calls below.
-    //
-    // For this to work, we must ensure that the dummy versions lie between the JIT_PatchedCodeStart
-    // and JIT_PatchedCodeLast code range (which lies in the .text section) so that when we change the protection
-    // above, we do so for GetThread and GetAppDomain as well.
-     
-    //---------------------------------------------------------------------------
-    // INITIALIZE GetThread
-    //---------------------------------------------------------------------------
-
-    // No backout necessary - part of the one time global initialization
-    gThreadTLSIndex = UnsafeTlsAlloc();
-    if (gThreadTLSIndex == TLS_OUT_OF_INDEXES)
-        COMPlusThrowWin32();
-
-    MakeOptimizedTlsGetter(gThreadTLSIndex, (PVOID)GetThread, TLS_GETTER_MAX_SIZE, (POPTIMIZEDTLSGETTER)GetThreadGeneric, fUseGenericTlsGetters);
-
-    //---------------------------------------------------------------------------
-    // INITIALIZE GetAppDomain
-    //---------------------------------------------------------------------------
-
-    // No backout necessary - part of the one time global initialization
-    gAppDomainTLSIndex = UnsafeTlsAlloc();
-    if (gAppDomainTLSIndex == TLS_OUT_OF_INDEXES)
-        COMPlusThrowWin32();
-
-    MakeOptimizedTlsGetter(gAppDomainTLSIndex, (PVOID)GetAppDomain, TLS_GETTER_MAX_SIZE, (POPTIMIZEDTLSGETTER)GetAppDomainGeneric, fUseGenericTlsGetters);
-
-    //---------------------------------------------------------------------------
-    // Switch general purpose TLS getter to more efficient one if possible
-    //---------------------------------------------------------------------------
-
-    // Make sure that the TLS index is allocated
-    CExecutionEngine::CheckThreadState(0, FALSE);
-
-    DWORD masterSlotIndex = CExecutionEngine::GetTlsIndex();
-    CLRFLSGETBLOCK pGetter = (CLRFLSGETBLOCK)MakeOptimizedTlsGetter(masterSlotIndex, (PVOID)ClrFlsGetBlock, TLS_GETTER_MAX_SIZE);
-    __ClrFlsGetBlock = pGetter ? pGetter : ClrFlsGetBlockDirect;
-#else
     __ClrFlsGetBlock = CExecutionEngine::GetTlsData;
-#endif // FEATURE_IMPLICIT_TLS
 
     IfFailThrow(Thread::CLRSetThreadStackGuarantee(Thread::STSGuarantee_Force));
 
@@ -1564,11 +1241,11 @@ void Dbg_TrackSyncStack::EnterSync(UINT_PTR caller, void *pAwareLock)
 {
     LIMITED_METHOD_CONTRACT;
 
-    STRESS_LOG4(LF_SYNC, LL_INFO100, "Dbg_TrackSyncStack::EnterSync, IP=%p, Recursion=%d, MonitorHeld=%d, HoldingThread=%p.\n",
+    STRESS_LOG4(LF_SYNC, LL_INFO100, "Dbg_TrackSyncStack::EnterSync, IP=%p, Recursion=%u, LockState=%x, HoldingThread=%p.\n",
                     caller,
-                    ((AwareLock*)pAwareLock)->m_Recursion,
-                    ((AwareLock*)pAwareLock)->m_MonitorHeld,
-                    ((AwareLock*)pAwareLock)->m_HoldingThread );
+                    ((AwareLock*)pAwareLock)->GetRecursionLevel(),
+                    ((AwareLock*)pAwareLock)->GetLockState(),
+                    ((AwareLock*)pAwareLock)->GetHoldingThread());
 
     if (m_Active)
     {
@@ -1590,11 +1267,11 @@ void Dbg_TrackSyncStack::LeaveSync(UINT_PTR caller, void *pAwareLock)
 {
     WRAPPER_NO_CONTRACT;
 
-    STRESS_LOG4(LF_SYNC, LL_INFO100, "Dbg_TrackSyncStack::LeaveSync, IP=%p, Recursion=%d, MonitorHeld=%d, HoldingThread=%p.\n",
+    STRESS_LOG4(LF_SYNC, LL_INFO100, "Dbg_TrackSyncStack::LeaveSync, IP=%p, Recursion=%u, LockState=%x, HoldingThread=%p.\n",
                     caller,
-                    ((AwareLock*)pAwareLock)->m_Recursion,
-                    ((AwareLock*)pAwareLock)->m_MonitorHeld,
-                    ((AwareLock*)pAwareLock)->m_HoldingThread );
+                    ((AwareLock*)pAwareLock)->GetRecursionLevel(),
+                    ((AwareLock*)pAwareLock)->GetLockState(),
+                    ((AwareLock*)pAwareLock)->GetHoldingThread());
 
     if (m_Active)
     {
@@ -1825,6 +1502,7 @@ Thread::Thread()
 #ifdef FEATURE_COMINTEROP
     m_fDisableComObjectEagerCleanup = false;
 #endif //FEATURE_COMINTEROP
+    m_fHasDeadThreadBeenConsideredForGCTrigger = false;
     m_Context = NULL;
     m_TraceCallCount = 0;
     m_ThrewControlForThread = 0;
@@ -2001,12 +1679,15 @@ Thread::Thread()
     
     m_fGCSpecial = FALSE;
 
-#if !defined(FEATURE_PAL)
     m_wCPUGroup = 0;
     m_pAffinityMask = 0;
-#endif
 
     m_pAllLoggedTypes = NULL;
+
+#ifdef FEATURE_PERFTRACING
+    m_pEventPipeBufferList = NULL;
+    m_eventWriteInProgress = false;
+#endif // FEATURE_PERFTRACING
     m_HijackReturnKind = RT_Illegal;
 }
 
@@ -2170,28 +1851,17 @@ BOOL Thread::AllocHandles()
 {
     WRAPPER_NO_CONTRACT;
 
-    _ASSERTE(!m_SafeEvent.IsValid());
-    _ASSERTE(!m_UserSuspendEvent.IsValid());
     _ASSERTE(!m_DebugSuspendEvent.IsValid());
     _ASSERTE(!m_EventWait.IsValid());
 
     BOOL fOK = TRUE;
     EX_TRY {
         // create a manual reset event for getting the thread to a safe point
-        m_SafeEvent.CreateManualEvent(FALSE);
-        m_UserSuspendEvent.CreateManualEvent(FALSE);
         m_DebugSuspendEvent.CreateManualEvent(FALSE);
         m_EventWait.CreateManualEvent(TRUE);
     }
     EX_CATCH {
         fOK = FALSE;
-        if (!m_SafeEvent.IsValid()) {
-            m_SafeEvent.CloseEvent();
-        }
-
-        if (!m_UserSuspendEvent.IsValid()) {
-            m_UserSuspendEvent.CloseEvent();
-        }
 
         if (!m_DebugSuspendEvent.IsValid()) {
             m_DebugSuspendEvent.CloseEvent();
@@ -2404,30 +2074,8 @@ FAILURE:
         }
 #endif // PROFILING_SUPPORTED
 
-        // Is there a pending user suspension?
-        if (m_State & TS_SuspendUnstarted)
-        {
-            BOOL    doSuspend = FALSE;
-
-            {
-                ThreadStoreLockHolder TSLockHolder;
-
-                // Perhaps we got resumed before it took effect?
-                if (m_State & TS_SuspendUnstarted)
-                {
-                    FastInterlockAnd((ULONG *) &m_State, ~TS_SuspendUnstarted);
-                    SetupForSuspension(TS_UserSuspendPending);
-                    MarkForSuspension(TS_UserSuspendPending);
-                    doSuspend = TRUE;
-                }
-            }
-
-            if (doSuspend)
-            {
-                GCX_PREEMP();
-                WaitSuspendEvents();
-            }
-        }
+        // CoreCLR does not support user-requested thread suspension
+        _ASSERTE(!(m_State & TS_SuspendUnstarted));
     }
 
     return res;
@@ -2542,7 +2190,7 @@ void UndoRevert(BOOL bReverted, HANDLE hToken)
 // We don't want ::CreateThread() calls scattered throughout the source.  So gather
 // them all here.
 
-BOOL Thread::CreateNewThread(SIZE_T stackSize, LPTHREAD_START_ROUTINE start, void *args)
+BOOL Thread::CreateNewThread(SIZE_T stackSize, LPTHREAD_START_ROUTINE start, void *args, LPCWSTR pName)
 {
     CONTRACTL {
         NOTHROW;
@@ -2569,6 +2217,7 @@ BOOL Thread::CreateNewThread(SIZE_T stackSize, LPTHREAD_START_ROUTINE start, voi
     bRet = CreateNewOSThread(stackSize, start, args);
 #ifndef FEATURE_PAL
     UndoRevert(bReverted, token);
+    SetThreadName(m_ThreadHandle, pName);
 #endif // !FEATURE_PAL
 
     return bRet;
@@ -2582,7 +2231,7 @@ DWORD WINAPI Thread::intermediateThreadProc(PVOID arg)
     WRAPPER_NO_CONTRACT;
 
     m_offset_counter++;
-    if (m_offset_counter * offset_multiplier > PAGE_SIZE)
+    if (m_offset_counter * offset_multiplier > (int) GetOsPageSize())
         m_offset_counter = 0;
 
     (void)_alloca(m_offset_counter * offset_multiplier);
@@ -2697,11 +2346,11 @@ BOOL Thread::CreateNewOSThread(SIZE_T sizeToCommitOrReserve, LPTHREAD_START_ROUT
     dwCreationFlags |= STACK_SIZE_PARAM_IS_A_RESERVATION;
 
 #ifndef FEATURE_PAL // the PAL does its own adjustments as necessary
-    if (sizeToCommitOrReserve != 0 && sizeToCommitOrReserve <= OS_PAGE_SIZE)
+    if (sizeToCommitOrReserve != 0 && sizeToCommitOrReserve <= GetOsPageSize())
     {
         // On Windows, passing a value that is <= one page size bizarrely causes the OS to use the default stack size instead of
         // a minimum, which is undesirable. This adjustment fixes that issue to use a minimum stack size (typically 64 KB).
-        sizeToCommitOrReserve = OS_PAGE_SIZE + 1;
+        sizeToCommitOrReserve = GetOsPageSize() + 1;
     }
 #endif // !FEATURE_PAL
 
@@ -3064,14 +2713,6 @@ Thread::~Thread()
         CloseHandle(GetThreadHandle());
     }
 
-    if (m_SafeEvent.IsValid())
-    {
-        m_SafeEvent.CloseEvent();
-    }
-    if (m_UserSuspendEvent.IsValid())
-    {
-        m_UserSuspendEvent.CloseEvent();
-    }
     if (m_DebugSuspendEvent.IsValid())
     {
         m_DebugSuspendEvent.CloseEvent();
@@ -3440,7 +3081,7 @@ void Thread::OnThreadTerminate(BOOL holdingLock)
         if (ThisThreadID == CurrentThreadID)
         {
             GCX_COOP();
-            GCHeapUtilities::GetGCHeap()->FixAllocContext(&m_alloc_context, FALSE, NULL, NULL);
+            GCHeapUtilities::GetGCHeap()->FixAllocContext(&m_alloc_context, false, NULL, NULL);
             m_alloc_context.init();
         }
     }
@@ -3497,12 +3138,13 @@ void Thread::OnThreadTerminate(BOOL holdingLock)
         {
             // We must be holding the ThreadStore lock in order to clean up alloc context.
             // We should never call FixAllocContext during GC.
-            GCHeapUtilities::GetGCHeap()->FixAllocContext(&m_alloc_context, FALSE, NULL, NULL);
+            GCHeapUtilities::GetGCHeap()->FixAllocContext(&m_alloc_context, false, NULL, NULL);
             m_alloc_context.init();
         }
 
         FastInterlockOr((ULONG *) &m_State, TS_Dead);
         ThreadStore::s_pThreadStore->m_DeadThreadCount++;
+        ThreadStore::s_pThreadStore->IncrementDeadThreadCountForGCTrigger();
 
         if (IsUnstarted())
             ThreadStore::s_pThreadStore->m_UnstartedThreadCount--;
@@ -3527,8 +3169,8 @@ void Thread::OnThreadTerminate(BOOL holdingLock)
             if (m_State & TS_DebugSuspendPending)
                 UnmarkForSuspension(~TS_DebugSuspendPending);
 
-            if (m_State & TS_UserSuspendPending)
-                UnmarkForSuspension(~TS_UserSuspendPending);
+            // CoreCLR does not support user-requested thread suspension
+            _ASSERTE(!(m_State & TS_UserSuspendPending));
 
             if (CurrentThreadID == ThisThreadID && IsAbortRequested())
             {
@@ -5113,9 +4755,12 @@ void Thread::SafeUpdateLastThrownObject(void)
     {
         EX_TRY
         {
-            // Using CreateDuplicateHandle here ensures that the AD of the last thrown object matches the domain of
-            // the current throwable.
-            SetLastThrownObjectHandle(CreateDuplicateHandle(hThrowable));
+            IGCHandleManager *pHandleTable = GCHandleUtilities::GetGCHandleManager();
+
+            // Creating a duplicate handle here ensures that the AD of the last thrown object
+            // matches the domain of the current throwable.
+            OBJECTHANDLE duplicateHandle = pHandleTable->CreateDuplicateHandle(hThrowable);
+            SetLastThrownObjectHandle(duplicateHandle);
         }
         EX_CATCH
         {
@@ -5739,6 +5384,8 @@ ThreadStore::ThreadStore()
              m_BackgroundThreadCount(0),
              m_PendingThreadCount(0),
              m_DeadThreadCount(0),
+             m_DeadThreadCountForGCTrigger(0),
+             m_TriggerGCForDeadThreads(false),
              m_GuidCreated(FALSE),
              m_HoldingThread(0)
 {
@@ -5778,6 +5425,16 @@ void ThreadStore::InitThreadStore()
 
     s_pWaitForStackCrawlEvent = new CLREvent();
     s_pWaitForStackCrawlEvent->CreateManualEvent(FALSE);
+
+    s_DeadThreadCountThresholdForGCTrigger =
+        static_cast<LONG>(CLRConfig::GetConfigValue(CLRConfig::INTERNAL_Thread_DeadThreadCountThresholdForGCTrigger));
+    if (s_DeadThreadCountThresholdForGCTrigger < 0)
+    {
+        s_DeadThreadCountThresholdForGCTrigger = 0;
+    }
+    s_DeadThreadGCTriggerPeriodMilliseconds =
+        CLRConfig::GetConfigValue(CLRConfig::INTERNAL_Thread_DeadThreadGCTriggerPeriodMilliseconds);
+    s_DeadThreadGenerationCounts = nullptr;
 }
 
 // Enter and leave the critical section around the thread store.  Clients should
@@ -5920,7 +5577,10 @@ BOOL ThreadStore::RemoveThread(Thread *target)
         s_pThreadStore->m_ThreadCount--;
 
         if (target->IsDead())
+        {
             s_pThreadStore->m_DeadThreadCount--;
+            s_pThreadStore->DecrementDeadThreadCountForGCTrigger();
+        }
 
         // Unstarted threads are not in the Background count:
         if (target->IsUnstarted())
@@ -6007,6 +5667,200 @@ void ThreadStore::TransferStartedThread(Thread *thread, BOOL bRequiresTSL)
     // One of the components of OtherThreadsComplete() has changed, so check whether
     // we should now exit the EE.
     CheckForEEShutdown();
+}
+
+LONG ThreadStore::s_DeadThreadCountThresholdForGCTrigger = 0;
+DWORD ThreadStore::s_DeadThreadGCTriggerPeriodMilliseconds = 0;
+SIZE_T *ThreadStore::s_DeadThreadGenerationCounts = nullptr;
+
+void ThreadStore::IncrementDeadThreadCountForGCTrigger()
+{
+    CONTRACTL {
+        NOTHROW;
+        GC_NOTRIGGER;
+    }
+    CONTRACTL_END;
+
+    // Although all increments and decrements are usually done inside a lock, that is not sufficient to synchronize with a
+    // background GC thread resetting this value, hence the interlocked operation. Ignore overflow; overflow would likely never
+    // occur, the count is treated as unsigned, and nothing bad would happen if it were to overflow.
+    SIZE_T count = static_cast<SIZE_T>(FastInterlockIncrement(&m_DeadThreadCountForGCTrigger));
+
+    SIZE_T countThreshold = static_cast<SIZE_T>(s_DeadThreadCountThresholdForGCTrigger);
+    if (count < countThreshold || countThreshold == 0)
+    {
+        return;
+    }
+
+    IGCHeap *gcHeap = GCHeapUtilities::GetGCHeap();
+    if (gcHeap == nullptr)
+    {
+        return;
+    }
+
+    SIZE_T gcLastMilliseconds = gcHeap->GetLastGCStartTime(gcHeap->GetMaxGeneration());
+    SIZE_T gcNowMilliseconds = gcHeap->GetNow();
+    if (gcNowMilliseconds - gcLastMilliseconds < s_DeadThreadGCTriggerPeriodMilliseconds)
+    {
+        return;
+    }
+
+    if (!g_fEEStarted) // required for FinalizerThread::EnableFinalization() below
+    {
+        return;
+    }
+
+    // The GC is triggered on the finalizer thread since it's not safe to trigger it on DLL_THREAD_DETACH.
+    // TriggerGCForDeadThreadsIfNecessary() will determine which generation of GC to trigger, and may not actually trigger a GC.
+    // If a GC is triggered, since there would be a delay before the dead thread count is updated, clear the count and wait for
+    // it to reach the threshold again. If a GC would not be triggered, the count is still cleared here to prevent waking up the
+    // finalizer thread to do the work in TriggerGCForDeadThreadsIfNecessary() for every dead thread.
+    m_DeadThreadCountForGCTrigger = 0;
+    m_TriggerGCForDeadThreads = true;
+    FinalizerThread::EnableFinalization();
+}
+
+void ThreadStore::DecrementDeadThreadCountForGCTrigger()
+{
+    CONTRACTL {
+        NOTHROW;
+        GC_NOTRIGGER;
+    }
+    CONTRACTL_END;
+
+    // Although all increments and decrements are usually done inside a lock, that is not sufficient to synchronize with a
+    // background GC thread resetting this value, hence the interlocked operation.
+    if (FastInterlockDecrement(&m_DeadThreadCountForGCTrigger) < 0)
+    {
+        m_DeadThreadCountForGCTrigger = 0;
+    }
+}
+
+void ThreadStore::OnMaxGenerationGCStarted()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    // A dead thread may contribute to triggering a GC at most once. After a max-generation GC occurs, if some dead thread
+    // objects are still reachable due to references to the thread objects, they will not contribute to triggering a GC again.
+    // Synchronize the store with increment/decrement operations occurring on different threads, and make the change visible to
+    // other threads in order to prevent unnecessary GC triggers.
+    FastInterlockExchange(&m_DeadThreadCountForGCTrigger, 0);
+}
+
+bool ThreadStore::ShouldTriggerGCForDeadThreads()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    return m_TriggerGCForDeadThreads;
+}
+
+void ThreadStore::TriggerGCForDeadThreadsIfNecessary()
+{
+    CONTRACTL {
+        THROWS;
+        GC_TRIGGERS;
+    }
+    CONTRACTL_END;
+
+    if (!m_TriggerGCForDeadThreads)
+    {
+        return;
+    }
+    m_TriggerGCForDeadThreads = false;
+
+    if (g_fEEShutDown)
+    {
+        // Not safe to touch CLR state
+        return;
+    }
+
+    unsigned gcGenerationToTrigger = 0;
+    IGCHeap *gcHeap = GCHeapUtilities::GetGCHeap();
+    _ASSERTE(gcHeap != nullptr);
+    SIZE_T generationCountThreshold = static_cast<SIZE_T>(s_DeadThreadCountThresholdForGCTrigger) / 2;
+    unsigned maxGeneration = gcHeap->GetMaxGeneration();
+    if (!s_DeadThreadGenerationCounts)
+    {
+        // initialize this field on first use with an entry for every table.
+        s_DeadThreadGenerationCounts = new (nothrow) SIZE_T[maxGeneration + 1];
+        if (!s_DeadThreadGenerationCounts)
+        {
+            return;
+        }
+    }
+
+    memset(s_DeadThreadGenerationCounts, 0, sizeof(SIZE_T) * (maxGeneration + 1));
+    {
+        ThreadStoreLockHolder threadStoreLockHolder;
+        GCX_COOP();
+
+        // Determine the generation for which to trigger a GC. Iterate over all dead threads that have not yet been considered
+        // for triggering a GC and see how many are in which generations.
+        for (Thread *thread = ThreadStore::GetAllThreadList(NULL, Thread::TS_Dead, Thread::TS_Dead);
+            thread != nullptr;
+            thread = ThreadStore::GetAllThreadList(thread, Thread::TS_Dead, Thread::TS_Dead))
+        {
+            if (thread->HasDeadThreadBeenConsideredForGCTrigger())
+            {
+                continue;
+            }
+
+            Object *exposedObject = OBJECTREFToObject(thread->GetExposedObjectRaw());
+            if (exposedObject == nullptr)
+            {
+                continue;
+            }
+
+            unsigned exposedObjectGeneration = gcHeap->WhichGeneration(exposedObject);
+            SIZE_T newDeadThreadGenerationCount = ++s_DeadThreadGenerationCounts[exposedObjectGeneration];
+            if (exposedObjectGeneration > gcGenerationToTrigger && newDeadThreadGenerationCount >= generationCountThreshold)
+            {
+                gcGenerationToTrigger = exposedObjectGeneration;
+                if (gcGenerationToTrigger >= maxGeneration)
+                {
+                    break;
+                }
+            }
+        }
+
+        // Make sure that enough time has elapsed since the last GC of the desired generation. We don't want to trigger GCs
+        // based on this heuristic too often. Give it some time to let the memory pressure trigger GCs automatically, and only
+        // if it doesn't in the given time, this heuristic may kick in to trigger a GC.
+        SIZE_T gcLastMilliseconds = gcHeap->GetLastGCStartTime(gcGenerationToTrigger);
+        SIZE_T gcNowMilliseconds = gcHeap->GetNow();
+        if (gcNowMilliseconds - gcLastMilliseconds < s_DeadThreadGCTriggerPeriodMilliseconds)
+        {
+            return;
+        }
+
+        // For threads whose exposed objects are in the generation of GC that will be triggered or in a lower GC generation,
+        // mark them as having contributed to a GC trigger to prevent redundant GC triggers
+        for (Thread *thread = ThreadStore::GetAllThreadList(NULL, Thread::TS_Dead, Thread::TS_Dead);
+            thread != nullptr;
+            thread = ThreadStore::GetAllThreadList(thread, Thread::TS_Dead, Thread::TS_Dead))
+        {
+            if (thread->HasDeadThreadBeenConsideredForGCTrigger())
+            {
+                continue;
+            }
+
+            Object *exposedObject = OBJECTREFToObject(thread->GetExposedObjectRaw());
+            if (exposedObject == nullptr)
+            {
+                continue;
+            }
+
+            if (gcGenerationToTrigger < maxGeneration &&
+                gcHeap->WhichGeneration(exposedObject) > gcGenerationToTrigger)
+            {
+                continue;
+            }
+
+            thread->SetHasDeadThreadBeenConsideredForGCTrigger();
+        }
+    } // ThreadStoreLockHolder, GCX_COOP()
+
+    GCHeapUtilities::GetGCHeap()->GarbageCollect(gcGenerationToTrigger, FALSE, collection_non_blocking);
 }
 
 #endif // #ifndef DACCESS_COMPILE
@@ -6226,8 +6080,8 @@ Retry:
         if (cur->m_State & Thread::TS_DebugSuspendPending)
             cntReturn++;
 
-        if (cur->m_State & Thread::TS_UserSuspendPending)
-            cntReturn++;
+        // CoreCLR does not support user-requested thread suspension
+        _ASSERTE(!(cur->m_State & Thread::TS_UserSuspendPending));
 
         if (cur->m_TraceCallCount > 0)
             cntReturn++;
@@ -6325,7 +6179,7 @@ void Thread::HandleThreadInterrupt (BOOL fWaitForADUnload)
 }
 
 #ifdef _DEBUG
-#define MAXSTACKBYTES (2 * PAGE_SIZE)
+#define MAXSTACKBYTES (2 * GetOsPageSize())
 void CleanStackForFastGCStress ()
 {
     CONTRACTL {
@@ -6919,16 +6773,16 @@ HRESULT Thread::CLRSetThreadStackGuarantee(SetThreadStackGuaranteeScope fScope)
         int ThreadGuardPages = CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_ThreadGuardPages);
         if (ThreadGuardPages == 0)
         {
-            uGuardSize += (EXTRA_PAGES * PAGE_SIZE);
+            uGuardSize += (EXTRA_PAGES * GetOsPageSize());
         }
         else
         {
-            uGuardSize += (ThreadGuardPages * PAGE_SIZE);
+            uGuardSize += (ThreadGuardPages * GetOsPageSize());
         }
 
 #else // _WIN64
 #ifdef _DEBUG
-        uGuardSize += (1 * PAGE_SIZE);    // one extra page for debug infrastructure
+        uGuardSize += (1 * GetOsPageSize());    // one extra page for debug infrastructure
 #endif // _DEBUG
 #endif // _WIN64
 
@@ -6972,14 +6826,14 @@ UINT_PTR Thread::GetLastNormalStackAddress(UINT_PTR StackLimit)
     UINT_PTR cbStackGuarantee = GetStackGuarantee();
 
     // Here we take the "hard guard region size", the "stack guarantee" and the "fault page" and add them
-    // all together.  Note that the "fault page" is the reason for the extra OS_PAGE_SIZE below.  The OS
+    // all together.  Note that the "fault page" is the reason for the extra GetOsPageSize() below.  The OS
     // will guarantee us a certain amount of stack remaining after a stack overflow.  This is called the
     // "stack guarantee".  But to do this, it has to fault on the page before that region as the app is
     // allowed to fault at the very end of that page.  So, as a result, the last normal stack address is
     // one page sooner.
     return StackLimit + (cbStackGuarantee 
 #ifndef FEATURE_PAL
-            + OS_PAGE_SIZE 
+            + GetOsPageSize()
 #endif // !FEATURE_PAL
             + HARD_GUARD_REGION_SIZE);
 }
@@ -7080,7 +6934,7 @@ static void DebugLogStackRegionMBIs(UINT_PTR uLowAddress, UINT_PTR uHighAddress)
 
         UINT_PTR uRegionSize = uStartOfNextRegion - uStartOfThisRegion;
 
-        LOG((LF_EH, LL_INFO1000, "0x%p -> 0x%p (%d pg)  ", uStartOfThisRegion, uStartOfNextRegion - 1, uRegionSize / OS_PAGE_SIZE));
+        LOG((LF_EH, LL_INFO1000, "0x%p -> 0x%p (%d pg)  ", uStartOfThisRegion, uStartOfNextRegion - 1, uRegionSize / GetOsPageSize()));
         DebugLogMBIFlags(meminfo.State, meminfo.Protect);
         LOG((LF_EH, LL_INFO1000, "\n"));
 
@@ -7119,7 +6973,7 @@ void Thread::DebugLogStackMBIs()
     UINT_PTR uStackSize         = uStackBase - uStackLimit;
 
     LOG((LF_EH, LL_INFO1000, "----------------------------------------------------------------------\n"));
-    LOG((LF_EH, LL_INFO1000, "Stack Snapshot 0x%p -> 0x%p (%d pg)\n", uStackLimit, uStackBase, uStackSize / OS_PAGE_SIZE));
+    LOG((LF_EH, LL_INFO1000, "Stack Snapshot 0x%p -> 0x%p (%d pg)\n", uStackLimit, uStackBase, uStackSize / GetOsPageSize()));
     if (pThread)
     {
         LOG((LF_EH, LL_INFO1000, "Last normal addr: 0x%p\n", pThread->GetLastNormalStackAddress()));
@@ -7341,7 +7195,7 @@ BOOL Thread::CanResetStackTo(LPCVOID stackPointer)
     // We need to have enough space to call back into the EE from the handler, so we use the twice the entry point amount.
     // We need enough to do work and enough that partway through that work we won't probe and COMPlusThrowSO.
 
-    const INT_PTR iStackSizeThreshold        = (ADJUST_PROBE(DEFAULT_ENTRY_PROBE_AMOUNT * 2) * OS_PAGE_SIZE);
+    const INT_PTR iStackSizeThreshold        = (ADJUST_PROBE(DEFAULT_ENTRY_PROBE_AMOUNT * 2) * GetOsPageSize());
 
     if (iStackSpaceLeft > iStackSizeThreshold)
     {
@@ -7384,7 +7238,7 @@ BOOL Thread::IsStackSpaceAvailable(float numPages)
 
     // If we have access to the stack guarantee (either in the guard region or we've tripped the guard page), then
     // use that.
-    if ((iStackSpaceLeft/OS_PAGE_SIZE) < numPages && !DetermineIfGuardPagePresent()) 
+    if ((iStackSpaceLeft/GetOsPageSize()) < numPages && !DetermineIfGuardPagePresent())
     {    
         UINT_PTR stackGuarantee = GetStackGuarantee();
         // GetLastNormalStackAddress actually returns the 2nd to last stack page on the stack. We'll add that to our available
@@ -7392,9 +7246,9 @@ BOOL Thread::IsStackSpaceAvailable(float numPages)
         //
         // All these values are OS supplied, and will never overflow. (If they do, that means the stack is on the order
         // over GB, which isn't possible.
-        iStackSpaceLeft += stackGuarantee + OS_PAGE_SIZE;
+        iStackSpaceLeft += stackGuarantee + GetOsPageSize();
     }
-    if ((iStackSpaceLeft/OS_PAGE_SIZE) < numPages)
+    if ((iStackSpaceLeft/GetOsPageSize()) < numPages)
     {
         return FALSE;
     }
@@ -7530,13 +7384,13 @@ VOID Thread::RestoreGuardPage()
     // to change the size of the guard region, we'll just go ahead and protect the next page down from where we are
     // now. The guard page will get pushed forward again, just like normal, until the next stack overflow.
         approxStackPointer   = (UINT_PTR)GetCurrentSP();
-        guardPageBase        = (UINT_PTR)ALIGN_DOWN(approxStackPointer, OS_PAGE_SIZE) - OS_PAGE_SIZE;
+        guardPageBase        = (UINT_PTR)ALIGN_DOWN(approxStackPointer, GetOsPageSize()) - GetOsPageSize();
 
         // OS uses soft guard page to update the stack info in TEB.  If our guard page is not beyond the current stack, the TEB
         // will not be updated, and then OS's check of stack during exception will fail.
         if (approxStackPointer >= guardPageBase)
         {
-            guardPageBase -= OS_PAGE_SIZE;
+            guardPageBase -= GetOsPageSize();
         }
     // If we're currently "too close" to the page we want to mark as a guard then the call to VirtualProtect to set
     // PAGE_GUARD will fail, but it won't return an error. Therefore, we protect the page, then query it to make
@@ -7566,7 +7420,7 @@ VOID Thread::RestoreGuardPage()
             }
             else
             {
-                guardPageBase -= OS_PAGE_SIZE;
+                guardPageBase -= GetOsPageSize();
             }
         }
     }
@@ -7694,11 +7548,6 @@ void CommonTripThread()
     Thread  *thread = GetThread();
 
     thread->HandleThreadAbort ();
-
-    if (thread->IsYieldRequested())
-    {
-        __SwitchToThread(0, CALLER_LIMITS_SPINNING);
-    }
 
     if (thread->CatchAtSafePoint())
     {
@@ -7901,9 +7750,6 @@ void Thread::InitContext()
     m_pDomain = m_Context->GetDomain();
     _ASSERTE(m_pDomain);
     m_pDomain->ThreadEnter(this, NULL);
-
-    // Every thread starts in the default domain, so push it here.
-    PushDomain((ADID)DefaultADID);
 }
 
 void Thread::ClearContext()
@@ -7929,7 +7775,6 @@ void Thread::ClearContext()
     m_fDisableComObjectEagerCleanup = false;
 #endif //FEATURE_COMINTEROP
     m_Context = NULL;
-    m_ADStack.ClearDomainStack();
 }
 
 
@@ -8192,7 +8037,6 @@ void Thread::EnterContextRestricted(Context *pContext, ContextTransitionFrame *p
 
         _ASSERTE(pFrame);
 
-        PushDomain(pDomain->GetId());
         STRESS_LOG1(LF_APPDOMAIN, LL_INFO100000, "Entering into ADID=%d\n", pDomain->GetId().m_dwId);
 
 
@@ -8349,7 +8193,6 @@ void Thread::ReturnToContext(ContextTransitionFrame *pFrame)
 
     if (fChangedDomains)
     {
-        pADOnStack = m_ADStack.PopDomain();
         STRESS_LOG2(LF_APPDOMAIN, LL_INFO100000, "Returning from %d to %d\n", pADOnStack.m_dwId, pReturnContext->GetDomain()->GetId().m_dwId);
 
         _ASSERTE(pADOnStack == m_pDomain->GetId());
@@ -8697,7 +8540,8 @@ BOOL Thread::HaveExtraWorkForFinalizer()
         || Thread::CleanupNeededForFinalizedThread()
         || (m_DetachCount > 0)
         || AppDomain::HasWorkForFinalizerThread()
-        || SystemDomain::System()->RequireAppDomainCleanup();
+        || SystemDomain::System()->RequireAppDomainCleanup()
+        || ThreadStore::s_pThreadStore->ShouldTriggerGCForDeadThreads();
 }
 
 void Thread::DoExtraWorkForFinalizer()
@@ -8754,7 +8598,8 @@ void Thread::DoExtraWorkForFinalizer()
 
     // If there were any TimerInfos waiting to be released, they'll get flushed now
     ThreadpoolMgr::FlushQueueOfTimerInfos();
-    
+
+    ThreadStore::s_pThreadStore->TriggerGCForDeadThreadsIfNecessary();
 }
 
 
@@ -10362,10 +10207,6 @@ void Thread::InternalSwitchOut()
         m_ThreadHandleForClose = hThread;
     }
 
-    // The host is getting control of this thread, so if we were trying
-    // to yield this thread, we can stop those attempts now.
-    ResetThreadState(TS_YieldRequested);
-
     _ASSERTE (!fNoTLS ||
               (CExecutionEngine::CheckThreadStateNoCreate(0) == NULL));
     }
@@ -10470,7 +10311,6 @@ void Thread::FullResetThread()
 
     GCX_FORBID();
     DeleteThreadStaticData();
-    ResetSecurityInfo();
 
     m_alloc_context.alloc_bytes = 0;
     m_fPromoted = FALSE;
@@ -10589,11 +10429,6 @@ HRESULT Thread::Reset(BOOL fFull)
         IfFailGo(E_UNEXPECTED);
     }
 
-    if (HasThreadState(Thread::TS_YieldRequested))
-    {
-        ResetThreadState(Thread::TS_YieldRequested);
-    }
-
     _ASSERTE (!PreemptiveGCDisabled());
     _ASSERTE (m_pFrame == FRAME_TOP);
     // A host should not recycle a CLRTask if the task is created by us through CreateNewThread.
@@ -10685,11 +10520,6 @@ HRESULT Thread::ExitTask ()
     //_ASSERTE (m_UnmanagedRefCount == 0);
     if (this != GetThread())
         IfFailGo(HOST_E_INVALIDOPERATION);
-
-    if (HasThreadState(Thread::TS_YieldRequested))
-    {
-        ResetThreadState(Thread::TS_YieldRequested);
-    }
 
 #ifdef FEATURE_COMINTEROP_APARTMENT_SUPPORT
     if (IsCoInitialized())

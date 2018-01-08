@@ -13,7 +13,6 @@ namespace System.Reflection.Emit
     using System.Diagnostics.SymbolStore;
     using System.Security;
     using System.Runtime.InteropServices;
-    using System.Diagnostics.Contracts;
 
     public sealed class ConstructorBuilder : ConstructorInfo
     {
@@ -102,10 +101,9 @@ namespace System.Reflection.Emit
         #region MethodBase Overrides
         public override Object Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
-        [Pure]
         public override ParameterInfo[] GetParameters()
         {
             ConstructorInfo rci = GetTypeBuilder().GetConstructor(m_methodBuilder.m_parameterTypes);
@@ -132,7 +130,7 @@ namespace System.Reflection.Emit
         #region ConstructorInfo Overrides
         public override Object Invoke(BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         #endregion
@@ -175,7 +173,7 @@ namespace System.Reflection.Emit
         public ILGenerator GetILGenerator()
         {
             if (m_isDefaultConstructor)
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_DefaultConstructorILGen"));
+                throw new InvalidOperationException(SR.InvalidOperation_DefaultConstructorILGen);
 
             return m_methodBuilder.GetILGenerator();
         }
@@ -183,7 +181,7 @@ namespace System.Reflection.Emit
         public ILGenerator GetILGenerator(int streamSize)
         {
             if (m_isDefaultConstructor)
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_DefaultConstructorILGen"));
+                throw new InvalidOperationException(SR.InvalidOperation_DefaultConstructorILGen);
 
             return m_methodBuilder.GetILGenerator(streamSize);
         }

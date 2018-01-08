@@ -19,6 +19,33 @@ FOR_ALL_ICU_FUNCTIONS
 static void* libicuuc = nullptr;
 static void* libicui18n = nullptr;
 
+// .x.x.x, considering the max number of decimal digits for each component
+static const int MaxICUVersionStringLength = 33;
+
+#ifdef __APPLE__
+
+bool FindICULibs(char* symbolName, char* symbolVersion)
+{
+#ifndef OSX_ICU_LIBRARY_PATH
+    static_assert(false, "The ICU Library path is not defined");
+#endif // OSX_ICU_LIBRARY_PATH
+
+    // Usually OSX_ICU_LIBRARY_PATH is "/usr/lib/libicucore.dylib"
+    libicuuc = dlopen(OSX_ICU_LIBRARY_PATH, RTLD_LAZY);
+    
+    if (libicuuc == nullptr)
+    {
+        return false;
+    }
+
+    // in OSX all ICU APIs exist in the same library libicucore.A.dylib 
+    libicui18n = libicuuc;
+
+    return true;
+}
+
+#else // __APPLE__
+
 // Version ranges to search for each of the three version components
 // The rationale for major version range is that we support versions higher or
 // equal to the version we are built against and less or equal to that version
@@ -30,9 +57,6 @@ static const int MinMinorICUVersion = 1;
 static const int MaxMinorICUVersion = 5;
 static const int MinSubICUVersion = 1;
 static const int MaxSubICUVersion = 5;
-
-// .x.x.x, considering the max number of decimal digits for each component
-static const int MaxICUVersionStringLength = 33;
 
 // Get filename of an ICU library with the requested version in the name
 // There are three possible cases of the version components values:
@@ -55,143 +79,8 @@ void GetVersionedLibFileName(const char* baseFileName, int majorVer, int minorVe
     }
 }
 
-// Try to open the necessary ICU libraries
-bool OpenICULibraries(int majorVer, int minorVer, int subVer)
+bool FindSymbolVersion(int majorVer, int minorVer, int subVer, char* symbolName, char* symbolVersion)
 {
-    char libicuucName[64];
-    char libicui18nName[64];
-
-    static_assert(sizeof("libicuuc.so") + MaxICUVersionStringLength <= sizeof(libicuucName), "The libicuucName is too small");
-    GetVersionedLibFileName("libicuuc.so", majorVer, minorVer, subVer, libicuucName);
-
-    static_assert(sizeof("libicui18n.so") + MaxICUVersionStringLength <= sizeof(libicui18nName), "The libicui18nName is too small");
-    GetVersionedLibFileName("libicui18n.so", majorVer, minorVer, subVer, libicui18nName);
-
-    libicuuc = dlopen(libicuucName, RTLD_LAZY);
-    if (libicuuc != nullptr)
-    {
-        libicui18n = dlopen(libicui18nName, RTLD_LAZY);
-        if (libicui18n == nullptr)
-        {
-            dlclose(libicuuc);
-            libicuuc = nullptr;
-        }
-    }
-
-    return libicuuc != nullptr;
-}
-
-// Select libraries using the version override specified by the CLR_ICU_VERSION_OVERRIDE
-// environment variable.
-// The format of the string in this variable is majorVer[.minorVer[.subVer]] (the brackets
-// indicate optional parts).
-bool FindLibUsingOverride(int* majorVer, int* minorVer, int* subVer)
-{
-    char* versionOverride = getenv("CLR_ICU_VERSION_OVERRIDE");
-    if (versionOverride != nullptr)
-    {
-        int first = -1;
-        int second = -1;
-        int third = -1;
-
-        int matches = sscanf(versionOverride, "%d.%d.%d", &first, &second, &third);
-        if (matches > 0)
-        {
-            if (OpenICULibraries(first, second, third))
-            {
-                *majorVer = first;
-                *minorVer = second;
-                *subVer = third;
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-// Select the highest supported version of ICU present on the local machine
-// Search for library files with names including the major version.
-bool FindLibWithMajorVersion(int* majorVer)
-{
-    for (int i = MaxICUVersion; i >= MinICUVersion; i--)
-    {
-        if (OpenICULibraries(i, -1, -1))
-        {
-            *majorVer = i;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// Select the highest supported version of ICU present on the local machine
-// Search for library files with names including the major and minor version.
-bool FindLibWithMajorMinorVersion(int* majorVer, int* minorVer)
-{
-    for (int i = MaxICUVersion; i >= MinICUVersion; i--)
-    {
-        for (int j = MaxMinorICUVersion; j >= MinMinorICUVersion; j--)
-        {
-            if (OpenICULibraries(i, j, -1))
-            {
-                *majorVer = i;
-                *minorVer = j;
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-// Select the highest supported version of ICU present on the local machine
-// Search for library files with names including the major, minor and sub version.
-bool FindLibWithMajorMinorSubVersion(int* majorVer, int* minorVer, int* subVer)
-{
-    for (int i = MaxICUVersion; i >= MinICUVersion; i--)
-    {
-        for (int j = MaxMinorICUVersion; j >= MinMinorICUVersion; j--)
-        {
-            for (int k = MaxSubICUVersion; k >= MinSubICUVersion; k--)
-            {
-                if (OpenICULibraries(i, j, k))
-                {
-                    *majorVer = i;
-                    *minorVer = j;
-                    *subVer = k;
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
-// This function is ran at the end of dlopen for the current shared library
-__attribute__((constructor))
-void InitializeICUShim()
-{
-    int majorVer = -1;
-    int minorVer = -1;
-    int subVer = -1;
-
-    if (!FindLibUsingOverride(&majorVer, &minorVer, &subVer) &&
-        !FindLibWithMajorMinorVersion(&majorVer, &minorVer) &&
-        !FindLibWithMajorMinorSubVersion(&majorVer, &minorVer, &subVer) &&
-        // This is a fallback for the rare case when there are only lib files with major version
-        !FindLibWithMajorVersion(&majorVer))
-    {
-        // No usable ICU version found
-        fprintf(stderr, "No usable version of the ICU libraries was found\n");
-        abort();
-    }
-
-    char symbolName[128];
-    char symbolVersion[MaxICUVersionStringLength + 1] = "";
-
     // Find out the format of the version string added to each symbol
     // First try just the unversioned symbol
     if (dlsym(libicuuc, "u_strlen") == nullptr)
@@ -211,12 +100,154 @@ void InitializeICUShim()
                 sprintf(symbolName, "u_strlen%s", symbolVersion);
                 if (dlsym(libicuuc, symbolName) == nullptr)
                 {
-                    fprintf(stderr, "ICU libraries use unknown symbol versioning\n");
-                    abort();
+                    return false;
                 }
             }
         }
     }
+
+    return true;
+}
+
+// Try to open the necessary ICU libraries
+bool OpenICULibraries(int majorVer, int minorVer, int subVer, char* symbolName, char* symbolVersion)
+{
+    char libicuucName[64];
+    char libicui18nName[64];
+
+    static_assert(sizeof("libicuuc.so") + MaxICUVersionStringLength <= sizeof(libicuucName), "The libicuucName is too small");
+    GetVersionedLibFileName("libicuuc.so", majorVer, minorVer, subVer, libicuucName);
+
+    static_assert(sizeof("libicui18n.so") + MaxICUVersionStringLength <= sizeof(libicui18nName), "The libicui18nName is too small");
+    GetVersionedLibFileName("libicui18n.so", majorVer, minorVer, subVer, libicui18nName);
+
+    libicuuc = dlopen(libicuucName, RTLD_LAZY);
+    if (libicuuc != nullptr)
+    {
+        if (FindSymbolVersion(majorVer, minorVer, subVer, symbolName, symbolVersion))
+        {
+            libicui18n = dlopen(libicui18nName, RTLD_LAZY);
+        }
+        if (libicui18n == nullptr)
+        {
+            dlclose(libicuuc);
+            libicuuc = nullptr;
+        }
+    }
+
+    return libicuuc != nullptr;
+}
+
+// Select libraries using the version override specified by the CLR_ICU_VERSION_OVERRIDE
+// environment variable.
+// The format of the string in this variable is majorVer[.minorVer[.subVer]] (the brackets
+// indicate optional parts).
+bool FindLibUsingOverride(char* symbolName, char* symbolVersion)
+{
+    char* versionOverride = getenv("CLR_ICU_VERSION_OVERRIDE");
+    if (versionOverride != nullptr)
+    {
+        int first = -1;
+        int second = -1;
+        int third = -1;
+
+        int matches = sscanf(versionOverride, "%d.%d.%d", &first, &second, &third);
+        if (matches > 0)
+        {
+            if (OpenICULibraries(first, second, third, symbolName, symbolVersion))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// Search for library files with names including the major version.
+bool FindLibWithMajorVersion(char* symbolName, char* symbolVersion)
+{
+    // ICU packaging documentation (http://userguide.icu-project.org/packaging)
+    // describes applications link against the major (e.g. libicuuc.so.54).
+
+    // Select the version of ICU present at build time.
+    if (OpenICULibraries(MinICUVersion, -1, -1, symbolName, symbolVersion))
+    {
+        return true;
+    }
+
+    // Select the highest supported version of ICU present on the local machine
+    for (int i = MaxICUVersion; i > MinICUVersion; i--)
+    {
+        if (OpenICULibraries(i, -1, -1, symbolName, symbolVersion))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Select the highest supported version of ICU present on the local machine
+// Search for library files with names including the major and minor version.
+bool FindLibWithMajorMinorVersion(char* symbolName, char* symbolVersion)
+{
+    for (int i = MaxICUVersion; i >= MinICUVersion; i--)
+    {
+        for (int j = MaxMinorICUVersion; j >= MinMinorICUVersion; j--)
+        {
+            if (OpenICULibraries(i, j, -1, symbolName, symbolVersion))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// Select the highest supported version of ICU present on the local machine
+// Search for library files with names including the major, minor and sub version.
+bool FindLibWithMajorMinorSubVersion(char* symbolName, char* symbolVersion)
+{
+    for (int i = MaxICUVersion; i >= MinICUVersion; i--)
+    {
+        for (int j = MaxMinorICUVersion; j >= MinMinorICUVersion; j--)
+        {
+            for (int k = MaxSubICUVersion; k >= MinSubICUVersion; k--)
+            {
+                if (OpenICULibraries(i, j, k, symbolName, symbolVersion))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+bool FindICULibs(char* symbolName, char* symbolVersion)
+{
+    return FindLibUsingOverride(symbolName, symbolVersion) ||
+           FindLibWithMajorVersion(symbolName, symbolVersion) ||
+           FindLibWithMajorMinorVersion(symbolName, symbolVersion) ||
+           FindLibWithMajorMinorSubVersion(symbolName, symbolVersion);
+}
+
+#endif // __APPLE__
+
+// GlobalizationNative_LoadICU
+// This method get called from the managed side during the globalization initialization. 
+// This method shouldn't get called at all if we are running in globalization invariant mode
+// return 0 if failed to load ICU and 1 otherwise
+extern "C" int32_t GlobalizationNative_LoadICU()
+{
+    char symbolName[128];
+    char symbolVersion[MaxICUVersionStringLength + 1] = "";
+
+    if (!FindICULibs(symbolName, symbolVersion))
+        return 0;
 
     // Get pointers to all the ICU functions that are needed
 #define PER_FUNCTION_BLOCK(fn, lib) \
@@ -227,6 +258,22 @@ void InitializeICUShim()
 
     FOR_ALL_ICU_FUNCTIONS
 #undef PER_FUNCTION_BLOCK
+
+#ifdef __APPLE__
+    // libicui18n initialized with libicuuc so we null it to avoid double closing same handle   
+    libicui18n = nullptr;
+#endif // __APPLE__
+
+    return 1;
+}
+
+// GlobalizationNative_GetICUVersion
+// return the current loaded ICU version
+extern "C" int32_t GlobalizationNative_GetICUVersion()
+{
+    int32_t version;
+    u_getVersion((uint8_t *) &version);
+    return version; 
 }
 
 __attribute__((destructor))
@@ -235,10 +282,12 @@ void ShutdownICUShim()
     if (libicuuc != nullptr)
     {
         dlclose(libicuuc);
+        libicuuc = nullptr;
     }
 
     if (libicui18n != nullptr)
     {
         dlclose(libicui18n);
+        libicui18n = nullptr;
     }
 }

@@ -1380,7 +1380,7 @@ public:
     static BOOL CanEnableGCNumaAware();
     static void InitNumaNodeInfo();
 
-#if !defined(FEATURE_REDHAWK)&& !defined(FEATURE_PAL)
+#if !defined(FEATURE_REDHAWK)
 private:	// apis types
 
     //GetNumaHighestNodeNumber()
@@ -1448,7 +1448,7 @@ public:
     static DWORD CalculateCurrentProcessorNumber();
     //static void PopulateCPUUsageArray(void * infoBuffer, ULONG infoSize);
 
-#if !defined(FEATURE_REDHAWK) && !defined(FEATURE_PAL)
+#if !defined(FEATURE_REDHAWK)
 private:
     //GetLogicalProcessorInforomationEx()
     typedef BOOL
@@ -1489,6 +1489,9 @@ public:
 
 int GetCurrentProcessCpuCount();
 DWORD_PTR GetCurrentProcessCpuMask();
+
+uint32_t GetOsPageSize();
+
 
 //*****************************************************************************
 // Return != 0 if the bit at the specified index in the array is on and 0 if
@@ -4245,10 +4248,10 @@ void  AdjustImageRuntimeVersion (SString* pVersion);
 SELECTANY const WCHAR kDebugApplicationsPoliciesKey[] = W("SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Error Reporting\\DebugApplications");
 SELECTANY const WCHAR kDebugApplicationsKey[] = W("SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\DebugApplications");
 
-SELECTANY const WCHAR kUnmanagedDebuggerKey[] = W("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug");
+SELECTANY const WCHAR kUnmanagedDebuggerKey[] = W("SOFTWARE\\Microsoft\\.NETCore\\JITDebugging");
 SELECTANY const WCHAR kUnmanagedDebuggerValue[] = W("Debugger");
 SELECTANY const WCHAR kUnmanagedDebuggerAutoValue[] = W("Auto");
-SELECTANY const WCHAR kUnmanagedDebuggerAutoExclusionListKey[] = W("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug\\AutoExclusionList");
+SELECTANY const WCHAR kUnmanagedDebuggerAutoExclusionListKey[] = W("SOFTWARE\\Microsoft\\.NETCore\\JITDebugging\\AutoExclusionList");
 
 BOOL GetRegistryLongValue(HKEY    hKeyParent,              // Parent key.
                           LPCWSTR szKey,                   // Key name to look at.
@@ -4684,6 +4687,8 @@ inline void ClrFlsClearThreadType (TlsThreadTypeFlag flag)
 #define CLEAR_THREAD_TYPE_STACKWALKER() ClrFlsSetValue(TlsIdx_StackWalkerWalkingThread, NULL)
 #endif  // DACCESS_COMPILE
 
+HRESULT SetThreadName(HANDLE hThread, PCWSTR lpThreadDescription);
+
 inline BOOL IsStackWalkerThread()
 {
     STATIC_CONTRACT_NOTHROW;
@@ -5109,9 +5114,9 @@ BOOL IsIPInModule(HMODULE_TGT hModule, PCODE ip);
 //----------------------------------------------------------------------------------------
 struct CoreClrCallbacks
 {
-    typedef IExecutionEngine* (__stdcall * pfnIEE_t)();
-    typedef HRESULT (__stdcall * pfnGetCORSystemDirectory_t)(SString& pbuffer);
-    typedef void* (__stdcall * pfnGetCLRFunction_t)(LPCSTR functionName);
+    typedef IExecutionEngine* (* pfnIEE_t)();
+    typedef HRESULT (* pfnGetCORSystemDirectory_t)(SString& pbuffer);
+    typedef void* (* pfnGetCLRFunction_t)(LPCSTR functionName);
 
     HINSTANCE                   m_hmodCoreCLR;
     pfnIEE_t                    m_pfnIEE;
@@ -5510,12 +5515,13 @@ struct SpinConstants
     DWORD dwMaximumDuration;
     DWORD dwBackoffFactor;
     DWORD dwRepetitions;
+    DWORD dwMonitorSpinCount;
 };
 
 extern SpinConstants g_SpinConstants;
 
 // ======================================================================================
 
-void* __stdcall GetCLRFunction(LPCSTR FunctionName);
+void* GetCLRFunction(LPCSTR FunctionName);
 
 #endif // __UtilCode_h__

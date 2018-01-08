@@ -15,14 +15,12 @@
 namespace System.Threading
 {
     using System.Threading;
-    using System.Runtime.Remoting;
     using System;
     using System.Runtime.CompilerServices;
     using System.Runtime.InteropServices;
     using Microsoft.Win32.SafeHandles;
     using System.Runtime.Versioning;
     using System.Runtime.ConstrainedExecution;
-    using System.Diagnostics.Contracts;
     using System.Diagnostics.CodeAnalysis;
     using Win32Native = Microsoft.Win32.Win32Native;
 
@@ -153,9 +151,8 @@ namespace System.Threading
         {
             if (millisecondsTimeout < -1)
             {
-                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             }
-            Contract.EndContractBlock();
             return WaitOne((long)millisecondsTimeout, exitContext);
         }
 
@@ -164,7 +161,7 @@ namespace System.Threading
             long tm = (long)timeout.TotalMilliseconds;
             if (-1 > tm || (long)Int32.MaxValue < tm)
             {
-                throw new ArgumentOutOfRangeException(nameof(timeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(timeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             }
             return WaitOne(tm, exitContext);
         }
@@ -195,13 +192,9 @@ namespace System.Threading
         {
             if (waitableSafeHandle == null)
             {
-                throw new ObjectDisposedException(null, Environment.GetResourceString("ObjectDisposed_Generic"));
+                throw new ObjectDisposedException(null, SR.ObjectDisposed_Generic);
             }
-            Contract.EndContractBlock();
             int ret = WaitOneNative(waitableSafeHandle, (uint)millisecondsTimeout, hasThreadAffinity, exitContext);
-
-            if (AppDomainPauseManager.IsPaused)
-                AppDomainPauseManager.ResumeEvent.WaitOneWithoutFAS();
 
             if (ret == WAIT_ABANDONED)
             {
@@ -216,9 +209,8 @@ namespace System.Threading
             // This is required to support the Wait which FAS needs (otherwise recursive dependency comes in)
             if (safeWaitHandle == null)
             {
-                throw new ObjectDisposedException(null, Environment.GetResourceString("ObjectDisposed_Generic"));
+                throw new ObjectDisposedException(null, SR.ObjectDisposed_Generic);
             }
-            Contract.EndContractBlock();
 
             long timeout = -1;
             int ret = WaitOneNative(safeWaitHandle, (uint)timeout, hasThreadAffinity, false);
@@ -248,7 +240,7 @@ namespace System.Threading
         {
             if (waitHandles == null)
             {
-                throw new ArgumentNullException(nameof(waitHandles), Environment.GetResourceString("ArgumentNull_Waithandles"));
+                throw new ArgumentNullException(nameof(waitHandles), SR.ArgumentNull_Waithandles);
             }
             if (waitHandles.Length == 0)
             {
@@ -261,36 +253,32 @@ namespace System.Threading
                 // in CoreCLR, and ArgumentNullException in the desktop CLR.  This is ugly, but so is breaking
                 // user code.
                 //
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyWaithandleArray"));
+                throw new ArgumentException(SR.Argument_EmptyWaithandleArray);
             }
             if (waitHandles.Length > MAX_WAITHANDLES)
             {
-                throw new NotSupportedException(Environment.GetResourceString("NotSupported_MaxWaitHandles"));
+                throw new NotSupportedException(SR.NotSupported_MaxWaitHandles);
             }
             if (-1 > millisecondsTimeout)
             {
-                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             }
-            Contract.EndContractBlock();
             WaitHandle[] internalWaitHandles = new WaitHandle[waitHandles.Length];
             for (int i = 0; i < waitHandles.Length; i++)
             {
                 WaitHandle waitHandle = waitHandles[i];
 
                 if (waitHandle == null)
-                    throw new ArgumentNullException("waitHandles[" + i + "]", Environment.GetResourceString("ArgumentNull_ArrayElement"));
+                    throw new ArgumentNullException("waitHandles[" + i + "]", SR.ArgumentNull_ArrayElement);
 
                 internalWaitHandles[i] = waitHandle;
             }
-#if _DEBUG
+#if DEBUG
             // make sure we do not use waitHandles any more.
             waitHandles = null;
 #endif
 
             int ret = WaitMultiple(internalWaitHandles, millisecondsTimeout, exitContext, true /* waitall*/ );
-
-            if (AppDomainPauseManager.IsPaused)
-                AppDomainPauseManager.ResumeEvent.WaitOneWithoutFAS();
 
             if ((WAIT_ABANDONED <= ret) && (WAIT_ABANDONED + internalWaitHandles.Length > ret))
             {
@@ -312,7 +300,7 @@ namespace System.Threading
             long tm = (long)timeout.TotalMilliseconds;
             if (-1 > tm || (long)Int32.MaxValue < tm)
             {
-                throw new ArgumentOutOfRangeException(nameof(timeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(timeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             }
             return WaitAll(waitHandles, (int)tm, exitContext);
         }
@@ -350,39 +338,35 @@ namespace System.Threading
         {
             if (waitHandles == null)
             {
-                throw new ArgumentNullException(nameof(waitHandles), Environment.GetResourceString("ArgumentNull_Waithandles"));
+                throw new ArgumentNullException(nameof(waitHandles), SR.ArgumentNull_Waithandles);
             }
             if (waitHandles.Length == 0)
             {
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyWaithandleArray"));
+                throw new ArgumentException(SR.Argument_EmptyWaithandleArray);
             }
             if (MAX_WAITHANDLES < waitHandles.Length)
             {
-                throw new NotSupportedException(Environment.GetResourceString("NotSupported_MaxWaitHandles"));
+                throw new NotSupportedException(SR.NotSupported_MaxWaitHandles);
             }
             if (-1 > millisecondsTimeout)
             {
-                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             }
-            Contract.EndContractBlock();
             WaitHandle[] internalWaitHandles = new WaitHandle[waitHandles.Length];
             for (int i = 0; i < waitHandles.Length; i++)
             {
                 WaitHandle waitHandle = waitHandles[i];
 
                 if (waitHandle == null)
-                    throw new ArgumentNullException("waitHandles[" + i + "]", Environment.GetResourceString("ArgumentNull_ArrayElement"));
+                    throw new ArgumentNullException("waitHandles[" + i + "]", SR.ArgumentNull_ArrayElement);
 
                 internalWaitHandles[i] = waitHandle;
             }
-#if _DEBUG
+#if DEBUG
             // make sure we do not use waitHandles any more.
             waitHandles = null;
 #endif
             int ret = WaitMultiple(internalWaitHandles, millisecondsTimeout, exitContext, false /* waitany*/ );
-
-            if (AppDomainPauseManager.IsPaused)
-                AppDomainPauseManager.ResumeEvent.WaitOneWithoutFAS();
 
             if ((WAIT_ABANDONED <= ret) && (WAIT_ABANDONED + internalWaitHandles.Length > ret))
             {
@@ -409,7 +393,7 @@ namespace System.Threading
             long tm = (long)timeout.TotalMilliseconds;
             if (-1 > tm || (long)Int32.MaxValue < tm)
             {
-                throw new ArgumentOutOfRangeException(nameof(timeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(timeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             }
             return WaitAny(waitHandles, (int)tm, exitContext);
         }
@@ -437,18 +421,18 @@ namespace System.Threading
         ==  SignalAndWait
         ==
         ==================================================*/
-#if !PLATFORM_UNIX
+#if PLATFORM_WINDOWS
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         private static extern int SignalAndWaitOne(SafeWaitHandle waitHandleToSignal, SafeWaitHandle waitHandleToWaitOn, int millisecondsTimeout,
                                             bool hasThreadAffinity, bool exitContext);
-#endif // !PLATFORM_UNIX        
+#endif // PLATFORM_WINDOWS       
 
         public static bool SignalAndWait(
                                         WaitHandle toSignal,
                                         WaitHandle toWaitOn)
         {
 #if PLATFORM_UNIX
-            throw new PlatformNotSupportedException();
+            throw new PlatformNotSupportedException(SR.Arg_PlatformNotSupported); // https://github.com/dotnet/coreclr/issues/10441
 #else
             return SignalAndWait(toSignal, toWaitOn, -1, false);
 #endif
@@ -461,12 +445,12 @@ namespace System.Threading
                                         bool exitContext)
         {
 #if PLATFORM_UNIX
-            throw new PlatformNotSupportedException();
+            throw new PlatformNotSupportedException(SR.Arg_PlatformNotSupported); // https://github.com/dotnet/coreclr/issues/10441
 #else
             long tm = (long)timeout.TotalMilliseconds;
             if (-1 > tm || (long)Int32.MaxValue < tm)
             {
-                throw new ArgumentOutOfRangeException(nameof(timeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(timeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             }
             return SignalAndWait(toSignal, toWaitOn, (int)tm, exitContext);
 #endif
@@ -480,7 +464,7 @@ namespace System.Threading
                                         bool exitContext)
         {
 #if PLATFORM_UNIX
-            throw new PlatformNotSupportedException();
+            throw new PlatformNotSupportedException(SR.Arg_PlatformNotSupported); // https://github.com/dotnet/coreclr/issues/10441
 #else
             if (null == toSignal)
             {
@@ -492,9 +476,8 @@ namespace System.Threading
             }
             if (-1 > millisecondsTimeout)
             {
-                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(millisecondsTimeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             }
-            Contract.EndContractBlock();
 
             //NOTE: This API is not supporting Pause/Resume as it's not exposed in CoreCLR (not in WP or SL)
             int ret = SignalAndWaitOne(toSignal.safeWaitHandle, toWaitOn.safeWaitHandle, millisecondsTimeout,
@@ -507,7 +490,7 @@ namespace System.Threading
 
             if (ERROR_TOO_MANY_POSTS == ret)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("Threading.WaitHandleTooManyPosts"));
+                throw new InvalidOperationException(SR.Threading_WaitHandleTooManyPosts);
             }
 
             //Object was signaled

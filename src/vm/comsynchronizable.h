@@ -97,6 +97,7 @@ public:
     UINT64 QCALLTYPE GetProcessDefaultStackSize();
 
     static FCDECL1(INT32,   GetManagedThreadId, ThreadBaseObject* th);
+    static INT32 QCALLTYPE GetOptimalMaxSpinWaitsPerSpinIteration();
     static FCDECL1(void,    SpinWait,                       int iterations);
     static BOOL QCALLTYPE YieldThread();
     static FCDECL0(Object*, GetCurrentThread);
@@ -106,7 +107,6 @@ public:
 #endif //FEATURE_COMINTEROP
     static FCDECL1(FC_BOOL_RET,IsThreadpoolThread,             ThreadBaseObject* thread);
 
-    static FCDECL0(void, FCMemoryBarrier);
     static FCDECL1(void, SetIsThreadStaticsArray, Object* pObject);
 
     static FCDECL2(void,    SetAbortReason, ThreadBaseObject* pThisUNSAFE, Object* pObject);

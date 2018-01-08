@@ -23,8 +23,10 @@ if (CLR_CMAKE_PLATFORM_UNIX)
   # after hitting just about 20 errors.
   add_compile_options(-ferror-limit=4096)
 
-  # All warnings that are not explicitly disabled are reported as errors
-  add_compile_options(-Werror)
+  if (CLR_CMAKE_WARNINGS_ARE_ERRORS)
+    # All warnings that are not explicitly disabled are reported as errors
+    add_compile_options(-Werror)
+  endif(CLR_CMAKE_WARNINGS_ARE_ERRORS)
 
   # Disabled warnings
   add_compile_options(-Wno-unused-private-field)
@@ -92,6 +94,7 @@ if (WIN32)
   add_compile_options(/wd4960 /wd4961 /wd4603 /wd4627 /wd4838 /wd4456 /wd4457 /wd4458 /wd4459 /wd4091 /we4640)
   add_compile_options(/Zi) # enable debugging information
   add_compile_options(/ZH:SHA_256) # use SHA256 for generating hashes of compiler processed source files.
+  add_compile_options(/source-charset:utf-8) # Force MSVC to compile source as UTF-8.
 
   if (CLR_CMAKE_PLATFORM_ARCH_I386)
     add_compile_options(/Gz)
@@ -121,7 +124,7 @@ if (WIN32)
   
 endif (WIN32)
 
-if(CMAKE_ENABLE_CODE_COVERAGE)
+if(CLR_CMAKE_ENABLE_CODE_COVERAGE)
 
   if(CLR_CMAKE_PLATFORM_UNIX)
     string(TOUPPER ${CMAKE_BUILD_TYPE} UPPERCASE_CMAKE_BUILD_TYPE)
@@ -138,4 +141,4 @@ if(CMAKE_ENABLE_CODE_COVERAGE)
     message(FATAL_ERROR "Code coverage builds not supported on current platform")
   endif(CLR_CMAKE_PLATFORM_UNIX)
 
-endif(CMAKE_ENABLE_CODE_COVERAGE)
+endif(CLR_CMAKE_ENABLE_CODE_COVERAGE)

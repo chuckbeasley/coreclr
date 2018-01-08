@@ -16,11 +16,9 @@ using System.Text;
 using System.Runtime.InteropServices;
 using System.Configuration.Assemblies;
 using System.Runtime.Versioning;
-using System.Diagnostics.Contracts;
 
 namespace System.Reflection
 {
-    [Serializable]
     internal enum CorElementType : byte
     {
         End = 0x00,
@@ -61,7 +59,6 @@ namespace System.Reflection
         Pinned = 0x45,
     }
 
-    [Serializable]
     [Flags()]
     internal enum MdSigCallingConvention : byte
     {
@@ -85,7 +82,6 @@ namespace System.Reflection
     }
 
 
-    [Serializable]
     [Flags()]
     internal enum PInvokeAttributes
     {
@@ -122,7 +118,6 @@ namespace System.Reflection
     }
 
 
-    [Serializable]
     [Flags()]
     internal enum MethodSemanticsAttributes
     {
@@ -135,7 +130,6 @@ namespace System.Reflection
     }
 
 
-    [Serializable]
     internal enum MetadataTokenType
     {
         Module = 0x00000000,
@@ -166,7 +160,6 @@ namespace System.Reflection
         Invalid = 0x7FFFFFFF,
     }
 
-    [Serializable]
     internal struct ConstArray
     {
         public IntPtr Signature { get { return m_constArray; } }
@@ -177,7 +170,6 @@ namespace System.Reflection
             {
                 if (index < 0 || index >= m_length)
                     throw new IndexOutOfRangeException();
-                Contract.EndContractBlock();
 
                 unsafe
                 {
@@ -191,7 +183,6 @@ namespace System.Reflection
         internal IntPtr m_constArray;
     }
 
-    [Serializable]
     internal struct MetadataToken
     {
         #region Implicit Cast Operators
@@ -269,7 +260,7 @@ namespace System.Reflection
         {
             get
             {
-                Contract.Requires(0 <= index && index < Length);
+                Debug.Assert(0 <= index && index < Length);
                 if (largeResult != null)
                     return largeResult[index];
 

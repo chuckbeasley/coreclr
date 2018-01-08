@@ -14,6 +14,8 @@
 #ifndef __DACIMPL_H__
 #define __DACIMPL_H__
 
+#include "gcinterface.dac.h"
+
 #if defined(_TARGET_ARM_) || defined(FEATURE_CORESYSTEM) // @ARMTODO: STL breaks the build with current VC headers
 //---------------------------------------------------------------------------------------
 // Setting DAC_HASHTABLE tells the DAC to use the hand rolled hashtable for
@@ -123,6 +125,7 @@ enum DAC_USAGE_TYPE
     DAC_VPTR,
     DAC_STRA,
     DAC_STRW,
+    DAC_PAL,
 };
 
 // mscordacwks's module handle 
@@ -858,7 +861,8 @@ class ClrDataAccess
       public ISOSDacInterface,
       public ISOSDacInterface2,
       public ISOSDacInterface3,
-      public ISOSDacInterface4
+      public ISOSDacInterface4,
+      public ISOSDacInterface5
 {
 public:
     ClrDataAccess(ICorDebugDataTarget * pTarget, ICLRDataTarget * pLegacyTarget=0);
@@ -1201,6 +1205,9 @@ public:
     // ISOSDacInterface4
     virtual HRESULT STDMETHODCALLTYPE GetClrNotification(CLRDATA_ADDRESS arguments[], int count, int *pNeeded);
 
+    // ISOSDacInterface5
+    virtual HRESULT STDMETHODCALLTYPE GetTieredVersions(CLRDATA_ADDRESS methodDesc, int rejitId, struct DacpTieredVersionData *nativeCodeAddrs, int cNativeCodeAddrs, int *pcNativeCodeAddrs);
+
     //
     // ClrDataAccess.
     //
@@ -1432,7 +1439,6 @@ private:
     ICLRMetadataLocator * m_legacyMetaDataLocator;
 
     LONG m_refs;
-    HRESULT m_memStatus;
     MDImportsCache m_mdImports;
     ICLRDataEnumMemoryRegionsCallback* m_enumMemCb;
     ICLRDataEnumMemoryRegionsCallback2* m_updateMemCb;
@@ -2238,7 +2244,7 @@ private:
     ULONG32 m_instanceAge;
     
     // Handle table walking variables.
-    HandleTableMap *mMap;
+    dac_handle_table_map *mMap;
     int mIndex;
     UINT32 mTypeMask;
     int mGenerationFilter;

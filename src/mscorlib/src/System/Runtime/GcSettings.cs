@@ -6,21 +6,18 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.ConstrainedExecution;
-using System.Diagnostics.Contracts;
 
 namespace System.Runtime
 {
     // These settings are the same format as in clr\src\vm\gcpriv.h
     // make sure you change that file if you change this file!
 
-    [Serializable]
     public enum GCLargeObjectHeapCompactionMode
     {
         Default = 1,
         CompactOnce = 2
     }
 
-    [Serializable]
     public enum GCLatencyMode
     {
         Batch = 0,
@@ -50,9 +47,8 @@ namespace System.Runtime
             {
                 if ((value < GCLatencyMode.Batch) || (value > GCLatencyMode.SustainedLowLatency))
                 {
-                    throw new ArgumentOutOfRangeException(Environment.GetResourceString("ArgumentOutOfRange_Enum"));
+                    throw new ArgumentOutOfRangeException(SR.ArgumentOutOfRange_Enum);
                 }
-                Contract.EndContractBlock();
 
                 if (GC.SetGCLatencyMode((int)value) == (int)SetLatencyModeStatus.NoGCInProgress)
                     throw new InvalidOperationException("The NoGCRegion mode is in progress. End it and then set a different mode.");
@@ -72,9 +68,8 @@ namespace System.Runtime
                 if ((value < GCLargeObjectHeapCompactionMode.Default) ||
                     (value > GCLargeObjectHeapCompactionMode.CompactOnce))
                 {
-                    throw new ArgumentOutOfRangeException(Environment.GetResourceString("ArgumentOutOfRange_Enum"));
+                    throw new ArgumentOutOfRangeException(SR.ArgumentOutOfRange_Enum);
                 }
-                Contract.EndContractBlock();
 
                 GC.SetLOHCompactionMode((int)value);
             }

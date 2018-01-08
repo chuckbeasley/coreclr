@@ -9,7 +9,7 @@
 // The old way to throw an exception generates quite a lot IL code and assembly code.
 // Following is an example:
 //     C# source
-//          throw new ArgumentNullException(nameof(key), Environment.GetResourceString("ArgumentNull_Key"));
+//          throw new ArgumentNullException(nameof(key), SR.ArgumentNull_Key);
 //     IL code:
 //          IL_0003:  ldstr      "key"
 //          IL_0008:  ldstr      "ArgumentNull_Key"
@@ -38,11 +38,11 @@
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
-using System.Diagnostics.Contracts;
+using System.Diagnostics;
 
 namespace System
 {
-    [Pure]
+    [StackTraceHidden]
     internal static class ThrowHelper
     {
         internal static void ThrowArrayTypeMismatchException()
@@ -52,7 +52,7 @@ namespace System
 
         internal static void ThrowInvalidTypeWithPointersNotSupported(Type targetType)
         {
-            throw new ArgumentException(Environment.GetResourceString("Argument_InvalidTypeWithPointersNotSupported", targetType));
+            throw new ArgumentException(SR.Format(SR.Argument_InvalidTypeWithPointersNotSupported, targetType));
         }
 
         internal static void ThrowIndexOutOfRangeException()
@@ -67,17 +67,7 @@ namespace System
 
         internal static void ThrowArgumentException_DestinationTooShort()
         {
-            throw new ArgumentException(Environment.GetResourceString("Argument_DestinationTooShort"));
-        }
-
-        internal static void ThrowNotSupportedException_CannotCallEqualsOnSpan()
-        {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_CannotCallEqualsOnSpan"));
-        }
-
-        internal static void ThrowNotSupportedException_CannotCallGetHashCodeOnSpan()
-        {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_CannotCallGetHashCodeOnSpan"));
+            throw new ArgumentException(SR.Argument_DestinationTooShort);
         }
 
         internal static void ThrowArgumentOutOfRange_IndexException()
@@ -110,29 +100,33 @@ namespace System
                                                     ExceptionResource.ArgumentOutOfRange_Count);
         }
 
-        internal static void ThrowWrongKeyTypeArgumentException(object key, Type targetType)
+        internal static void ThrowWrongKeyTypeArgumentException<T>(T key, Type targetType)
         {
-            throw GetWrongKeyTypeArgumentException(key, targetType);
+            // Generic key to move the boxing to the right hand side of throw
+            throw GetWrongKeyTypeArgumentException((object)key, targetType);
         }
 
-        internal static void ThrowWrongValueTypeArgumentException(object value, Type targetType)
+        internal static void ThrowWrongValueTypeArgumentException<T>(T value, Type targetType)
         {
-            throw GetWrongValueTypeArgumentException(value, targetType);
+            // Generic key to move the boxing to the right hand side of throw
+            throw GetWrongValueTypeArgumentException((object)value, targetType);
         }
 
         private static ArgumentException GetAddingDuplicateWithKeyArgumentException(object key)
         {
-            return new ArgumentException(Environment.GetResourceString("Argument_AddingDuplicateWithKey", key));
+            return new ArgumentException(SR.Format(SR.Argument_AddingDuplicateWithKey, key));
         }
 
-        internal static void ThrowAddingDuplicateWithKeyArgumentException(object key)
+        internal static void ThrowAddingDuplicateWithKeyArgumentException<T>(T key)
         {
-            throw GetAddingDuplicateWithKeyArgumentException(key);
+            // Generic key to move the boxing to the right hand side of throw
+            throw GetAddingDuplicateWithKeyArgumentException((object)key);
         }
 
-        internal static void ThrowKeyNotFoundException()
+        internal static void ThrowKeyNotFoundException<T>(T key)
         {
-            throw new System.Collections.Generic.KeyNotFoundException();
+            // Generic key to move the boxing to the right hand side of throw
+            throw GetKeyNotFoundException((object)key);
         }
 
         internal static void ThrowArgumentException(ExceptionResource resource)
@@ -235,6 +229,11 @@ namespace System
             throw new AggregateException(exceptions);
         }
 
+        internal static void ThrowOutOfMemoryException()
+        {
+            throw new OutOfMemoryException();
+        }
+
         internal static void ThrowArgumentException_Argument_InvalidArrayType()
         {
             throw GetArgumentException(ExceptionResource.Argument_InvalidArrayType);
@@ -250,6 +249,11 @@ namespace System
             throw GetInvalidOperationException(ExceptionResource.InvalidOperation_EnumEnded);
         }
 
+        internal static void ThrowInvalidOperationException_EnumCurrent(int index)
+        {
+            throw GetInvalidOperationException_EnumCurrent(index);
+        }
+
         internal static void ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion()
         {
             throw GetInvalidOperationException(ExceptionResource.InvalidOperation_EnumFailedVersion);
@@ -258,6 +262,11 @@ namespace System
         internal static void ThrowInvalidOperationException_InvalidOperation_EnumOpCantHappen()
         {
             throw GetInvalidOperationException(ExceptionResource.InvalidOperation_EnumOpCantHappen);
+        }
+
+        internal static void ThrowInvalidOperationException_InvalidOperation_NoValue()
+        {
+            throw GetInvalidOperationException(ExceptionResource.InvalidOperation_NoValue);
         }
 
         internal static void ThrowArraySegmentCtorValidationFailedExceptions(Array array, int offset, int count)
@@ -290,12 +299,17 @@ namespace System
 
         private static ArgumentException GetWrongKeyTypeArgumentException(object key, Type targetType)
         {
-            return new ArgumentException(Environment.GetResourceString("Arg_WrongType", key, targetType), nameof(key));
+            return new ArgumentException(SR.Format(SR.Arg_WrongType, key, targetType), nameof(key));
         }
 
         private static ArgumentException GetWrongValueTypeArgumentException(object value, Type targetType)
         {
-            return new ArgumentException(Environment.GetResourceString("Arg_WrongType", value, targetType), nameof(value));
+            return new ArgumentException(SR.Format(SR.Arg_WrongType, value, targetType), nameof(value));
+        }
+
+        private static KeyNotFoundException GetKeyNotFoundException(object key)
+        {
+            return new KeyNotFoundException(SR.Format(SR.Arg_KeyNotFoundWithKey, key.ToString()));
         }
 
         internal static ArgumentOutOfRangeException GetArgumentOutOfRangeException(ExceptionArgument argument, ExceptionResource resource)
@@ -311,6 +325,14 @@ namespace System
         private static ArgumentOutOfRangeException GetArgumentOutOfRangeException(ExceptionArgument argument, int paramNumber, ExceptionResource resource)
         {
             return new ArgumentOutOfRangeException(GetArgumentName(argument) + "[" + paramNumber.ToString() + "]", GetResourceString(resource));
+        }
+
+        private static InvalidOperationException GetInvalidOperationException_EnumCurrent(int index)
+        {
+            return GetInvalidOperationException(
+                index < 0 ?
+                ExceptionResource.InvalidOperation_EnumNotStarted :
+                ExceptionResource.InvalidOperation_EnumEnded);
         }
 
         // Allow nulls for reference types and Nullable<U>, but not for value types.
@@ -341,7 +363,19 @@ namespace System
             Debug.Assert(Enum.IsDefined(typeof(ExceptionResource), resource),
                 "The enum value is not defined, please check the ExceptionResource Enum.");
 
-            return Environment.GetResourceString(resource.ToString());
+            return SR.GetResourceString(resource.ToString());
+        }
+
+        internal static void ThrowNotSupportedExceptionIfNonNumericType<T>()
+        {
+            if (typeof(T) != typeof(Byte) && typeof(T) != typeof(SByte) && 
+                typeof(T) != typeof(Int16) && typeof(T) != typeof(UInt16) && 
+                typeof(T) != typeof(Int32) && typeof(T) != typeof(UInt32) && 
+                typeof(T) != typeof(Int64) && typeof(T) != typeof(UInt64) &&
+                typeof(T) != typeof(Single) && typeof(T) != typeof(Double))
+            {
+                throw new NotSupportedException(SR.Arg_TypeNotSupported);
+            }
         }
     }
 
@@ -352,7 +386,6 @@ namespace System
     {
         obj,
         dictionary,
-        dictionaryCreationThreshold,
         array,
         info,
         key,
@@ -360,8 +393,6 @@ namespace System
         list,
         match,
         converter,
-        queue,
-        stack,
         capacity,
         index,
         startIndex,
@@ -369,7 +400,6 @@ namespace System
         count,
         arrayIndex,
         name,
-        mode,
         item,
         options,
         view,
@@ -416,15 +446,21 @@ namespace System
         beginMethod,
         continuationOptions,
         continuationAction,
-        valueFactory,
-        addValueFactory,
-        updateValueFactory,
         concurrencyLevel,
         text,
         callBack,
         type,
         stateMachine,
         pHandle,
+        values,
+        task,
+        s,
+        keyValuePair,
+        input,
+        ownedMemory,
+        pointer,
+        start,
+        format
     }
 
     //
@@ -517,12 +553,13 @@ namespace System
         TaskT_TransitionToFinal_AlreadyCompleted,
         TaskCompletionSourceT_TrySetException_NullException,
         TaskCompletionSourceT_TrySetException_NoExceptions,
+        Memory_ThrowIfDisposed,
+        Memory_OutstandingReferences,
         InvalidOperation_WrongAsyncResultOrEndCalledMultiple,
         ConcurrentDictionary_ConcurrencyLevelMustBePositive,
         ConcurrentDictionary_CapacityMustNotBeNegative,
         ConcurrentDictionary_TypeOfValueIncorrect,
         ConcurrentDictionary_TypeOfKeyIncorrect,
-        ConcurrentDictionary_SourceContainsDuplicateKeys,
         ConcurrentDictionary_KeyAlreadyExisted,
         ConcurrentDictionary_ItemKeyIsNull,
         ConcurrentDictionary_IndexIsNegative,

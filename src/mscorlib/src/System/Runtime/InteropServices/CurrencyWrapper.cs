@@ -16,7 +16,6 @@ using System;
 
 namespace System.Runtime.InteropServices
 {
-    [Serializable]
     public sealed class CurrencyWrapper
     {
         public CurrencyWrapper(Decimal obj)
@@ -27,7 +26,7 @@ namespace System.Runtime.InteropServices
         public CurrencyWrapper(Object obj)
         {
             if (!(obj is Decimal))
-                throw new ArgumentException(Environment.GetResourceString("Arg_MustBeDecimal"), nameof(obj));
+                throw new ArgumentException(SR.Arg_MustBeDecimal, nameof(obj));
             m_WrappedObject = (Decimal)obj;
         }
 

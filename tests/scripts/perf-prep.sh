@@ -56,27 +56,27 @@ echo "configuration = $perfConfig"
 # Then we match only the last line using '$' and use the s command to replace the entire line
 # with what we find inside of the quotes after src=.  We then jump to label x on a match and if 
 # we don't match we delete the line.  This returns just the address of the last nupkg to curl.
-curl "http://benchviewtestfeed.azurewebsites.net/nuget/FindPackagesById()?id='Microsoft.BenchView.JSONFormat'" | grep "content type" | sed "$ s/.*src=\"\([^\"]*\)\".*/\1/;tx;d;:x" | xargs curl -o benchview.zip
-unzip -q -o benchview.zip -d ./tests/scripts/Microsoft.BenchView.JSONFormat
+
+if [ ! -d "./tests/scripts/Microsoft.Benchview.JSONFormat" ]; then
+    curl "http://benchviewtestfeed.azurewebsites.net/nuget/FindPackagesById()?id='Microsoft.BenchView.JSONFormat'" | grep "content type" | sed "$ s/.*src=\"\([^\"]*\)\".*/\1/;tx;d;:x" | xargs curl -o benchview.zip
+    unzip -q -o benchview.zip -d ./tests/scripts/Microsoft.BenchView.JSONFormat
+fi
 
 # Install python 3.5.2 to run machinedata.py for machine data collection
 python3.5 --version
 python3.5 ./tests/scripts/Microsoft.BenchView.JSONFormat/tools/machinedata.py
 
 if [ $throughput -eq 1 ]; then
-    # Clone corefx
-    if [ -d "_" ]; then
-        rm -r -f _
+    # Download throughput benchmarks
+    if [ ! -d "Microsoft.Benchview.ThroughputBenchmarks.x64.Windows_NT" ]; then
+        mkdir Microsoft.Benchview.ThroughputBenchmarks.x64.Windows_NT
+        cd Microsoft.Benchview.ThroughputBenchmarks.x64.Windows_NT
+
+        curl -OL https://dotnet.myget.org/F/dotnet-core/api/v2/package/Microsoft.Benchview.ThroughputBenchmarks.x64.Windows_NT/1.0.0
+        mv 1.0.0 1.0.0.zip
+        unzip -q 1.0.0.zip
     fi
-    mkdir _
-    git clone https://github.com/dotnet/corefx.git _/fx
-    cd _/fx
 
-    # Checkout the specific commit we want
-    git checkout f0b9e238c08f62a1db90ef0378980ac771204d35
-
-    # Build
-    ./build.sh -release
 else
     # Set up the copies
     # Coreclr build containing the tests and mscorlib
@@ -92,9 +92,14 @@ else
     rm build.tar.gz
     popd > /dev/null
 
-    # Unzip the tests first.  Exit with 0
-    mkdir bin
-    mkdir bin/tests
-    unzip -q -o tests.zip -d ./bin/tests/Windows_NT.$perfArch.$perfConfig || exit 0
-    echo "unzip tests to ./bin/tests/Windows_NT.$perfArch.$perfConfig"
+    # If the tests don't already exist, download them.
+    if [ ! -d "bin" ]; then
+        mkdir bin
+    fi
+
+    if [ ! -d "bin/tests" ]; then
+        mkdir bin/tests
+        echo "unzip tests to ./bin/tests/Windows_NT.$perfArch.$perfConfig"
+        unzip -q -o tests.zip -d ./bin/tests/Windows_NT.$perfArch.$perfConfig || exit 0
+    fi
 fi

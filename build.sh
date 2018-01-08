@@ -2,7 +2,7 @@
 
 # resolve python-version to use
 if [ "$PYTHON" == "" ] ; then
-    if ! PYTHON=$(command -v python || command -v python2 || command -v python 2.7)
+    if ! PYTHON=$(command -v python2.7 || command -v python2 || command -v python)
     then
        echo "Unable to locate build-dependency python2.x!" 1>&2
        exit 1
@@ -19,51 +19,67 @@ fi
 
 usage()
 {
-    echo "Usage: $0 [BuildArch] [BuildType] [verbose] [coverage] [cross] [clangx.y] [ninja] [configureonly] [skipconfigure] [skipnative] [skipmscorlib] [skiptests] [stripsymbols] [cmakeargs] [bindir]"
-    echo "BuildArch can be: x64, x86, arm, armel, arm64"
-    echo "BuildType can be: debug, checked, release"
-    echo "coverage - optional argument to enable code coverage build (currently supported only for Linux and OSX)."
-    echo "ninja - target ninja instead of GNU make"
-    echo "clangx.y - optional argument to build using clang version x.y."
-    echo "cross - optional argument to signify cross compilation,"
-    echo "      - will use ROOTFS_DIR environment variable if set."
-    echo "crosscomponent - optional argument to build cross-architecture component,"
-    echo "               - will use CAC_ROOTFS_DIR environment variable if set."
-    echo "pgoinstrument - generate instrumented code for profile guided optimization enabled binaries."
-    echo "configureonly - do not perform any builds; just configure the build."
-    echo "skipconfigure - skip build configuration."
-    echo "skipnative - do not build native components."
-    echo "skipmscorlib - do not build mscorlib.dll."
-    echo "skiptests - skip the tests in the 'tests' subdirectory."
-    echo "skipnuget - skip building nuget packages."
-    echo "skiprestoreoptdata - skip restoring optimization data used by profile-based optimizations."
-    echo "portableLinux - build for Portable Linux Distribution"
-    echo "verbose - optional argument to enable verbose build output."
+    echo "Usage: $0 [BuildArch] [BuildType] [-verbose] [-coverage] [-cross] [-clangx.y] [-ninja] [-configureonly] [-skipconfigure] [-skipnative] [-skipmscorlib] [-skiptests] [-stripsymbols] [-ignorewarnings] [-cmakeargs] [-bindir]"
+    echo "BuildArch can be: -x64, -x86, -arm, -armel, -arm64"
+    echo "BuildType can be: -debug, -checked, -release"
+    echo "-coverage - optional argument to enable code coverage build (currently supported only for Linux and OSX)."
+    echo "-ninja - target ninja instead of GNU make"
+    echo "-clangx.y - optional argument to build using clang version x.y."
+    echo "-cross - optional argument to signify cross compilation,"
+    echo "       - will use ROOTFS_DIR environment variable if set."
+    echo "-crosscomponent - optional argument to build cross-architecture component,"
+    echo "                - will use CAC_ROOTFS_DIR environment variable if set."
+    echo "-nopgooptimize - do not use profile guided optimizations."
+    echo "-pgoinstrument - generate instrumented code for profile guided optimization enabled binaries."
+    echo "-ibcinstrument - generate IBC-tuning-enabled native images when invoking crossgen."
+    echo "-configureonly - do not perform any builds; just configure the build."
+    echo "-skipconfigure - skip build configuration."
+    echo "-skipnative - do not build native components."
+    echo "-skipmscorlib - do not build mscorlib.dll."
+    echo "-skiptests - skip the tests in the 'tests' subdirectory."
+    echo "-skipnuget - skip building nuget packages."
+    echo "-skiprestoreoptdata - skip restoring optimization data used by profile-based optimizations."
+    echo "-skipcrossgen - skip native image generation"
+    echo "-verbose - optional argument to enable verbose build output."
     echo "-skiprestore: skip restoring packages ^(default: packages are restored during build^)."
-	echo "-disableoss: Disable Open Source Signing for System.Private.CoreLib."
-	echo "-sequential: force a non-parallel build ^(default is to build in parallel"
-	echo "   using all processors^)."
-	echo "-officialbuildid=^<ID^>: specify the official build ID to be used by this build."
-	echo "-Rebuild: passes /t:rebuild to the build projects."
-    echo "stripSymbols - Optional argument to strip native symbols during the build."
-    echo "skipgenerateversion - disable version generation even if MSBuild is supported."
-    echo "cmakeargs - user-settable additional arguments passed to CMake."
-    echo "bindir - output directory (defaults to $__ProjectRoot/bin)"
-    echo "buildstandalonegc - builds the GC in a standalone mode. Can't be used with \"cmakeargs\"."
-    echo "msbuildonunsupportedplatform - build managed binaries even if distro is not officially supported."
+    echo "-disableoss: Disable Open Source Signing for System.Private.CoreLib."
+    echo "-officialbuildid=^<ID^>: specify the official build ID to be used by this build."
+    echo "-Rebuild: passes /t:rebuild to the build projects."
+    echo "-stripSymbols - Optional argument to strip native symbols during the build."
+    echo "-skipgenerateversion - disable version generation even if MSBuild is supported."
+    echo "-ignorewarnings - do not treat warnings as errors"
+    echo "-cmakeargs - user-settable additional arguments passed to CMake."
+    echo "-bindir - output directory (defaults to $__ProjectRoot/bin)"
+    echo "-msbuildonunsupportedplatform - build managed binaries even if distro is not officially supported."
+    echo "-numproc - set the number of build processes."
     exit 1
 }
 
 initHostDistroRid()
 {
+    __HostDistroRid=""
     if [ "$__HostOS" == "Linux" ]; then
-        if [ ! -e /etc/os-release ]; then
-            echo "WARNING: Can not determine runtime id for current distro."
-            __HostDistroRid=""
-        else
+        if [ -e /etc/os-release ]; then
             source /etc/os-release
+            if [[ $ID == "alpine" || $ID == "rhel" ]]; then
+                # remove the last version digit
+                VERSION_ID=${VERSION_ID%.*}
+            fi
             __HostDistroRid="$ID.$VERSION_ID-$__HostArch"
+        elif [ -e /etc/redhat-release ]; then
+            local redhatRelease=$(</etc/redhat-release)
+            if [[ $redhatRelease == "CentOS release 6."* || $redhatRelease == "Red Hat Enterprise Linux Server release 6."* ]]; then
+               __HostDistroRid="rhel.6-$__HostArch"
+            fi
         fi
+    fi
+    if [ "$__HostOS" == "FreeBSD" ]; then
+        __freebsd_version=`sysctl -n kern.osrelease | cut -f1 -d'.'`
+        __HostDistroRid="freebsd.$__freebsd_version-$__HostArch"
+    fi
+
+    if [ "$__HostDistroRid" == "" ]; then
+        echo "WARNING: Can not determine runtime id for current distro."
     fi
 }
 
@@ -72,8 +88,13 @@ initTargetDistroRid()
     if [ $__CrossBuild == 1 ]; then
         if [ "$__BuildOS" == "Linux" ]; then
             if [ ! -e $ROOTFS_DIR/etc/os-release ]; then
-                echo "WARNING: Can not determine runtime id for current distro."
-                export __DistroRid=""
+                if [ -e $ROOTFS_DIR/android_platform ]; then
+                    source $ROOTFS_DIR/android_platform
+                    export __DistroRid="$RID"
+                else
+                    echo "WARNING: Can not determine runtime id for current distro."
+                    export __DistroRid=""
+                fi
             else
                 source $ROOTFS_DIR/etc/os-release
                 export __DistroRid="$ID.$VERSION_ID-$__BuildArch"
@@ -83,9 +104,19 @@ initTargetDistroRid()
         export __DistroRid="$__HostDistroRid"
     fi
 
-    # Portable builds target the base RID only for Linux based platforms
-    if [ $__PortableLinux == 1 ]; then
-        export __DistroRid="linux-$__BuildArch"
+    if [ "$__BuildOS" == "OSX" ]; then
+        __PortableBuild=1
+    fi
+
+    # Portable builds target the base RID
+    if [ $__PortableBuild == 1 ]; then
+        if [ "$__BuildOS" == "Linux" ]; then
+            export __DistroRid="linux-$__BuildArch"
+        elif [ "$__BuildOS" == "OSX" ]; then
+            export __DistroRid="osx-$__BuildArch"
+        elif [ "$__BuildOS" == "FreeBSD" ]; then
+            export __DistroRid="freebsd-$__BuildArch"
+        fi
     fi
 }
 
@@ -113,6 +144,14 @@ check_prereqs()
     # Check presence of CMake on the path
     hash cmake 2>/dev/null || { echo >&2 "Please install cmake before running this script"; exit 1; }
 
+
+    # Minimum required version of clang is version 3.9 for arm/armel cross build
+    if [[ $__CrossBuild == 1 && ("$__BuildArch" == "arm" || "$__BuildArch" == "armel") ]]; then
+        if ! [[ "$__ClangMajorVersion" -gt "3" || ( $__ClangMajorVersion == 3 && $__ClangMinorVersion == 9 ) ]]; then
+            echo "Please install clang3.9 or latest for arm/armel cross build"; exit 1;
+        fi
+    fi
+
     # Check for clang
     hash clang-$__ClangMajorVersion.$__ClangMinorVersion 2>/dev/null ||  hash clang$__ClangMajorVersion$__ClangMinorVersion 2>/dev/null ||  hash clang 2>/dev/null || { echo >&2 "Please install clang-$__ClangMajorVersion.$__ClangMinorVersion before running this script"; exit 1; }
 
@@ -120,15 +159,31 @@ check_prereqs()
 
 restore_optdata()
 {
-    # if msbuild is not supported, then set __SkipRestoreOptData to 1
-    if [ $__isMSBuildOnNETCoreSupported == 0 ]; then __SkipRestoreOptData=1; fi
-    if [ $__SkipRestoreOptData == 0 ]; then
+    # we only need optdata on a Release build
+    if [[ "$__BuildType" != "Release" ]]; then __SkipRestoreOptData=1; fi
+
+    if [[ ( $__SkipRestoreOptData == 0 ) && ( $__isMSBuildOnNETCoreSupported == 1 ) ]]; then
         echo "Restoring the OptimizationData package"
         "$__ProjectRoot/run.sh" sync -optdata
         if [ $? != 0 ]; then
             echo "Failed to restore the optimization data package."
             exit 1
         fi
+    fi
+
+    if [ $__isMSBuildOnNETCoreSupported == 1 ]; then
+        # Parse the optdata package versions out of msbuild so that we can pass them on to CMake
+        local DotNetCli="$__ProjectRoot/Tools/dotnetcli/dotnet"
+        if [ ! -f $DotNetCli ]; then
+            source "$__ProjectRoot/init-tools.sh"
+            if [ $? != 0 ]; then
+                echo "Failed to restore buildtools."
+                exit 1
+            fi
+        fi
+        local OptDataProjectFilePath="$__ProjectRoot/src/.nuget/optdata/optdata.csproj"
+        __PgoOptDataVersion=$(DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 $DotNetCli msbuild $OptDataProjectFilePath /t:DumpPgoDataPackageVersion /nologo | sed 's/^\s*//')
+        __IbcOptDataVersion=$(DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 $DotNetCli msbuild $OptDataProjectFilePath /t:DumpIbcDataPackageVersion /nologo | sed 's/^\s*//')
     fi
 }
 
@@ -139,47 +194,50 @@ generate_event_logging_sources()
     fi
 
 # Event Logging Infrastructure
-   __GeneratedIntermediate="$__IntermediatesDir/Generated"
-   __GeneratedIntermediateEventProvider="$__GeneratedIntermediate/eventprovider_new"
-    if [[ -d "$__GeneratedIntermediateEventProvider" ]]; then
-        rm -rf  "$__GeneratedIntermediateEventProvider"
+    __GeneratedIntermediate="$__IntermediatesDir/eventing"
+    __GeneratedIntermediateEventProvider="$__GeneratedIntermediate/eventprovider"
+    __GeneratedIntermediateEventPipe="$__GeneratedIntermediate/eventpipe"
+
+    __PythonWarningFlags="-Wall"
+    if [[ $__IgnoreWarnings == 0 ]]; then
+        __PythonWarningFlags="$__PythonWarningFlags -Werror"
     fi
 
-    if [[ ! -d "$__GeneratedIntermediate/eventprovider" ]]; then
-        mkdir -p "$__GeneratedIntermediate/eventprovider"
-    fi
 
-    mkdir -p "$__GeneratedIntermediateEventProvider"
     if [[ $__SkipCoreCLR == 0 || $__ConfigureOnly == 1 ]]; then
         echo "Laying out dynamically generated files consumed by the build system "
-        echo "Laying out dynamically generated Event Logging Test files"
-        $PYTHON -B -Wall -Werror "$__ProjectRoot/src/scripts/genXplatEventing.py" --man "$__ProjectRoot/src/vm/ClrEtwAll.man" --exc "$__ProjectRoot/src/vm/ClrEtwAllMeta.lst" --testdir "$__GeneratedIntermediateEventProvider/tests"
+        echo "Laying out dynamically generated Event test files, etmdummy stub functions, and external linkages"
+        $PYTHON -B $__PythonWarningFlags "$__ProjectRoot/src/scripts/genEventing.py" --inc $__IntermediatesDir/src/inc --dummy $__IntermediatesDir/src/inc/etmdummy.h --man "$__ProjectRoot/src/vm/ClrEtwAll.man" --testdir "$__GeneratedIntermediateEventProvider/tests"
 
         if  [[ $? != 0 ]]; then
             exit
         fi
 
+        echo "Laying out dynamically generated EventPipe Implementation"
+        $PYTHON -B $__PythonWarningFlags "$__ProjectRoot/src/scripts/genEventPipe.py" --man "$__ProjectRoot/src/vm/ClrEtwAll.man" --intermediate "$__GeneratedIntermediateEventPipe"
+
         #determine the logging system
         case $__BuildOS in
-            Linux)
+            Linux|FreeBSD)
                 echo "Laying out dynamically generated Event Logging Implementation of Lttng"
-                $PYTHON -B -Wall -Werror "$__ProjectRoot/src/scripts/genXplatLttng.py" --man "$__ProjectRoot/src/vm/ClrEtwAll.man" --intermediate "$__GeneratedIntermediateEventProvider"
+                $PYTHON -B $__PythonWarningFlags "$__ProjectRoot/src/scripts/genLttngProvider.py" --man "$__ProjectRoot/src/vm/ClrEtwAll.man" --intermediate "$__GeneratedIntermediateEventProvider"
                 if  [[ $? != 0 ]]; then
                     exit
                 fi
                 ;;
             *)
+                echo "Laying out dummy event logging provider"
+                $PYTHON -B $__PythonWarningFlags "$__ProjectRoot/src/scripts/genDummyProvider.py" --man "$__ProjectRoot/src/vm/ClrEtwAll.man" --intermediate "$__GeneratedIntermediateEventProvider"
+                if  [[ $? != 0 ]]; then
+                    exit
+                fi
                 ;;
         esac
-    fi
 
-    echo "Cleaning the temp folder of dynamically generated Event Logging files"
-    $PYTHON -B -Wall -Werror -c "import sys;sys.path.insert(0,\"$__ProjectRoot/src/scripts\"); from Utilities import *;UpdateDirectory(\"$__GeneratedIntermediate/eventprovider\",\"$__GeneratedIntermediateEventProvider\")"
-    if  [[ $? != 0 ]]; then
-        exit
+        if [[ $__CrossBuild == 1 ]]; then
+            cp -r $__GeneratedIntermediate $__CrossCompIntermediatesDir
+        fi
     fi
-
-    rm -rf "$__GeneratedIntermediateEventProvider"
 }
 
 build_native()
@@ -241,17 +299,6 @@ build_native()
         echo "Failed to generate $message build project!"
         exit 1
     fi
-    
-    # Get the number of processors available to the scheduler
-    # Other techniques such as `nproc` only get the number of
-    # processors available to a single process.
-    if [ `uname` = "FreeBSD" ]; then
-        NumProc=`sysctl hw.ncpu | awk '{ print $2+1 }'`
-    elif [ `uname` = "NetBSD" ]; then
-        NumProc=$(($(getconf NPROCESSORS_ONLN)+1))
-    else
-        NumProc=$(($(getconf _NPROCESSORS_ONLN)+1))
-    fi
 
     # Build
     if [ $__ConfigureOnly == 1 ]; then
@@ -262,9 +309,9 @@ build_native()
     # Check that the makefiles were created.
     pushd "$intermediatesForBuild"
 
-    echo "Executing $buildTool install -j $NumProc"
+    echo "Executing $buildTool install -j $__NumProc"
 
-    $buildTool install -j $NumProc
+    $buildTool install -j $__NumProc
     if [ $? != 0 ]; then
         echo "Failed to build $message."
         exit 1
@@ -278,7 +325,7 @@ build_cross_arch_component()
     __SkipCrossArchBuild=1
     TARGET_ROOTFS=""
     # check supported cross-architecture components host(__HostArch)/target(__BuildArch) pair
-    if [[ "$__BuildArch" == "arm" && "$__CrossArch" == "x86" ]]; then
+    if [[ ("$__BuildArch" == "arm" || "$__BuildArch" == "armel") && "$__CrossArch" == "x86" ]]; then
         export CROSSCOMPILE=0
         __SkipCrossArchBuild=0
 
@@ -289,8 +336,8 @@ build_cross_arch_component()
     else
         # not supported
         return
-    fi    
-    
+    fi
+
     export __CMakeBinDir="$__CrossComponentBinDir"
     export CROSSCOMPONENT=1
     __IncludeTests=
@@ -304,10 +351,10 @@ build_cross_arch_component()
         fi
     fi
 
-    __ExtraCmakeArgs="-DCLR_CMAKE_TARGET_ARCH=$__BuildArch -DCLR_CMAKE_TARGET_OS=$__BuildOS -DCLR_CMAKE_PACKAGES_DIR=$__PackagesDir -DCLR_CMAKE_PGO_INSTRUMENT=$__PgoInstrument -DCLR_CMAKE_OPTDATA_VERSION=$__OptDataVersion"
+    __ExtraCmakeArgs="-DCLR_CMAKE_TARGET_ARCH=$__BuildArch -DCLR_CMAKE_TARGET_OS=$__BuildOS -DCLR_CMAKE_PACKAGES_DIR=$__PackagesDir -DCLR_CMAKE_PGO_INSTRUMENT=$__PgoInstrument -DCLR_CMAKE_OPTDATA_VERSION=$__PgoOptDataVersion -DCLR_CMAKE_PGO_OPTIMIZE=$__PgoOptimize"
     build_native $__SkipCrossArchBuild "$__CrossArch" "$__CrossCompIntermediatesDir" "$__ExtraCmakeArgs" "cross-architecture component"
-   
-    # restore ROOTFS_DIR, CROSSCOMPONENT, and CROSSCOMPILE 
+
+    # restore ROOTFS_DIR, CROSSCOMPONENT, and CROSSCOMPILE
     if [ -n "$TARGET_ROOTFS" ]; then
         export ROOTFS_DIR="$TARGET_ROOTFS"
     fi
@@ -317,71 +364,50 @@ build_cross_arch_component()
 
 isMSBuildOnNETCoreSupported()
 {
-    # This needs to be updated alongwith corresponding changes to netci.groovy.
-    __isMSBuildOnNETCoreSupported=0
+    __isMSBuildOnNETCoreSupported=$__msbuildonunsupportedplatform
+
+    if [ $__isMSBuildOnNETCoreSupported == 1 ]; then
+        return
+    fi
 
     if [ "$__HostArch" == "x64" ]; then
         if [ "$__HostOS" == "Linux" ]; then
-            case "$__HostDistroRid" in
-                "centos.7-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "debian.8-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "fedora.23-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "fedora.24-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "opensuse.42.1-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "rhel.7"*"-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "ubuntu.14.04-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "ubuntu.16.04-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "ubuntu.16.10-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                "alpine.3.4.3-x64")
-                    __isMSBuildOnNETCoreSupported=1
-                    ;;
-                *)
-                __isMSBuildOnNETCoreSupported=$__msbuildonunsupportedplatform
-            esac
+            __isMSBuildOnNETCoreSupported=1
+            # note: the RIDs below can use globbing patterns
+            UNSUPPORTED_RIDS=("debian.9-x64" "ubuntu.17.04-x64")
+            for UNSUPPORTED_RID in "${UNSUPPORTED_RIDS[@]}"
+            do
+                if [[ $__HostDistroRid == $UNSUPPORTED_RID ]]; then
+                    __isMSBuildOnNETCoreSupported=0
+                    break
+                fi
+            done
         elif [ "$__HostOS" == "OSX" ]; then
             __isMSBuildOnNETCoreSupported=1
         fi
     fi
 }
 
+
 build_CoreLib_ni()
 {
+    if [ $__SkipCrossgen == 1 ]; then
+        echo "Skipping generating native image"
+        return
+    fi
+
     if [ $__SkipCoreCLR == 0 -a -e $__BinDir/crossgen ]; then
         echo "Generating native image for System.Private.CoreLib."
-        $__BinDir/crossgen $__BinDir/System.Private.CoreLib.dll
+        echo "$__BinDir/crossgen /Platform_Assemblies_Paths $__BinDir/IL $__IbcTuning /out $__BinDir/System.Private.CoreLib.dll $__BinDir/IL/System.Private.CoreLib.dll"
+        $__BinDir/crossgen /Platform_Assemblies_Paths $__BinDir/IL $__IbcTuning /out $__BinDir/System.Private.CoreLib.dll $__BinDir/IL/System.Private.CoreLib.dll
         if [ $? -ne 0 ]; then
             echo "Failed to generate native image for System.Private.CoreLib."
             exit 1
         fi
 
-        echo "Generating native image for MScorlib Facade."
-        $__BinDir/crossgen $__BinDir/mscorlib.dll
-        if [ $? -ne 0 ]; then
-            echo "Failed to generate native image for mscorlib facade."
-            exit 1
-        fi
-
         if [ "$__BuildOS" == "Linux" ]; then
             echo "Generating symbol file for System.Private.CoreLib."
-            $__BinDir/crossgen /CreatePerfMap $__BinDir $__BinDir/System.Private.CoreLib.ni.dll
+            $__BinDir/crossgen /CreatePerfMap $__BinDir $__BinDir/System.Private.CoreLib.dll
             if [ $? -ne 0 ]; then
                 echo "Failed to generate symbol file for System.Private.CoreLib."
                 exit 1
@@ -406,7 +432,12 @@ build_CoreLib()
     echo "Commencing build of managed components for $__BuildOS.$__BuildArch.$__BuildType"
 
     # Invoke MSBuild
-    $__ProjectRoot/run.sh build -Project=$__ProjectDir/build.proj -MsBuildLog="/flp:Verbosity=normal;LogFile=$__LogsDir/System.Private.CoreLib_$__BuildOS__$__BuildArch__$__BuildType.log" -BuildTarget -__IntermediatesDir=$__IntermediatesDir -__RootBinDir=$__RootBinDir -BuildNugetPackage=false -UseSharedCompilation=false $__RunArgs $__UnprocessedBuildArgs
+    __ExtraBuildArgs=""
+    if [[ "$__IbcTuning" -eq "" ]]; then
+        __ExtraBuildArgs="$__ExtraBuildArgs -OptimizationDataDir=\"$__PackagesDir/optimization.$__BuildOS-$__BuildArch.IBC.CoreCLR/$__IbcOptDataVersion/data/\""
+        __ExtraBuildArgs="$__ExtraBuildArgs -EnableProfileGuidedOptimization=true"
+    fi
+    $__ProjectRoot/run.sh build -Project=$__ProjectDir/build.proj -MsBuildLog="/flp:Verbosity=normal;LogFile=$__LogsDir/System.Private.CoreLib_$__BuildOS__$__BuildArch__$__BuildType.log" -BuildTarget -__IntermediatesDir=$__IntermediatesDir -__RootBinDir=$__RootBinDir -BuildNugetPackage=false -UseSharedCompilation=false $__RunArgs $__ExtraBuildArgs $__UnprocessedBuildArgs
 
     if [ $? -ne 0 ]; then
         echo "Failed to build managed components."
@@ -422,10 +453,10 @@ build_CoreLib()
            build_CoreLib_ni
        elif [[ ( "$__HostArch" == "arm64" ) && ( "$__BuildArch" == "arm" ) ]]; then
            build_CoreLib_ni
-       else 
+       else
            exit 1
        fi
-    fi 
+    fi
 }
 
 generate_NugetPackages()
@@ -443,7 +474,8 @@ generate_NugetPackages()
     fi
 
     echo "Generating nuget packages for "$__BuildOS
-
+    echo "DistroRid is "$__DistroRid
+    echo "ROOTFS_DIR is "$ROOTFS_DIR
     # Build the packages
     $__ProjectRoot/run.sh build -Project=$__SourceDir/.nuget/packages.builds -MsBuildLog="/flp:Verbosity=normal;LogFile=$__LogsDir/Nuget_$__BuildOS__$__BuildArch__$__BuildType.log" -BuildTarget -__IntermediatesDir=$__IntermediatesDir -__RootBinDir=$__RootBinDir -BuildNugetPackage=false -UseSharedCompilation=false $__RunArgs $__UnprocessedBuildArgs
 
@@ -495,6 +527,10 @@ case $CPUName in
         __HostArch=arm64
         ;;
 
+    amd64)
+        __BuildArch=x64
+        __HostArch=x64
+        ;;
     *)
         echo "Unknown CPU $CPUName detected, configuring as if for x64"
         __BuildArch=x64
@@ -545,11 +581,12 @@ esac
 __BuildType=Debug
 __CodeCoverage=
 __IncludeTests=Include_Tests
+__IgnoreWarnings=0
 
 # Set the various build properties here so that CMake and MSBuild can pick them up
 __ProjectDir="$__ProjectRoot"
 __SourceDir="$__ProjectDir/src"
-__PackagesDir="$__ProjectDir/packages"
+__PackagesDir="${DotNetRestorePackagesPath:-${__ProjectDir}/packages}"
 __RootBinDir="$__ProjectDir/bin"
 __UnprocessedBuildArgs=
 __RunArgs=
@@ -557,6 +594,8 @@ __MSBCleanBuildArgs=
 __UseNinja=0
 __VerboseBuild=0
 __PgoInstrument=0
+__PgoOptimize=1
+__IbcTuning=""
 __ConfigureOnly=0
 __SkipConfigure=0
 __SkipRestore=""
@@ -564,6 +603,7 @@ __SkipNuget=0
 __SkipCoreCLR=0
 __SkipMSCorLib=0
 __SkipRestoreOptData=0
+__SkipCrossgen=0
 __CrossBuild=0
 __ClangMajorVersion=0
 __ClangMinorVersion=0
@@ -573,9 +613,23 @@ __DistroRid=""
 __cmakeargs=""
 __SkipGenerateVersion=0
 __DoCrossArchBuild=0
-__PortableLinux=0
+__PortableBuild=1
 __msbuildonunsupportedplatform=0
-__OptDataVersion=""
+__PgoOptDataVersion=""
+__IbcOptDataVersion=""
+
+# Get the number of processors available to the scheduler
+# Other techniques such as `nproc` only get the number of
+# processors available to a single process.
+if [ `uname` = "FreeBSD" ]; then
+  __NumProc=`sysctl hw.ncpu | awk '{ print $2+1 }'`
+elif [ `uname` = "NetBSD" ]; then
+  __NumProc=$(($(getconf NPROCESSORS_ONLN)+1))
+elif [ `uname` = "Darwin" ]; then
+  __NumProc=$(($(getconf _NPROCESSORS_ONLN)+1))
+else
+  __NumProc=$(nproc --all)
+fi
 
 while :; do
     if [ $# -le 0 ]; then
@@ -589,146 +643,164 @@ while :; do
             exit 1
             ;;
 
-        x86)
+        x86|-x86)
             __BuildArch=x86
             ;;
 
-        x64)
+        x64|-x64)
             __BuildArch=x64
             ;;
 
-        arm)
+        arm|-arm)
             __BuildArch=arm
             ;;
 
-        armel)
+        armel|-armel)
             __BuildArch=armel
             ;;
 
-        arm64)
+        arm64|-arm64)
             __BuildArch=arm64
             ;;
 
-        debug)
+        debug|-debug)
             __BuildType=Debug
             ;;
 
-        checked)
+        checked|-checked)
             __BuildType=Checked
             ;;
 
-        release)
+        release|-release)
             __BuildType=Release
             ;;
 
-        coverage)
+        coverage|-coverage)
             __CodeCoverage=Coverage
             ;;
 
-        cross)
+        cross|-cross)
             __CrossBuild=1
             ;;
-            
-        portablelinux)
-            if [ "$__BuildOS" == "Linux" ]; then
-                __PortableLinux=1
-            else
-                echo "ERROR: portableLinux not supported for non-Linux platforms."
-                exit 1
-            fi
+
+        -portablebuild=false)
+            __PortableBuild=0
             ;;
-            
-        verbose)
+
+        verbose|-verbose)
             __VerboseBuild=1
             ;;
 
-        stripsymbols)
+        stripsymbols|-stripsymbols)
             __cmakeargs="$__cmakeargs -DSTRIP_SYMBOLS=true"
             ;;
 
-        clang3.5)
+        clang3.5|-clang3.5)
             __ClangMajorVersion=3
             __ClangMinorVersion=5
             ;;
 
-        clang3.6)
+        clang3.6|-clang3.6)
             __ClangMajorVersion=3
             __ClangMinorVersion=6
             ;;
 
-        clang3.7)
+        clang3.7|-clang3.7)
             __ClangMajorVersion=3
             __ClangMinorVersion=7
             ;;
 
-        clang3.8)
+        clang3.8|-clang3.8)
             __ClangMajorVersion=3
             __ClangMinorVersion=8
             ;;
 
-        clang3.9)
+        clang3.9|-clang3.9)
             __ClangMajorVersion=3
             __ClangMinorVersion=9
             ;;
 
-        ninja)
+        clang4.0|-clang4.0)
+            __ClangMajorVersion=4
+            __ClangMinorVersion=0
+            ;;
+
+        ninja|-ninja)
             __UseNinja=1
             ;;
 
-        pgoinstrument)
+        pgoinstrument|-pgoinstrument)
             __PgoInstrument=1
             ;;
 
-        configureonly)
+        nopgooptimize|-nopgooptimize)
+            __PgoOptimize=0
+            __SkipRestoreOptData=1
+            ;;
+
+        ibcinstrument|-ibcinstrument)
+            __IbcTuning="/Tuning"
+            ;;
+
+        configureonly|-configureonly)
             __ConfigureOnly=1
             __SkipMSCorLib=1
             __SkipNuget=1
             ;;
 
-        skipconfigure)
+        skipconfigure|-skipconfigure)
             __SkipConfigure=1
             ;;
 
-        skipnative)
+        skipnative|-skipnative)
             # Use "skipnative" to use the same option name as build.cmd.
             __SkipCoreCLR=1
             ;;
 
-        skipcoreclr)
+        skipcoreclr|-skipcoreclr)
             # Accept "skipcoreclr" for backwards-compatibility.
             __SkipCoreCLR=1
             ;;
 
-        crosscomponent)
+        crosscomponent|-crosscomponent)
             __DoCrossArchBuild=1
             ;;
 
-        skipmscorlib)
+        skipmscorlib|-skipmscorlib)
             __SkipMSCorLib=1
             ;;
 
-        skipgenerateversion)
+        skipgenerateversion|-skipgenerateversion)
             __SkipGenerateVersion=1
             ;;
 
-        skiprestoreoptdata)
+        skiprestoreoptdata|-skiprestoreoptdata)
             __SkipRestoreOptData=1
             ;;
 
-        includetests)
+        skipcrossgen|-skipcrossgen)
+            __SkipCrossgen=1
             ;;
 
-        skiptests)
+        includetests|-includetests)
+            ;;
+
+        skiptests|-skiptests)
             __IncludeTests=
             ;;
 
-        skipnuget)
+        skipnuget|-skipnuget)
             __SkipNuget=1
             ;;
 
-        cmakeargs)
+        ignorewarnings|-ignorewarnings)
+            __IgnoreWarnings=1
+            __cmakeargs="$__cmakeargs -DCLR_CMAKE_WARNINGS_ARE_ERRORS=OFF"
+            ;;
+
+        cmakeargs|-cmakeargs)
             if [ -n "$2" ]; then
-                __cmakeargs="$2"
+                __cmakeargs="$__cmakeargs $2"
                 shift
             else
                 echo "ERROR: 'cmakeargs' requires a non-empty option argument"
@@ -736,7 +808,7 @@ while :; do
             fi
             ;;
 
-        bindir)
+        bindir|-bindir)
             if [ -n "$2" ]; then
                 __RootBinDir="$2"
                 if [ ! -d $__RootBinDir ]; then
@@ -751,12 +823,28 @@ while :; do
                 exit 1
             fi
             ;;
-        buildstandalonegc)
-            __cmakeargs="-DFEATURE_STANDALONE_GC=1"
-            ;;
-        msbuildonunsupportedplatform)
+        msbuildonunsupportedplatform|-msbuildonunsupportedplatform)
             __msbuildonunsupportedplatform=1
             ;;
+        numproc|-numproc)
+            if [ -n "$2" ]; then
+              __NumProc="$2"
+              shift
+            else
+              echo "ERROR: 'numproc' requires a non-empty option argument"
+              exit 1
+            fi
+            ;;
+        osgroup|-osgroup)
+            if [ -n "$2" ]; then
+              __BuildOS="$2"
+              shift
+            else
+              echo "ERROR: 'osgroup' requires a non-empty option argument"
+              exit 1
+            fi
+            ;;
+
         *)
             __UnprocessedBuildArgs="$__UnprocessedBuildArgs $1"
             ;;
@@ -775,13 +863,17 @@ fi
 
 # Set default clang version
 if [[ $__ClangMajorVersion == 0 && $__ClangMinorVersion == 0 ]]; then
-    if [ $__CrossBuild == 1 ]; then
-        __ClangMajorVersion=3
-        __ClangMinorVersion=6
-    else
-        __ClangMajorVersion=3
-        __ClangMinorVersion=5
-    fi
+    __ClangMajorVersion=3
+    __ClangMinorVersion=9
+fi
+
+if [[ "$__BuildArch" == "armel" ]]; then
+    # Armel cross build is Tizen specific and does not support Portable RID build
+    __PortableBuild=0
+fi
+
+if [ $__PortableBuild == 0 ]; then
+	__RunArgs="$__RunArgs -PortableBuild=false"
 fi
 
 # Set dependent variables
@@ -802,7 +894,7 @@ __CrossComponentBinDir="$__BinDir"
 __CrossCompIntermediatesDir="$__IntermediatesDir/crossgen"
 
 __CrossArch="$__HostArch"
-if [[ "$__HostArch" == "x64" && "$__BuildArch" == "arm" ]]; then
+if [[ "$__HostArch" == "x64" && ("$__BuildArch" == "arm" || "$__BuildArch" == "armel") ]]; then
     __CrossArch="x86"
 fi
 if [ $__CrossBuild == 1 ]; then
@@ -836,12 +928,6 @@ if [ $__CrossBuild == 1 ]; then
     fi
 fi
 
-# Parse the optdata package version from its project.json file
-optDataProjectJsonPath="$__ProjectRoot/src/.nuget/optdata/project.json"
-if [ -f $optDataProjectJsonPath ]; then
-    __OptDataVersion=$("$__ProjectRoot/extract-from-json.py" -rf $optDataProjectJsonPath dependencies optimization.PGO.CoreCLR)
-fi
-
 # init the target distro name
 initTargetDistroRid
 
@@ -858,7 +944,7 @@ restore_optdata
 generate_event_logging_sources
 
 # Build the coreclr (native) components.
-__ExtraCmakeArgs="-DCLR_CMAKE_TARGET_OS=$__BuildOS -DCLR_CMAKE_PACKAGES_DIR=$__PackagesDir -DCLR_CMAKE_PGO_INSTRUMENT=$__PgoInstrument -DCLR_CMAKE_OPTDATA_VERSION=$__OptDataVersion"
+__ExtraCmakeArgs="-DCLR_CMAKE_TARGET_OS=$__BuildOS -DCLR_CMAKE_PACKAGES_DIR=$__PackagesDir -DCLR_CMAKE_PGO_INSTRUMENT=$__PgoInstrument -DCLR_CMAKE_OPTDATA_VERSION=$__PgoOptDataVersion -DCLR_CMAKE_PGO_OPTIMIZE=$__PgoOptimize"
 build_native $__SkipCoreCLR "$__BuildArch" "$__IntermediatesDir" "$__ExtraCmakeArgs" "CoreCLR component"
 
 # Build cross-architecture components

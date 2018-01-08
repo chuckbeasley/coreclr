@@ -105,10 +105,12 @@ public:
     RegTracker regTracker;
 
 public:
+#ifdef LEGACY_BACKEND
     void trashReg(regNumber reg)
     {
         regTracker.rsTrackRegTrash(reg);
     }
+#endif
 
 protected:
     Compiler* compiler;
@@ -148,8 +150,6 @@ protected:
     regMaskTP genLiveMask(GenTreePtr tree);
     regMaskTP genLiveMask(VARSET_VALARG_TP liveSet);
 #endif
-
-    void genGetRegPairFromMask(regMaskTP regPairMask, regNumber* pLoReg, regNumber* pHiReg);
 
     // The following property indicates whether the current method sets up
     // an explicit stack frame or not.

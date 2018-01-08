@@ -27,7 +27,7 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #include "blockset.h"
 #include "jitstd.h"
 #include "bitvec.h"
-#include "simplerhash.h"
+#include "jithashtable.h"
 
 /*****************************************************************************/
 typedef BitVec EXPSET_TP;
@@ -47,26 +47,26 @@ typedef BitVec_ValRet_T ASSERT_VALRET_TP;
  *  of the following enumeration.
  */
 
-DECLARE_TYPED_ENUM(BBjumpKinds, BYTE)
+// clang-format off
+
+enum BBjumpKinds : BYTE
 {
-    BBJ_EHFINALLYRET,    // block ends with 'endfinally' (for finally or fault)
-        BBJ_EHFILTERRET, // block ends with 'endfilter'
-        BBJ_EHCATCHRET,  // block ends with a leave out of a catch (only #if FEATURE_EH_FUNCLETS)
-        BBJ_THROW,       // block ends with 'throw'
-        BBJ_RETURN,      // block ends with 'ret'
+    BBJ_EHFINALLYRET,// block ends with 'endfinally' (for finally or fault)
+    BBJ_EHFILTERRET, // block ends with 'endfilter'
+    BBJ_EHCATCHRET,  // block ends with a leave out of a catch (only #if FEATURE_EH_FUNCLETS)
+    BBJ_THROW,       // block ends with 'throw'
+    BBJ_RETURN,      // block ends with 'ret'
+    BBJ_NONE,        // block flows into the next one (no jump)
+    BBJ_ALWAYS,      // block always jumps to the target
+    BBJ_LEAVE,       // block always jumps to the target, maybe out of guarded region. Only used until importing.
+    BBJ_CALLFINALLY, // block always calls the target finally
+    BBJ_COND,        // block conditionally jumps to the target
+    BBJ_SWITCH,      // block ends with a switch statement
 
-        BBJ_NONE, // block flows into the next one (no jump)
+    BBJ_COUNT
+};
 
-        BBJ_ALWAYS,      // block always jumps to the target
-        BBJ_LEAVE,       // block always jumps to the target, maybe out of guarded
-                         // region. Used temporarily until importing
-        BBJ_CALLFINALLY, // block always calls the target finally
-        BBJ_COND,        // block conditionally jumps to the target
-        BBJ_SWITCH,      // block ends with a switch statement
-
-        BBJ_COUNT
-}
-END_DECLARE_TYPED_ENUM(BBjumpKinds, BYTE)
+// clang-format on
 
 struct GenTree;
 struct GenTreeStmt;
@@ -138,10 +138,9 @@ enum ThisInitState
 
 struct EntryState
 {
-    ThisInitState thisInitialized : 8; // used to track whether the this ptr is initialized (we could use
-                                       // fewer bits here)
-    unsigned    esStackDepth : 24;     // size of esStack
-    StackEntry* esStack;               // ptr to  stack
+    ThisInitState thisInitialized; // used to track whether the this ptr is initialized.
+    unsigned      esStackDepth;    // size of esStack
+    StackEntry*   esStack;         // ptr to  stack
 };
 
 // Enumeration of the kinds of memory whose state changes the compiler tracks
@@ -377,66 +376,81 @@ struct BasicBlock : private LIR::Range
     unsigned bbRefs; // number of blocks that can reach here, either by fall-through or a branch. If this falls to zero,
                      // the block is unreachable.
 
-#define BBF_VISITED 0x00000001 // BB visited during optimizations
-#define BBF_MARKED 0x00000002  // BB marked  during optimizations
-#define BBF_CHANGED 0x00000004 // input/output of this block has changed
-#define BBF_REMOVED 0x00000008 // BB has been removed from bb-list
+// clang-format off
 
-#define BBF_DONT_REMOVE 0x00000010         // BB should not be removed during flow graph optimizations
-#define BBF_IMPORTED 0x00000020            // BB byte-code has been imported
-#define BBF_INTERNAL 0x00000040            // BB has been added by the compiler
+#define BBF_VISITED             0x00000001 // BB visited during optimizations
+#define BBF_MARKED              0x00000002 // BB marked  during optimizations
+#define BBF_CHANGED             0x00000004 // input/output of this block has changed
+#define BBF_REMOVED             0x00000008 // BB has been removed from bb-list
+
+#define BBF_DONT_REMOVE         0x00000010 // BB should not be removed during flow graph optimizations
+#define BBF_IMPORTED            0x00000020 // BB byte-code has been imported
+#define BBF_INTERNAL            0x00000040 // BB has been added by the compiler
 #define BBF_FAILED_VERIFICATION 0x00000080 // BB has verification exception
 
-#define BBF_TRY_BEG 0x00000100       // BB starts a 'try' block
-#define BBF_FUNCLET_BEG 0x00000200   // BB is the beginning of a funclet
-#define BBF_HAS_NULLCHECK 0x00000400 // BB contains a null check
-#define BBF_NEEDS_GCPOLL 0x00000800  // This BB is the source of a back edge and needs a GC Poll
+#define BBF_TRY_BEG             0x00000100 // BB starts a 'try' block
+#define BBF_FUNCLET_BEG         0x00000200 // BB is the beginning of a funclet
+#define BBF_HAS_NULLCHECK       0x00000400 // BB contains a null check
+#define BBF_NEEDS_GCPOLL        0x00000800 // This BB is the source of a back edge and needs a GC Poll
 
-#define BBF_RUN_RARELY 0x00001000 // BB is rarely run (catch clauses, blocks with throws etc)
-#define BBF_LOOP_HEAD 0x00002000  // BB is the head of a loop
-#define BBF_LOOP_CALL0 0x00004000 // BB starts a loop that sometimes won't call
-#define BBF_LOOP_CALL1 0x00008000 // BB starts a loop that will always     call
+#define BBF_RUN_RARELY          0x00001000 // BB is rarely run (catch clauses, blocks with throws etc)
+#define BBF_LOOP_HEAD           0x00002000 // BB is the head of a loop
+#define BBF_LOOP_CALL0          0x00004000 // BB starts a loop that sometimes won't call
+#define BBF_LOOP_CALL1          0x00008000 // BB starts a loop that will always     call
 
-#define BBF_HAS_LABEL 0x00010000     // BB needs a label
-#define BBF_JMP_TARGET 0x00020000    // BB is a target of an implicit/explicit jump
-#define BBF_HAS_JMP 0x00040000       // BB executes a JMP instruction (instead of return)
-#define BBF_GC_SAFE_POINT 0x00080000 // BB has a GC safe point (a call).  More abstractly, BB does not
-                                     // require a (further) poll -- this may be because this BB has a
-                                     // call, or, in some cases, because the BB occurs in a loop, and
-                                     // we've determined that all paths in the loop body leading to BB
-                                     // include a call.
-#define BBF_HAS_VTABREF 0x00100000   // BB contains reference of vtable
-#define BBF_HAS_IDX_LEN 0x00200000   // BB contains simple index or length expressions on an array local var.
-#define BBF_HAS_NEWARRAY 0x00400000  // BB contains 'new' of an array
-#define BBF_HAS_NEWOBJ 0x00800000    // BB contains 'new' of an object type.
+#define BBF_HAS_LABEL           0x00010000 // BB needs a label
+#define BBF_JMP_TARGET          0x00020000 // BB is a target of an implicit/explicit jump
+#define BBF_HAS_JMP             0x00040000 // BB executes a JMP instruction (instead of return)
+#define BBF_GC_SAFE_POINT       0x00080000 // BB has a GC safe point (a call).  More abstractly, BB does not require a
+                                           // (further) poll -- this may be because this BB has a call, or, in some
+                                           // cases, because the BB occurs in a loop, and we've determined that all
+                                           // paths in the loop body leading to BB include a call.
+
+#define BBF_HAS_VTABREF         0x00100000 // BB contains reference of vtable
+#define BBF_HAS_IDX_LEN         0x00200000 // BB contains simple index or length expressions on an array local var.
+#define BBF_HAS_NEWARRAY        0x00400000 // BB contains 'new' of an array
+#define BBF_HAS_NEWOBJ          0x00800000 // BB contains 'new' of an object type.
 
 #if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
-#define BBF_FINALLY_TARGET 0x01000000 // BB is the target of a finally return: where a finally will return during
-                                      // non-exceptional flow. Because the ARM calling sequence for calling a
-                                      // finally explicitly sets the return address to the finally target and jumps
-                                      // to the finally, instead of using a call instruction, ARM needs this to
-                                      // generate correct code at the finally target, to allow for proper stack
-                                      // unwind from within a non-exceptional call to a finally.
-#endif                                // FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
-#define BBF_BACKWARD_JUMP 0x02000000  // BB is surrounded by a backward jump/switch arc
-#define BBF_RETLESS_CALL 0x04000000   // BBJ_CALLFINALLY that will never return (and therefore, won't need a paired
-                                      // BBJ_ALWAYS); see isBBCallAlwaysPair().
-#define BBF_LOOP_PREHEADER 0x08000000 // BB is a loop preheader block
 
-#define BBF_COLD 0x10000000        // BB is cold
-#define BBF_PROF_WEIGHT 0x20000000 // BB weight is computed from profile data
+#define BBF_FINALLY_TARGET      0x01000000 // BB is the target of a finally return: where a finally will return during
+                                           // non-exceptional flow. Because the ARM calling sequence for calling a
+                                           // finally explicitly sets the return address to the finally target and jumps
+                                           // to the finally, instead of using a call instruction, ARM needs this to
+                                           // generate correct code at the finally target, to allow for proper stack
+                                           // unwind from within a non-exceptional call to a finally.
+
+#endif // FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+
+#define BBF_BACKWARD_JUMP       0x02000000 // BB is surrounded by a backward jump/switch arc
+#define BBF_RETLESS_CALL        0x04000000 // BBJ_CALLFINALLY that will never return (and therefore, won't need a paired
+                                           // BBJ_ALWAYS); see isBBCallAlwaysPair().
+#define BBF_LOOP_PREHEADER      0x08000000 // BB is a loop preheader block
+
+#define BBF_COLD                0x10000000 // BB is cold
+#define BBF_PROF_WEIGHT         0x20000000 // BB weight is computed from profile data
+
 #ifdef LEGACY_BACKEND
-#define BBF_FORWARD_SWITCH 0x40000000  // Aux flag used in FP codegen to know if a jmptable entry has been forwarded
-#else                                  // !LEGACY_BACKEND
-#define BBF_IS_LIR 0x40000000          // Set if the basic block contains LIR (as opposed to HIR)
-#endif                                 // LEGACY_BACKEND
-#define BBF_KEEP_BBJ_ALWAYS 0x80000000 // A special BBJ_ALWAYS block, used by EH code generation. Keep the jump kind
-                                       // as BBJ_ALWAYS. Used for the paired BBJ_ALWAYS block following the
-                                       // BBJ_CALLFINALLY block, as well as, on x86, the final step block out of a
-                                       // finally.
 
-#define BBF_CLONED_FINALLY_BEGIN 0x100000000 // First block of a cloned finally region
-#define BBF_CLONED_FINALLY_END 0x200000000   // Last block of a cloned finally region
+#define BBF_FORWARD_SWITCH      0x40000000 // Aux flag used in FP codegen to know if a jmptable entry has been forwarded
+
+#else // !LEGACY_BACKEND
+
+#define BBF_IS_LIR              0x40000000 // Set if the basic block contains LIR (as opposed to HIR)
+
+#endif // LEGACY_BACKEND
+
+#define BBF_KEEP_BBJ_ALWAYS     0x80000000 // A special BBJ_ALWAYS block, used by EH code generation. Keep the jump kind
+                                           // as BBJ_ALWAYS. Used for the paired BBJ_ALWAYS block following the
+                                           // BBJ_CALLFINALLY block, as well as, on x86, the final step block out of a
+                                           // finally.
+
+#define BBF_CLONED_FINALLY_BEGIN    0x100000000 // First block of a cloned finally region
+#define BBF_CLONED_FINALLY_END      0x200000000 // Last block of a cloned finally region
+
+// clang-format on
+
+#define BBF_DOMINATED_BY_EXCEPTIONAL_ENTRY 0x400000000 // Block is dominated by exceptional entry.
 
 // Flags that relate blocks to loop structure.
 
@@ -503,7 +517,8 @@ struct BasicBlock : private LIR::Range
                         bool      showFlags = false,
                         bool showPreds = true); // Print a simple basic block header for various output, including a
                                                 // list of predecessors and successors.
-#endif                                          // DEBUG
+    const char* dspToString(int blockNumPadding = 0);
+#endif // DEBUG
 
     typedef unsigned weight_t; // Type used to hold block and edge weights
                                // Note that for CLR v2.0 and earlier our
@@ -518,26 +533,26 @@ struct BasicBlock : private LIR::Range
 
     weight_t bbWeight; // The dynamic execution weight of this block
 
-    // getBBWeight -- get the normalized weight of this block
-    unsigned getBBWeight(Compiler* comp);
+    // getCalledCount -- get the value used to normalize weights for this method
+    weight_t getCalledCount(Compiler* comp);
 
-    // setBBWeight -- if the block weight is not derived from a profile, then set the weight to the input
-    // weight, but make sure to not overflow BB_MAX_WEIGHT
-    void setBBWeight(unsigned weight)
+    // getBBWeight -- get the normalized weight of this block
+    weight_t getBBWeight(Compiler* comp);
+
+    // hasProfileWeight -- Returns true if this block's weight came from profile data
+    bool hasProfileWeight() const
     {
-        if (!(this->bbFlags & BBF_PROF_WEIGHT))
-        {
-            this->bbWeight = min(weight, BB_MAX_WEIGHT);
-        }
+        return ((this->bbFlags & BBF_PROF_WEIGHT) != 0);
     }
 
-    // modifyBBWeight -- same as setBBWeight, but also make sure that if the block is rarely run, it stays that
-    // way, and if it's not rarely run then its weight never drops below 1.
-    void modifyBBWeight(unsigned weight)
+    // setBBWeight -- if the block weight is not derived from a profile,
+    // then set the weight to the input weight, making sure to not overflow BB_MAX_WEIGHT
+    // Note to set the weight from profile data, instead use setBBProfileWeight
+    void setBBWeight(weight_t weight)
     {
-        if (this->bbWeight != BB_ZERO_WEIGHT)
+        if (!hasProfileWeight())
         {
-            setBBWeight(max(weight, 1));
+            this->bbWeight = min(weight, BB_MAX_WEIGHT);
         }
     }
 
@@ -545,8 +560,17 @@ struct BasicBlock : private LIR::Range
     void setBBProfileWeight(unsigned weight)
     {
         this->bbFlags |= BBF_PROF_WEIGHT;
-        // Check if the multiplication by BB_UNITY_WEIGHT will overflow.
-        this->bbWeight = (weight <= BB_MAX_WEIGHT / BB_UNITY_WEIGHT) ? weight * BB_UNITY_WEIGHT : BB_MAX_WEIGHT;
+        this->bbWeight = weight;
+    }
+
+    // modifyBBWeight -- same as setBBWeight, but also make sure that if the block is rarely run, it stays that
+    // way, and if it's not rarely run then its weight never drops below 1.
+    void modifyBBWeight(weight_t weight)
+    {
+        if (this->bbWeight != BB_ZERO_WEIGHT)
+        {
+            setBBWeight(max(weight, 1));
+        }
     }
 
     // this block will inherit the same weight and relevant bbFlags as bSrc
@@ -554,7 +578,7 @@ struct BasicBlock : private LIR::Range
     {
         this->bbWeight = bSrc->bbWeight;
 
-        if (bSrc->bbFlags & BBF_PROF_WEIGHT)
+        if (bSrc->hasProfileWeight())
         {
             this->bbFlags |= BBF_PROF_WEIGHT;
         }
@@ -681,33 +705,42 @@ struct BasicBlock : private LIR::Range
         BBswtDesc*  bbJumpSwt;  // switch descriptor
     };
 
-    // NumSucc() gives the number of successors, and GetSucc() allows one to iterate over them.
+    // NumSucc() gives the number of successors, and GetSucc() returns a given numbered successor.
     //
-    // The behavior of both for blocks that end in BBJ_EHFINALLYRET (a return from a finally or fault block)
-    // depends on whether "comp" is non-null. If it is null, then the block is considered to have no
-    // successor. If it is non-null, we figure out the actual successors. Some cases will want one behavior,
-    // other cases the other.  For example, IL verification requires that these blocks end in an empty operand
+    // There are two versions of these functions: ones that take a Compiler* and ones that don't. You must
+    // always use a matching set. Thus, if you call NumSucc() without a Compiler*, you must also call
+    // GetSucc() without a Compiler*.
+    //
+    // The behavior of NumSucc()/GetSucc() is different when passed a Compiler* for blocks that end in:
+    // (1) BBJ_EHFINALLYRET (a return from a finally or fault block)
+    // (2) BBJ_EHFILTERRET (a return from EH filter block)
+    // (3) BBJ_SWITCH
+    //
+    // For BBJ_EHFINALLYRET, if no Compiler* is passed, then the block is considered to have no
+    // successor. If Compiler* is passed, we figure out the actual successors. Some cases will want one behavior,
+    // other cases the other. For example, IL verification requires that these blocks end in an empty operand
     // stack, and since the dataflow analysis of IL verification is concerned only with the contents of the
     // operand stack, we can consider the finally block to have no successors. But a more general dataflow
     // analysis that is tracking the contents of local variables might want to consider *all* successors,
     // and would pass the current Compiler object.
     //
-    // Similarly, BBJ_EHFILTERRET blocks are assumed to have no successors if "comp" is null; if non-null,
-    // NumSucc/GetSucc yields the first block of the try blocks handler.
+    // Similarly, BBJ_EHFILTERRET blocks are assumed to have no successors if Compiler* is not passed; if
+    // Compiler* is passed, NumSucc/GetSucc yields the first block of the try block's handler.
     //
-    // Also, the behavior for switches changes depending on the value of "comp". If it is null, then all
-    // switch successors are returned. If it is non-null, then only unique switch successors are returned;
-    // the duplicate successors are omitted.
+    // For BBJ_SWITCH, if Compiler* is not passed, then all switch successors are returned. If Compiler*
+    // is passed, then only unique switch successors are returned; the duplicate successors are omitted.
     //
     // Note that for BBJ_COND, which has two successors (fall through and condition true branch target),
     // only the unique targets are returned. Thus, if both targets are the same, NumSucc() will only return 1
     // instead of 2.
-    //
-    // Returns the number of successors of "this".
-    unsigned NumSucc(Compiler* comp = nullptr);
 
-    // Returns the "i"th successor.  Requires (0 <= i < NumSucc()).
-    BasicBlock* GetSucc(unsigned i, Compiler* comp = nullptr);
+    // NumSucc: Returns the number of successors of "this".
+    unsigned NumSucc();
+    unsigned NumSucc(Compiler* comp);
+
+    // GetSucc: Returns the "i"th successor. Requires (0 <= i < NumSucc()).
+    BasicBlock* GetSucc(unsigned i);
+    BasicBlock* GetSucc(unsigned i, Compiler* comp);
 
     BasicBlock* GetUniquePred(Compiler* comp);
 
@@ -868,12 +901,6 @@ struct BasicBlock : private LIR::Range
     unsigned bbDfsNum;   // The index of this block in DFS reverse post order
                          // relative to the flow graph.
 
-#if ASSERTION_PROP
-    // A set of blocks which dominate this one *except* the normal entry block. This is lazily initialized
-    // and used only by Assertion Prop, intersected with fgEnterBlks!
-    BlockSet bbDoms;
-#endif
-
     IL_OFFSET bbCodeOffs;    // IL offset of the beginning of the block
     IL_OFFSET bbCodeOffsEnd; // IL offset past the end of the block. Thus, the [bbCodeOffs..bbCodeOffsEnd)
                              // range is not inclusive of the end offset. The count of IL bytes in the block
@@ -1026,6 +1053,7 @@ struct BasicBlock : private LIR::Range
     // in the BB list with that stamp (in this field); then we can tell if (e.g.) predecessors are
     // still in the BB list by whether they have the same stamp (with high probability).
     unsigned bbTraversalStamp;
+    unsigned bbID;
 #endif // DEBUG
 
     ThisInitState bbThisOnEntry();
@@ -1044,12 +1072,9 @@ struct BasicBlock : private LIR::Range
 
     GenTreeStmt* firstStmt() const;
     GenTreeStmt* lastStmt() const;
-    GenTreeStmt* lastTopLevelStmt();
 
     GenTree* firstNode();
     GenTree* lastNode();
-
-    bool containsStatement(GenTree* statement);
 
     bool endsWithJmpMethod(Compiler* comp);
 
@@ -1067,14 +1092,7 @@ struct BasicBlock : private LIR::Range
     GenTreeStmt* FirstNonPhiDef();
     GenTree*     FirstNonPhiDefOrCatchArgAsg();
 
-    BasicBlock()
-        :
-#if ASSERTION_PROP
-        BLOCKSET_INIT_NOCOPY(bbDoms, BlockSetOps::UninitVal())
-        ,
-#endif // ASSERTION_PROP
-        VARSET_INIT_NOCOPY(bbLiveIn, VarSetOps::UninitVal())
-        , VARSET_INIT_NOCOPY(bbLiveOut, VarSetOps::UninitVal())
+    BasicBlock() : bbLiveIn(VarSetOps::UninitVal()), bbLiveOut(VarSetOps::UninitVal())
     {
     }
 
@@ -1161,10 +1179,20 @@ public:
 
     void MakeLIR(GenTree* firstNode, GenTree* lastNode);
     bool IsLIR();
+
+    void SetDominatedByExceptionalEntryFlag()
+    {
+        bbFlags |= BBF_DOMINATED_BY_EXCEPTIONAL_ENTRY;
+    }
+
+    bool IsDominatedByExceptionalEntryFlag()
+    {
+        return (bbFlags & BBF_DOMINATED_BY_EXCEPTIONAL_ENTRY) != 0;
+    }
 };
 
 template <>
-struct PtrKeyFuncs<BasicBlock> : public KeyFuncsDefEquals<const BasicBlock*>
+struct JitPtrKeyFuncs<BasicBlock> : public JitKeyFuncsDefEquals<const BasicBlock*>
 {
 public:
     // Make sure hashing is deterministic and not on "ptr."
@@ -1172,13 +1200,19 @@ public:
 };
 
 // A set of blocks.
-typedef SimplerHashTable<BasicBlock*, PtrKeyFuncs<BasicBlock>, bool, JitSimplerHashBehavior> BlkSet;
+typedef JitHashTable<BasicBlock*, JitPtrKeyFuncs<BasicBlock>, bool> BlkSet;
+
+// A vector of blocks.
+typedef jitstd::vector<BasicBlock*> BlkVector;
 
 // A map of block -> set of blocks, can be used as sparse block trees.
-typedef SimplerHashTable<BasicBlock*, PtrKeyFuncs<BasicBlock>, BlkSet*, JitSimplerHashBehavior> BlkToBlkSetMap;
+typedef JitHashTable<BasicBlock*, JitPtrKeyFuncs<BasicBlock>, BlkSet*> BlkToBlkSetMap;
+
+// A map of block -> vector of blocks, can be used as sparse block trees.
+typedef JitHashTable<BasicBlock*, JitPtrKeyFuncs<BasicBlock>, BlkVector> BlkToBlkVectorMap;
 
 // Map from Block to Block.  Used for a variety of purposes.
-typedef SimplerHashTable<BasicBlock*, PtrKeyFuncs<BasicBlock>, BasicBlock*, JitSimplerHashBehavior> BlockToBlockMap;
+typedef JitHashTable<BasicBlock*, JitPtrKeyFuncs<BasicBlock>, BasicBlock*> BlockToBlockMap;
 
 // In compiler terminology the control flow between two BasicBlocks
 // is typically referred to as an "edge".  Most well known are the

@@ -18,7 +18,6 @@ using System.Runtime.ExceptionServices;
 using System.Security;
 using System.Threading;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 // Disable the "reference to volatile field not treated as volatile" error.
 #pragma warning disable 0420
@@ -374,7 +373,7 @@ namespace System.Threading.Tasks
         {
             get
             {
-                return IsRanToCompletion ? "" + m_result : Environment.GetResourceString("TaskT_DebuggerNoResult");
+                return IsCompletedSuccessfully ? "" + m_result : SR.TaskT_DebuggerNoResult;
             }
         }
 
@@ -491,10 +490,10 @@ namespace System.Threading.Tasks
             if (waitCompletionNotification) NotifyDebuggerOfWaitCompletionIfNecessary();
 
             // Throw an exception if appropriate.
-            if (!IsRanToCompletion) ThrowIfExceptional(includeTaskCanceledExceptions: true);
+            if (!IsCompletedSuccessfully) ThrowIfExceptional(includeTaskCanceledExceptions: true);
 
             // We shouldn't be here if the result has not been set.
-            Debug.Assert(IsRanToCompletion, "Task<T>.Result getter: Expected result to have been set.");
+            Debug.Assert(IsCompletedSuccessfully, "Task<T>.Result getter: Expected result to have been set.");
 
             return m_result;
         }
@@ -617,7 +616,7 @@ namespace System.Threading.Tasks
                 m_result = funcWithState(m_stateObject);
                 return;
             }
-            Debug.Assert(false, "Invalid m_action in Task<TResult>");
+            Debug.Fail("Invalid m_action in Task<TResult>");
         }
 
         #region Await Support

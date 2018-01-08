@@ -49,14 +49,13 @@ public:
     static bool IsPreemptiveGCDisabled(Thread * pThread);
     static void EnablePreemptiveGC(Thread * pThread);
     static void DisablePreemptiveGC(Thread * pThread);
+    static bool TrapReturningThreads();
+    static Thread* GetThread();
 
     static gc_alloc_context * GetAllocContext(Thread * pThread);
     static bool CatchAtSafePoint(Thread * pThread);
 
     static void GcEnumAllocContexts(enum_alloc_context_func* fn, void* param);
-
-    static Thread* CreateBackgroundThread(GCBackgroundThreadFunction threadStart, void* arg);
-
     // Diagnostics methods.
     static void DiagGCStart(int gen, bool isInduced);
     static void DiagUpdateGenerationBounds();
@@ -68,6 +67,21 @@ public:
     static void StompWriteBarrier(WriteBarrierParameters* args);
 
     static void EnableFinalization(bool foundFinalizers);
+
+    static void HandleFatalError(unsigned int exitCode);
+    static bool ShouldFinalizeObjectForUnload(AppDomain* pDomain, Object* obj);
+    static bool ForceFullGCToBeBlocking();
+    static bool EagerFinalized(Object* obj);
+    static MethodTable* GetFreeObjectMethodTable();
+    static bool GetBooleanConfigValue(const char* key, bool* value);
+    static bool GetIntConfigValue(const char* key, int64_t* value);
+    static bool GetStringConfigValue(const char* key, const char** value);
+    static void FreeStringConfigValue(const char* key);
+    static bool IsGCThread();
+    static bool WasCurrentThreadCreatedByGC();
+    static bool CreateThread(void (*threadStart)(void*), void* arg, bool is_suspendable, const char* name);
+    static void WalkAsyncPinnedForPromotion(Object* object, ScanContext* sc, promote_func* callback);
+    static void WalkAsyncPinned(Object* object, void* context, void(*callback)(Object*, Object*, void*));
 };
 
 #endif // __GCENV_EE_H__

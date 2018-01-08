@@ -9,7 +9,6 @@ using System.Diagnostics;
 
 namespace System.Runtime.InteropServices.WindowsRuntime
 {
-    [Serializable]
     [DebuggerDisplay("Count = {Count}")]
     internal sealed class DictionaryKeyCollection<TKey, TValue> : ICollection<TKey>
     {
@@ -30,9 +29,9 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (index < 0)
                 throw new ArgumentOutOfRangeException(nameof(index));
             if (array.Length <= index && this.Count > 0)
-                throw new ArgumentException(Environment.GetResourceString("Arg_IndexOutOfRangeException"));
+                throw new ArgumentException(SR.Arg_IndexOutOfRangeException);
             if (array.Length - index < dictionary.Count)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InsufficientSpaceToCopyCollection"));
+                throw new ArgumentException(SR.Argument_InsufficientSpaceToCopyCollection);
 
             int i = index;
             foreach (KeyValuePair<TKey, TValue> mapping in dictionary)
@@ -53,12 +52,12 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
         void ICollection<TKey>.Add(TKey item)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_KeyCollectionSet"));
+            throw new NotSupportedException(SR.NotSupported_KeyCollectionSet);
         }
 
         void ICollection<TKey>.Clear()
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_KeyCollectionSet"));
+            throw new NotSupportedException(SR.NotSupported_KeyCollectionSet);
         }
 
         public bool Contains(TKey item)
@@ -68,7 +67,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
         bool ICollection<TKey>.Remove(TKey item)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_KeyCollectionSet"));
+            throw new NotSupportedException(SR.NotSupported_KeyCollectionSet);
         }
 
         IEnumerator IEnumerable.GetEnumerator()
@@ -83,7 +82,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     }  // public class DictionaryKeyCollection<TKey, TValue>
 
 
-    [Serializable]
     internal sealed class DictionaryKeyEnumerator<TKey, TValue> : IEnumerator<TKey>
     {
         private readonly IDictionary<TKey, TValue> dictionary;

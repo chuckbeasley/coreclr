@@ -9,6 +9,9 @@
 
 #ifdef FEATURE_STANDALONE_GC
 
+namespace standalone
+{
+
 class GCToEEInterface : public IGCToCLR {
 public:
     GCToEEInterface() = default;
@@ -28,10 +31,11 @@ public:
     bool IsPreemptiveGCDisabled(Thread * pThread);
     void EnablePreemptiveGC(Thread * pThread);
     void DisablePreemptiveGC(Thread * pThread);
+    Thread* GetThread();
+    bool TrapReturningThreads();
     gc_alloc_context * GetAllocContext(Thread * pThread);
     bool CatchAtSafePoint(Thread * pThread);
     void GcEnumAllocContexts(enum_alloc_context_func* fn, void* param);
-    Thread* CreateBackgroundThread(GCBackgroundThreadFunction threadStart, void* arg);
 
     // Diagnostics methods.
     void DiagGCStart(int gen, bool isInduced);
@@ -44,7 +48,23 @@ public:
     void StompWriteBarrier(WriteBarrierParameters* args);
 
     void EnableFinalization(bool foundFinalizers);
+    void HandleFatalError(unsigned int exitCode);
+    bool ShouldFinalizeObjectForUnload(AppDomain* pDomain, Object* obj);
+    bool ForceFullGCToBeBlocking();
+    bool EagerFinalized(Object* obj);
+    MethodTable* GetFreeObjectMethodTable();
+    bool GetBooleanConfigValue(const char* key, bool* value);
+    bool GetIntConfigValue(const char* key, int64_t* value);
+    bool GetStringConfigValue(const char* key, const char** value);
+    void FreeStringConfigValue(const char* value);
+    bool IsGCThread();
+    bool WasCurrentThreadCreatedByGC();
+    bool CreateThread(void (*threadStart)(void*), void* arg, bool is_suspendable, const char* name);
+    void WalkAsyncPinnedForPromotion(Object* object, ScanContext* sc, promote_func* callback);
+    void WalkAsyncPinned(Object* object, void* context, void(*callback)(Object*, Object*, void*));
 };
+
+} // namespace standalone
 
 #endif // FEATURE_STANDALONE_GC
 

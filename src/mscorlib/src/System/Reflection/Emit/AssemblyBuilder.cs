@@ -27,7 +27,6 @@ namespace System.Reflection.Emit
     using System;
     using System.Collections.Generic;
     using System.Diagnostics;
-    using System.Diagnostics.Contracts;
     using System.Diagnostics.SymbolStore;
     using CultureInfo = System.Globalization.CultureInfo;
     using System.IO;
@@ -38,28 +37,13 @@ namespace System.Reflection.Emit
     using System.Runtime.Serialization;
     using System.Runtime.Versioning;
     using System.Security;
-    using System.Security.Policy;
     using System.Threading;
-
-    // These must match the definitions in Assembly.hpp
-    [Flags]
-    internal enum DynamicAssemblyFlags
-    {
-        None = 0x00000000,
-
-        // Security attributes which affect the module security descriptor
-        AllCritical = 0x00000001,
-        Aptca = 0x00000002,
-        Critical = 0x00000004,
-        Transparent = 0x00000008,
-        TreatAsSafe = 0x00000010,
-    }
 
     // When the user calls AppDomain.DefineDynamicAssembly the loader creates a new InternalAssemblyBuilder. 
     // This InternalAssemblyBuilder can be retrieved via a call to Assembly.GetAssemblies() by untrusted code.
     // In the past, when InternalAssemblyBuilder was AssemblyBuilder, the untrusted user could down cast the
     // Assembly to an AssemblyBuilder and emit code with the elevated permissions of the trusted code which 
-    // origionally created the AssemblyBuilder via DefineDynamicAssembly. Today, this can no longer happen
+    // originally created the AssemblyBuilder via DefineDynamicAssembly. Today, this can no longer happen
     // because the Assembly returned via AssemblyGetAssemblies() will be an InternalAssemblyBuilder.
 
     // Only the caller of DefineDynamicAssembly will get an AssemblyBuilder. 
@@ -94,39 +78,39 @@ namespace System.Reflection.Emit
         #region Methods inherited from Assembly
         public override String[] GetManifestResourceNames()
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+            throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
         }
 
         public override FileStream GetFile(String name)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+            throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
         }
 
         public override FileStream[] GetFiles(bool getResourceModules)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+            throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
         }
 
         public override Stream GetManifestResourceStream(Type type, String name)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+            throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
         }
 
         public override Stream GetManifestResourceStream(String name)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+            throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
         }
 
         public override ManifestResourceInfo GetManifestResourceInfo(String resourceName)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+            throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
         }
 
         public override String Location
         {
             get
             {
-                throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+                throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
             }
         }
 
@@ -134,13 +118,13 @@ namespace System.Reflection.Emit
         {
             get
             {
-                throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+                throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
             }
         }
 
         public override Type[] GetExportedTypes()
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicAssembly"));
+            throw new NotSupportedException(SR.NotSupported_DynamicAssembly);
         }
 
         public override String ImageRuntimeVersion
@@ -179,7 +163,7 @@ namespace System.Reflection.Emit
 
         internal ModuleBuilder GetModuleBuilder(InternalModuleBuilder module)
         {
-            Contract.Requires(module != null);
+            Debug.Assert(module != null);
             Debug.Assert(this.InternalAssembly == module.Assembly);
 
             lock (SyncRoot)
@@ -218,11 +202,8 @@ namespace System.Reflection.Emit
         internal AssemblyBuilder(AppDomain domain,
                                  AssemblyName name,
                                  AssemblyBuilderAccess access,
-                                 String dir,
-                                 Evidence evidence,
                                  ref StackCrawlMark stackMark,
-                                 IEnumerable<CustomAttributeBuilder> unsafeAssemblyAttributes,
-                                 SecurityContextSource securityContextSource)
+                                 IEnumerable<CustomAttributeBuilder> unsafeAssemblyAttributes)
         {
             if (name == null)
                 throw new ArgumentNullException(nameof(name));
@@ -231,13 +212,7 @@ namespace System.Reflection.Emit
                 && access != AssemblyBuilderAccess.RunAndCollect
                 )
             {
-                throw new ArgumentException(Environment.GetResourceString("Arg_EnumIllegalVal", (int)access), nameof(access));
-            }
-
-            if (securityContextSource < SecurityContextSource.CurrentAppDomain ||
-                securityContextSource > SecurityContextSource.CurrentAssembly)
-            {
-                throw new ArgumentOutOfRangeException(nameof(securityContextSource));
+                throw new ArgumentException(SR.Format(SR.Arg_EnumIllegalVal, (int)access), nameof(access));
             }
 
             // Clone the name in case the caller modifies it underneath us.
@@ -247,46 +222,21 @@ namespace System.Reflection.Emit
             // assembly. Currently, we look for any attribute which modifies the security transparency
             // of the assembly.
             List<CustomAttributeBuilder> assemblyAttributes = null;
-            DynamicAssemblyFlags assemblyFlags = DynamicAssemblyFlags.None;
-            byte[] securityRulesBlob = null;
-            byte[] aptcaBlob = null;
             if (unsafeAssemblyAttributes != null)
             {
                 // Create a copy to ensure that it cannot be modified from another thread
                 // as it is used further below.
                 assemblyAttributes = new List<CustomAttributeBuilder>(unsafeAssemblyAttributes);
-
-#pragma warning disable 618 // We deal with legacy attributes here as well for compat
-                foreach (CustomAttributeBuilder attribute in assemblyAttributes)
-                {
-                    if (attribute.m_con.DeclaringType == typeof(SecurityTransparentAttribute))
-                    {
-                        assemblyFlags |= DynamicAssemblyFlags.Transparent;
-                    }
-                    else if (attribute.m_con.DeclaringType == typeof(SecurityCriticalAttribute))
-                    {
-                        {
-                            assemblyFlags |= DynamicAssemblyFlags.AllCritical;
-                        }
-                    }
-                }
-#pragma warning restore 618
             }
 
             m_internalAssemblyBuilder = (InternalAssemblyBuilder)nCreateDynamicAssembly(domain,
                                                                                         name,
-                                                                                        evidence,
                                                                                         ref stackMark,
-                                                                                        securityRulesBlob,
-                                                                                        aptcaBlob,
-                                                                                        access,
-                                                                                        assemblyFlags,
-                                                                                        securityContextSource);
+                                                                                        access);
 
             m_assemblyData = new AssemblyBuilderData(m_internalAssemblyBuilder,
                                                      name.Name,
-                                                     access,
-                                                     dir);
+                                                     access);
 
             // Make sure that ManifestModule is properly initialized
             // We need to do this before setting any CustomAttribute
@@ -332,11 +282,9 @@ namespace System.Reflection.Emit
             AssemblyName name,
             AssemblyBuilderAccess access)
         {
-            Contract.Ensures(Contract.Result<AssemblyBuilder>() != null);
-
             StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
-            return InternalDefineDynamicAssembly(name, access, null,
-                                                 null, ref stackMark, null, SecurityContextSource.CurrentAssembly);
+            return InternalDefineDynamicAssembly(name, access,
+                                                 ref stackMark, null);
         }
 
         [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
@@ -345,38 +293,27 @@ namespace System.Reflection.Emit
             AssemblyBuilderAccess access,
             IEnumerable<CustomAttributeBuilder> assemblyAttributes)
         {
-            Contract.Ensures(Contract.Result<AssemblyBuilder>() != null);
-
             StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
             return InternalDefineDynamicAssembly(name,
                                                  access,
-                                                 null, null,
                                                  ref stackMark,
-                                                 assemblyAttributes, SecurityContextSource.CurrentAssembly);
+                                                 assemblyAttributes);
         }
 
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         private static extern Assembly nCreateDynamicAssembly(AppDomain domain,
                                                               AssemblyName name,
-                                                              Evidence identity,
                                                               ref StackCrawlMark stackMark,
-                                                              byte[] securityRulesBlob,
-                                                              byte[] aptcaBlob,
-                                                              AssemblyBuilderAccess access,
-                                                              DynamicAssemblyFlags flags,
-                                                              SecurityContextSource securityContextSource);
+                                                              AssemblyBuilderAccess access);
 
         private class AssemblyBuilderLock { }
 
         internal static AssemblyBuilder InternalDefineDynamicAssembly(
             AssemblyName name,
             AssemblyBuilderAccess access,
-            String dir,
-            Evidence evidence,
             ref StackCrawlMark stackMark,
-            IEnumerable<CustomAttributeBuilder> unsafeAssemblyAttributes,
-            SecurityContextSource securityContextSource)
+            IEnumerable<CustomAttributeBuilder> unsafeAssemblyAttributes)
         {
             lock (typeof(AssemblyBuilderLock))
             {
@@ -384,11 +321,8 @@ namespace System.Reflection.Emit
                 return new AssemblyBuilder(AppDomain.CurrentDomain,
                                            name,
                                            access,
-                                           dir,
-                                           evidence,
                                            ref stackMark,
-                                           unsafeAssemblyAttributes,
-                                           securityContextSource);
+                                           unsafeAssemblyAttributes);
             } //lock(typeof(AssemblyBuilderLock))
         }
         #endregion
@@ -405,8 +339,6 @@ namespace System.Reflection.Emit
         public ModuleBuilder DefineDynamicModule(
             String name)
         {
-            Contract.Ensures(Contract.Result<ModuleBuilder>() != null);
-
             StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
             return DefineDynamicModuleInternal(name, false, ref stackMark);
         }
@@ -416,8 +348,6 @@ namespace System.Reflection.Emit
             String name,
             bool emitSymbolInfo)         // specify if emit symbol info or not
         {
-            Contract.Ensures(Contract.Result<ModuleBuilder>() != null);
-
             StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
             return DefineDynamicModuleInternal(name, emitSymbolInfo, ref stackMark);
         }
@@ -441,13 +371,9 @@ namespace System.Reflection.Emit
             if (name == null)
                 throw new ArgumentNullException(nameof(name));
             if (name.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), nameof(name));
+                throw new ArgumentException(SR.Argument_EmptyName, nameof(name));
             if (name[0] == '\0')
-                throw new ArgumentException(Environment.GetResourceString("Argument_InvalidName"), nameof(name));
-            Contract.Ensures(Contract.Result<ModuleBuilder>() != null);
-            Contract.EndContractBlock();
-
-            BCLDebug.Log("DYNIL", "## DYNIL LOGGING: AssemblyBuilder.DefineDynamicModule( " + name + " )");
+                throw new ArgumentException(SR.Argument_InvalidName, nameof(name));
 
             Debug.Assert(m_assemblyData != null, "m_assemblyData is null in DefineDynamicModuleInternal");
 
@@ -457,7 +383,7 @@ namespace System.Reflection.Emit
 
             // create the dynamic module- only one ModuleBuilder per AssemblyBuilder can be created
             if (m_fManifestModuleUsedAsDefinedModule == true)
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_NoMultiModuleAssembly"));
+                throw new InvalidOperationException(SR.InvalidOperation_NoMultiModuleAssembly);
 
             // Init(...) has already been called on m_manifestModuleBuilder in InitManifestModule()
             dynModule = m_manifestModuleBuilder;
@@ -511,16 +437,16 @@ namespace System.Reflection.Emit
                     continue;
 
                 if (type.Module == null || type.Module.Assembly == null)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_TypeNotValid"));
+                    throw new ArgumentException(SR.Argument_TypeNotValid);
 
                 if (type.Module.Assembly == typeof(object).Module.Assembly)
                     continue;
 
                 if (type.Module.Assembly.ReflectionOnly && !ReflectionOnly)
-                    throw new InvalidOperationException(Environment.GetResourceString("Arugment_EmitMixedContext1", type.AssemblyQualifiedName));
+                    throw new InvalidOperationException(SR.Format(SR.Arugment_EmitMixedContext1, type.AssemblyQualifiedName));
 
                 if (!type.Module.Assembly.ReflectionOnly && ReflectionOnly)
-                    throw new InvalidOperationException(Environment.GetResourceString("Arugment_EmitMixedContext2", type.AssemblyQualifiedName));
+                    throw new InvalidOperationException(SR.Format(SR.Arugment_EmitMixedContext2, type.AssemblyQualifiedName));
             }
         }
 
@@ -742,10 +668,8 @@ namespace System.Reflection.Emit
             if (name == null)
                 throw new ArgumentNullException(nameof(name));
             if (name.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), nameof(name));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_EmptyName, nameof(name));
 
-            BCLDebug.Log("DYNIL", "## DYNIL LOGGING: AssemblyBuilder.GetDynamicModule( " + name + " )");
             int size = m_assemblyData.m_moduleBuilderList.Count;
             for (int i = 0; i < size; i++)
             {
@@ -768,7 +692,6 @@ namespace System.Reflection.Emit
                 throw new ArgumentNullException(nameof(con));
             if (binaryAttribute == null)
                 throw new ArgumentNullException(nameof(binaryAttribute));
-            Contract.EndContractBlock();
 
             lock (SyncRoot)
             {
@@ -803,7 +726,6 @@ namespace System.Reflection.Emit
             {
                 throw new ArgumentNullException(nameof(customBuilder));
             }
-            Contract.EndContractBlock();
 
             lock (SyncRoot)
             {

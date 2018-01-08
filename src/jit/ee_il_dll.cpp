@@ -58,6 +58,20 @@ extern "C" void __stdcall jitStartup(ICorJitHost* jitHost)
 {
     if (g_jitInitialized)
     {
+        if (jitHost != g_jitHost)
+        {
+            // We normally don't expect jitStartup() to be invoked more than once.
+            // (We check whether it has been called once due to an abundance of caution.)
+            // However, during SuperPMI playback of MCH file, we need to JIT many different methods.
+            // Each one carries its own environment configuration state.
+            // So, we need the JIT to reload the JitConfig state for each change in the environment state of the
+            // replayed compilations.
+            // We do this by calling jitStartup with a different ICorJitHost,
+            // and have the JIT re-initialize its JitConfig state when this happens.
+            JitConfig.destroy(g_jitHost);
+            JitConfig.initialize(jitHost);
+            g_jitHost = jitHost;
+        }
         return;
     }
 
@@ -126,6 +140,8 @@ void jitShutdown()
 #ifdef FEATURE_TRACELOGGING
     JitTelemetry::NotifyDllProcessDetach();
 #endif
+
+    g_jitInitialized = false;
 }
 
 #ifndef FEATURE_MERGE_JIT_AND_ENGINE
@@ -136,9 +152,6 @@ extern "C" BOOL WINAPI DllMain(HANDLE hInstance, DWORD dwReason, LPVOID pvReserv
     {
         g_hInst = (HINSTANCE)hInstance;
         DisableThreadLibraryCalls((HINSTANCE)hInstance);
-#if defined(SELF_NO_HOST) && COR_JIT_EE_VERSION <= 460
-        jitStartup(JitHost::getJitHost());
-#endif
     }
     else if (dwReason == DLL_PROCESS_DETACH)
     {
@@ -157,10 +170,6 @@ extern "C" void __stdcall sxsJitStartup(CoreClrCallbacks const& cccallbacks)
 {
 #ifndef SELF_NO_HOST
     InitUtilcode(cccallbacks);
-#endif
-
-#if COR_JIT_EE_VERSION <= 460
-    jitStartup(JitHost::getJitHost());
 #endif
 }
 
@@ -196,9 +205,6 @@ ICorJitCompiler* __stdcall getJit()
 // Information kept in thread-local storage. This is used in the noway_assert exceptional path.
 // If you are using it more broadly in retail code, you would need to understand the
 // performance implications of accessing TLS.
-//
-// If the JIT is being statically linked, these methods must be implemented by the consumer.
-#if !defined(FEATURE_MERGE_JIT_AND_ENGINE) || !defined(FEATURE_IMPLICIT_TLS)
 
 __declspec(thread) void* gJitTls = nullptr;
 
@@ -211,15 +217,6 @@ void SetJitTls(void* value)
 {
     gJitTls = value;
 }
-
-#else // !defined(FEATURE_MERGE_JIT_AND_ENGINE) || !defined(FEATURE_IMPLICIT_TLS)
-
-extern "C" {
-void* GetJitTls();
-void SetJitTls(void* value);
-}
-
-#endif // // defined(FEATURE_MERGE_JIT_AND_ENGINE) && defined(FEATURE_IMPLICIT_TLS)
 
 #if defined(DEBUG)
 
@@ -286,15 +283,11 @@ CorJitResult CILJit::compileMethod(
 
     JitFlags jitFlags;
 
-#if COR_JIT_EE_VERSION > 460
     assert(flags == CORJIT_FLAGS::CORJIT_FLAG_CALL_GETJITFLAGS);
     CORJIT_FLAGS corJitFlags;
     DWORD        jitFlagsSize = compHnd->getJitFlags(&corJitFlags, sizeof(corJitFlags));
     assert(jitFlagsSize == sizeof(corJitFlags));
     jitFlags.SetFromFlags(corJitFlags);
-#else  // COR_JIT_EE_VERSION <= 460
-    jitFlags.SetFromOldFlags(flags, 0);
-#endif // COR_JIT_EE_VERSION <= 460
 
     int                   result;
     void*                 methodCodePtr = nullptr;
@@ -334,8 +327,6 @@ void CILJit::clearCache(void)
  */
 BOOL CILJit::isCacheCleanupRequired(void)
 {
-    BOOL doCleanup;
-
     if (g_realJitCompiler != nullptr)
     {
         if (g_realJitCompiler->isCacheCleanupRequired())
@@ -356,9 +347,7 @@ void CILJit::ProcessShutdownWork(ICorStaticInfo* statInfo)
         // Continue, by shutting down this JIT as well.
     }
 
-#ifdef FEATURE_MERGE_JIT_AND_ENGINE
     jitShutdown();
-#endif
 
     Compiler::ProcessShutdownWork(statInfo);
 }
@@ -382,11 +371,7 @@ void CILJit::getVersionIdentifier(GUID* versionIdentifier)
  * Determine the maximum length of SIMD vector supported by this JIT.
  */
 
-#if COR_JIT_EE_VERSION > 460
 unsigned CILJit::getMaxIntrinsicSIMDVectorLength(CORJIT_FLAGS cpuCompileFlags)
-#else
-unsigned CILJit::getMaxIntrinsicSIMDVectorLength(DWORD cpuCompileFlags)
-#endif
 {
     if (g_realJitCompiler != nullptr)
     {
@@ -394,20 +379,18 @@ unsigned CILJit::getMaxIntrinsicSIMDVectorLength(DWORD cpuCompileFlags)
     }
 
     JitFlags jitFlags;
-
-#if COR_JIT_EE_VERSION > 460
     jitFlags.SetFromFlags(cpuCompileFlags);
-#else  // COR_JIT_EE_VERSION <= 460
-    jitFlags.SetFromOldFlags(cpuCompileFlags, 0);
-#endif // COR_JIT_EE_VERSION <= 460
 
 #ifdef FEATURE_SIMD
-#ifdef _TARGET_XARCH_
-#ifdef FEATURE_AVX_SUPPORT
+#if defined(_TARGET_XARCH_) && !defined(LEGACY_BACKEND)
     if (!jitFlags.IsSet(JitFlags::JIT_FLAG_PREJIT) && jitFlags.IsSet(JitFlags::JIT_FLAG_FEATURE_SIMD) &&
         jitFlags.IsSet(JitFlags::JIT_FLAG_USE_AVX2))
     {
-        if (JitConfig.EnableAVX() != 0)
+        if (JitConfig.EnableAVX() != 0
+#ifdef DEBUG
+            && JitConfig.EnableAVX2() != 0
+#endif
+            )
         {
             if (GetJitTls() != nullptr && JitTls::GetCompiler() != nullptr)
             {
@@ -416,13 +399,12 @@ unsigned CILJit::getMaxIntrinsicSIMDVectorLength(DWORD cpuCompileFlags)
             return 32;
         }
     }
-#endif // FEATURE_AVX_SUPPORT
+#endif // !(defined(_TARGET_XARCH_) && !defined(LEGACY_BACKEND))
     if (GetJitTls() != nullptr && JitTls::GetCompiler() != nullptr)
     {
         JITDUMP("getMaxIntrinsicSIMDVectorLength: returning 16\n");
     }
     return 16;
-#endif // _TARGET_XARCH_
 #else  // !FEATURE_SIMD
     if (GetJitTls() != nullptr && JitTls::GetCompiler() != nullptr)
     {
@@ -459,7 +441,7 @@ unsigned Compiler::eeGetArgSize(CORINFO_ARG_LIST_HANDLE list, CORINFO_SIG_INFO* 
         return structSize; // TODO: roundUp() needed here?
     }
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
-    return sizeof(size_t);
+    return TARGET_POINTER_SIZE;
 
 #else // !_TARGET_AMD64_
 
@@ -472,7 +454,7 @@ unsigned Compiler::eeGetArgSize(CORINFO_ARG_LIST_HANDLE list, CORINFO_SIG_INFO* 
         unsigned structSize = info.compCompHnd->getClassSize(argClass);
 
         // make certain the EE passes us back the right thing for refanys
-        assert(argTypeJit != CORINFO_TYPE_REFANY || structSize == 2 * sizeof(void*));
+        assert(argTypeJit != CORINFO_TYPE_REFANY || structSize == 2 * TARGET_POINTER_SIZE);
 
         // For each target that supports passing struct args in multiple registers
         // apply the target specific rules for them here:
@@ -528,7 +510,7 @@ GenTreePtr Compiler::eeGetPInvokeCookie(CORINFO_SIG_INFO* szMetaSig)
     cookie = info.compCompHnd->GetCookieForPInvokeCalliSig(szMetaSig, &pCookie);
     assert((cookie == nullptr) != (pCookie == nullptr));
 
-    return gtNewIconEmbHndNode(cookie, pCookie, GTF_ICON_PINVKI_HDL);
+    return gtNewIconEmbHndNode(cookie, pCookie, GTF_ICON_PINVKI_HDL, szMetaSig);
 }
 
 //------------------------------------------------------------------------
@@ -742,7 +724,7 @@ void Compiler::eeGetVars()
     {
         // Allocate a bit-array for all the variables and initialize to false
 
-        bool*    varInfoProvided = (bool*)compGetMemA(info.compLocalsCount * sizeof(varInfoProvided[0]));
+        bool*    varInfoProvided = (bool*)compGetMem(info.compLocalsCount * sizeof(varInfoProvided[0]));
         unsigned i;
         for (i = 0; i < info.compLocalsCount; i++)
         {
@@ -1244,146 +1226,6 @@ void Compiler::eeGetSystemVAmd64PassStructInRegisterDescriptor(
 
 #endif // FEATURE_UNIX_AMD64_STRUCT_PASSING
 
-#if COR_JIT_EE_VERSION <= 460
-
-// Validate the token to determine whether to turn the bad image format exception into
-// verification failure (for backward compatibility)
-static bool isValidTokenForTryResolveToken(ICorJitInfo* corInfo, CORINFO_RESOLVED_TOKEN* resolvedToken)
-{
-    if (!corInfo->isValidToken(resolvedToken->tokenScope, resolvedToken->token))
-        return false;
-
-    CorInfoTokenKind tokenType = resolvedToken->tokenType;
-    switch (TypeFromToken(resolvedToken->token))
-    {
-        case mdtModuleRef:
-        case mdtTypeDef:
-        case mdtTypeRef:
-        case mdtTypeSpec:
-            if ((tokenType & CORINFO_TOKENKIND_Class) == 0)
-                return false;
-            break;
-
-        case mdtMethodDef:
-        case mdtMethodSpec:
-            if ((tokenType & CORINFO_TOKENKIND_Method) == 0)
-                return false;
-            break;
-
-        case mdtFieldDef:
-            if ((tokenType & CORINFO_TOKENKIND_Field) == 0)
-                return false;
-            break;
-
-        case mdtMemberRef:
-            if ((tokenType & (CORINFO_TOKENKIND_Method | CORINFO_TOKENKIND_Field)) == 0)
-                return false;
-            break;
-
-        default:
-            return false;
-    }
-
-    return true;
-}
-
-// This type encapsulates the information necessary for `TryResolveTokenFilter` and
-// `eeTryResolveToken` below.
-struct TryResolveTokenFilterParam
-{
-    ICorJitInfo*            m_corInfo;
-    CORINFO_RESOLVED_TOKEN* m_resolvedToken;
-    EXCEPTION_POINTERS      m_exceptionPointers;
-    bool                    m_success;
-};
-
-LONG TryResolveTokenFilter(struct _EXCEPTION_POINTERS* exceptionPointers, void* theParam)
-{
-    assert(exceptionPointers->ExceptionRecord->ExceptionCode != SEH_VERIFICATION_EXCEPTION);
-
-    // Backward compatibility: Convert bad image format exceptions thrown by the EE while resolving token to
-    // verification exceptions if we are verifying. Verification exceptions will cause the JIT of the basic block to
-    // fail, but the JITing of the whole method is still going to succeed. This is done for backward compatibility only.
-    // Ideally, we would always treat bad tokens in the IL stream as fatal errors.
-    if (exceptionPointers->ExceptionRecord->ExceptionCode == EXCEPTION_COMPLUS)
-    {
-        auto* param = reinterpret_cast<TryResolveTokenFilterParam*>(theParam);
-        if (!isValidTokenForTryResolveToken(param->m_corInfo, param->m_resolvedToken))
-        {
-            param->m_exceptionPointers = *exceptionPointers;
-            return param->m_corInfo->FilterException(exceptionPointers);
-        }
-    }
-
-    return EXCEPTION_CONTINUE_SEARCH;
-}
-
-bool Compiler::eeTryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken)
-{
-    TryResolveTokenFilterParam param;
-    param.m_corInfo       = info.compCompHnd;
-    param.m_resolvedToken = resolvedToken;
-    param.m_success       = true;
-
-    PAL_TRY(TryResolveTokenFilterParam*, pParam, &param)
-    {
-        pParam->m_corInfo->resolveToken(pParam->m_resolvedToken);
-    }
-    PAL_EXCEPT_FILTER(TryResolveTokenFilter)
-    {
-        if (param.m_exceptionPointers.ExceptionRecord->ExceptionCode == EXCEPTION_COMPLUS)
-        {
-            param.m_corInfo->HandleException(&param.m_exceptionPointers);
-        }
-
-        param.m_success = false;
-    }
-    PAL_ENDTRY
-
-    return param.m_success;
-}
-
-struct TrapParam
-{
-    ICorJitInfo*       m_corInfo;
-    EXCEPTION_POINTERS m_exceptionPointers;
-
-    void (*m_function)(void*);
-    void* m_param;
-    bool  m_success;
-};
-
-static LONG __EEFilter(PEXCEPTION_POINTERS exceptionPointers, void* param)
-{
-    auto* trapParam                = reinterpret_cast<TrapParam*>(param);
-    trapParam->m_exceptionPointers = *exceptionPointers;
-    return trapParam->m_corInfo->FilterException(exceptionPointers);
-}
-
-bool Compiler::eeRunWithErrorTrapImp(void (*function)(void*), void* param)
-{
-    TrapParam trapParam;
-    trapParam.m_corInfo  = info.compCompHnd;
-    trapParam.m_function = function;
-    trapParam.m_param    = param;
-    trapParam.m_success  = true;
-
-    PAL_TRY(TrapParam*, __trapParam, &trapParam)
-    {
-        __trapParam->m_function(__trapParam->m_param);
-    }
-    PAL_EXCEPT_FILTER(__EEFilter)
-    {
-        trapParam.m_corInfo->HandleException(&trapParam.m_exceptionPointers);
-        trapParam.m_success = false;
-    }
-    PAL_ENDTRY
-
-    return trapParam.m_success;
-}
-
-#else // CORJIT_EE_VER <= 460
-
 bool Compiler::eeTryResolveToken(CORINFO_RESOLVED_TOKEN* resolvedToken)
 {
     return info.compCompHnd->tryResolveToken(resolvedToken);
@@ -1393,8 +1235,6 @@ bool Compiler::eeRunWithErrorTrapImp(void (*function)(void*), void* param)
 {
     return info.compCompHnd->runWithErrorTrap(function, param);
 }
-
-#endif // CORJIT_EE_VER > 460
 
 /*****************************************************************************
  *
@@ -1457,7 +1297,7 @@ const char* Compiler::eeGetMethodName(CORINFO_METHOD_HANDLE method, const char**
         // If it's something unknown from a RET VM, or from SuperPMI, then use our own helper name table.
         if ((strcmp(name, "AnyJITHelper") == 0) || (strcmp(name, "Yickish helper name") == 0))
         {
-            if (ftnNum < CORINFO_HELP_COUNT)
+            if ((unsigned)ftnNum < CORINFO_HELP_COUNT)
             {
                 name = jitHlpFuncTable[ftnNum];
             }

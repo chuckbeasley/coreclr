@@ -7,12 +7,10 @@ using System.Text;
 using System;
 using System.IO;
 using System.Reflection;
-using System.Diagnostics.Contracts;
 
 namespace System.Diagnostics
 {
     // There is no good reason for the methods of this class to be virtual.
-    [Serializable]
     public class StackFrame
     {
         private MethodBase method;
@@ -150,8 +148,6 @@ namespace System.Diagnostics
         // 
         public virtual MethodBase GetMethod()
         {
-            Contract.Ensures(Contract.Result<MethodBase>() != null);
-
             return method;
         }
 

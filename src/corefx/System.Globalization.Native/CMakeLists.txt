@@ -32,8 +32,8 @@ else()
         message(FATAL_ERROR "Cannot find libicucore, skipping build for System.Globalization.Native. .NET globalization is not expected to function.")
         return()
     endif()
-    # On Darwin, we always use the OS provided ICU
-    SET(FEATURE_FIXED_ICU_VERSION 1)
+
+    add_definitions(-DOSX_ICU_LIBRARY_PATH=\"${ICUCORE}\")
 endif()
 
 include(configure.cmake)
@@ -50,13 +50,8 @@ set(NATIVEGLOBALIZATION_SOURCES
     localeStringData.cpp
     normalization.cpp
     timeZoneInfo.cpp
+    icushim.cpp
 )
-
-if (NOT FEATURE_FIXED_ICU_VERSION)
-    list(APPEND NATIVEGLOBALIZATION_SOURCES
-        icushim.cpp
-    )
-endif()
 
 include_directories(${UTYPES_H})
 
@@ -70,27 +65,15 @@ _add_library(System.Globalization.Native_Static
     ${NATIVEGLOBALIZATION_SOURCES}
 )
 
-# Remove the _Static postfix from the static library name
-set_target_properties(System.Globalization.Native_Static PROPERTIES OUTPUT_NAME System.Globalization.Native)
-
 # Disable the "lib" prefix.
 set_target_properties(System.Globalization.Native PROPERTIES PREFIX "")
 
-if (FEATURE_FIXED_ICU_VERSION)
-    add_definitions(-DFEATURE_FIXED_ICU_VERSION)
-endif()
+# Disable the "lib" prefix and override default name
+set_target_properties(System.Globalization.Native_Static PROPERTIES PREFIX "")
+set_target_properties(System.Globalization.Native_Static PROPERTIES OUTPUT_NAME System.Globalization.Native)
 
 if(NOT CLR_CMAKE_PLATFORM_DARWIN)
-    if (FEATURE_FIXED_ICU_VERSION)
-        target_link_libraries(System.Globalization.Native
-            ${ICUUC}
-            ${ICUI18N}
-        )
-        target_link_libraries(System.Globalization.Native_Static
-            ${ICUUC}
-            ${ICUI18N}
-        )
-    elseif(NOT CMAKE_SYSTEM_NAME STREQUAL FreeBSD AND NOT CMAKE_SYSTEM_NAME STREQUAL NetBSD)
+    if (NOT CMAKE_SYSTEM_NAME STREQUAL FreeBSD AND NOT CMAKE_SYSTEM_NAME STREQUAL NetBSD)
         target_link_libraries(System.Globalization.Native
             dl
         )
@@ -100,7 +83,7 @@ if(NOT CLR_CMAKE_PLATFORM_DARWIN)
     endif()
 else()
     target_link_libraries(System.Globalization.Native
-        ${ICUCORE}
+        dl
     )
 
     add_definitions(-DU_DISABLE_RENAMING=1)

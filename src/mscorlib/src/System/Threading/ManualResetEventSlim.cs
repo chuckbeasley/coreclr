@@ -12,11 +12,7 @@
 //
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-using System;
-using System.Threading;
-using System.Runtime.InteropServices;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 namespace System.Threading
 {
@@ -48,7 +44,6 @@ namespace System.Threading
     {
         // These are the default spin counts we use on single-proc and MP machines.
         private const int DEFAULT_SPIN_SP = 1;
-        private const int DEFAULT_SPIN_MP = SpinWait.YIELD_THRESHOLD;
 
         private volatile object m_lock;
         // A lock used for waiting and pulsing. Lazily initialized via EnsureLockObjectCreated()
@@ -163,7 +158,7 @@ namespace System.Threading
 
                 // it is possible for the max number of waiters to be exceeded via user-code, hence we use a real exception here.
                 if (value >= NumWaitersState_MaxValue)
-                    throw new InvalidOperationException(String.Format(Environment.GetResourceString("ManualResetEventSlim_ctor_TooManyWaiters"), NumWaitersState_MaxValue));
+                    throw new InvalidOperationException(String.Format(SR.ManualResetEventSlim_ctor_TooManyWaiters, NumWaitersState_MaxValue));
 
                 UpdateStateAtomically(value << NumWaitersState_ShiftCount, NumWaitersState_BitMask);
             }
@@ -185,7 +180,7 @@ namespace System.Threading
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ManualResetEventSlim"/>
-        /// class with a Boolen value indicating whether to set the intial state to signaled.
+        /// class with a boolean value indicating whether to set the initial state to signaled.
         /// </summary>
         /// <param name="initialState">true to set the initial state signaled; false to set the initial state
         /// to nonsignaled.</param>
@@ -193,12 +188,12 @@ namespace System.Threading
         {
             // Specify the defualt spin count, and use default spin if we're
             // on a multi-processor machine. Otherwise, we won't.
-            Initialize(initialState, DEFAULT_SPIN_MP);
+            Initialize(initialState, SpinWait.SpinCountforSpinBeforeWait);
         }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ManualResetEventSlim"/>
-        /// class with a Boolen value indicating whether to set the intial state to signaled and a specified
+        /// class with a Boolean value indicating whether to set the initial state to signaled and a specified
         /// spin count.
         /// </summary>
         /// <param name="initialState">true to set the initial state to signaled; false to set the initial state
@@ -218,7 +213,7 @@ namespace System.Threading
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(spinCount),
-                    String.Format(Environment.GetResourceString("ManualResetEventSlim_ctor_SpinCountOutOfRange"), SpinCountState_MaxValue));
+                    String.Format(SR.ManualResetEventSlim_ctor_SpinCountOutOfRange, SpinCountState_MaxValue));
             }
 
             // We will suppress default spin  because the user specified a count.
@@ -246,8 +241,6 @@ namespace System.Threading
         /// </summary>
         private void EnsureLockObjectCreated()
         {
-            Contract.Ensures(m_lock != null);
-
             if (m_lock != null)
                 return;
 
@@ -563,44 +556,19 @@ namespace System.Threading
                     bNeedTimeoutAdjustment = true;
                 }
 
-                //spin
-                int HOW_MANY_SPIN_BEFORE_YIELD = 10;
-                int HOW_MANY_YIELD_EVERY_SLEEP_0 = 5;
-                int HOW_MANY_YIELD_EVERY_SLEEP_1 = 20;
-
+                // Spin
                 int spinCount = SpinCount;
-                for (int i = 0; i < spinCount; i++)
+                var spinner = new SpinWait();
+                while (spinner.Count < spinCount)
                 {
+                    spinner.SpinOnce(SpinWait.Sleep1ThresholdForSpinBeforeWait);
+
                     if (IsSet)
                     {
                         return true;
                     }
 
-                    else if (i < HOW_MANY_SPIN_BEFORE_YIELD)
-                    {
-                        if (i == HOW_MANY_SPIN_BEFORE_YIELD / 2)
-                        {
-                            Thread.Yield();
-                        }
-                        else
-                        {
-                            Thread.SpinWait(PlatformHelper.ProcessorCount * (4 << i));
-                        }
-                    }
-                    else if (i % HOW_MANY_YIELD_EVERY_SLEEP_1 == 0)
-                    {
-                        Thread.Sleep(1);
-                    }
-                    else if (i % HOW_MANY_YIELD_EVERY_SLEEP_0 == 0)
-                    {
-                        Thread.Sleep(0);
-                    }
-                    else
-                    {
-                        Thread.Yield();
-                    }
-
-                    if (i >= 100 && i % 10 == 0) // check the cancellation token if the user passed a very large spin count
+                    if (spinner.Count >= 100 && spinner.Count % 10 == 0) // check the cancellation token if the user passed a very large spin count
                         cancellationToken.ThrowIfCancellationRequested();
                 }
 
@@ -717,7 +685,7 @@ namespace System.Threading
         private void ThrowIfDisposed()
         {
             if ((m_combinedState & Dispose_BitMask) != 0)
-                throw new ObjectDisposedException(Environment.GetResourceString("ManualResetEventSlim_Disposed"));
+                throw new ObjectDisposedException(SR.ManualResetEventSlim_Disposed);
         }
 
         /// <summary>

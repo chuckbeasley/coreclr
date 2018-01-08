@@ -99,7 +99,6 @@ GPTR_IMPL(MethodTable,      g_pICastableInterface);
 
 GPTR_IMPL(MethodDesc,       g_pExecuteBackoutCodeHelperMethod);
 
-GPTR_IMPL(MethodDesc,       g_pObjectCtorMD);
 GPTR_IMPL(MethodDesc,       g_pObjectFinalizerMD);
 
 GPTR_IMPL(Thread,g_pFinalizerThread);
@@ -121,12 +120,9 @@ GPTR_IMPL_INIT(StressLog, g_pStressLog, &StressLog::theLog);
 GPTR_IMPL(RCWCleanupList,g_pRCWCleanupList);
 #endif // FEATURE_COMINTEROP
 
+GVAL_IMPL_INIT(DWORD, g_TlsIndex, TLS_OUT_OF_INDEXES);
 
 #ifndef DACCESS_COMPILE
-
-// <TODO> @TODO Remove eventually - </TODO> determines whether the verifier throws an exception when something fails
-bool                g_fVerifierOff;
-
 
 // <TODO> @TODO - PROMOTE. </TODO>
 OBJECTHANDLE         g_pPreallocatedOutOfMemoryException;
@@ -150,7 +146,8 @@ SpinConstants g_SpinConstants = {
     50,        // dwInitialDuration 
     40000,     // dwMaximumDuration - ideally (20000 * max(2, numProc))
     3,         // dwBackoffFactor
-    10         // dwRepetitions
+    10,        // dwRepetitions
+    0          // dwMonitorSpinCount
 };
 
 // support for Event Tracing for Windows (ETW)
@@ -231,14 +228,6 @@ bool g_fShutDownCOM = false;
 
 DWORD g_FinalizerWaiterStatus = 0;
 
-const WCHAR g_pwzClickOnceEnv_FullName[] = W("__COR_COMMAND_LINE_APP_FULL_NAME__");
-const WCHAR g_pwzClickOnceEnv_Manifest[] = W("__COR_COMMAND_LINE_MANIFEST__");
-const WCHAR g_pwzClickOnceEnv_Parameter[] = W("__COR_COMMAND_LINE_PARAMETER__");
-
-#ifdef FEATURE_LOADER_OPTIMIZATION
-DWORD g_dwGlobalSharePolicy = AppDomain::SHARE_POLICY_UNSPECIFIED;
-#endif
-
 //
 // Do we own the lifetime of the process, ie. is it an EXE?
 //
@@ -255,15 +244,6 @@ bool g_fInControlC = false;
 //
 LPWSTR g_pCachedCommandLine = NULL;
 LPWSTR g_pCachedModuleFileName = 0;
-
-// host configuration file. If set, it is added to every AppDomain (fusion context)
-LPCWSTR  g_pszHostConfigFile = NULL;
-SIZE_T  g_dwHostConfigFile = 0;
-
-// AppDomainManager assembly and type names provided as environment variables.
-LPWSTR g_wszAppDomainManagerAsm = NULL;
-LPWSTR g_wszAppDomainManagerType = NULL;
-bool g_fDomainManagerInitialized = false;
 
 //
 // IJW needs the shim HINSTANCE
@@ -312,50 +292,5 @@ extern "C" RAW_KEYWORD(volatile) const GSCookie s_gsCookie = 0;
 __GlobalVal< GSCookie > s_gsCookie(&g_dacGlobals.dac__s_gsCookie);
 #endif //!DACCESS_COMPILE
 
-BOOL IsCompilationProcess()
-{
-    LIMITED_METHOD_DAC_CONTRACT;
-#if defined(FEATURE_NATIVE_IMAGE_GENERATION) && !defined(DACCESS_COMPILE)
-    return g_pCEECompileInfo != NULL;
-#else
-    return FALSE;
-#endif
-}
-
 //==============================================================================
 
-enum NingenState
-{
-    kNotInitialized = 0,
-    kNingenEnabled = 1,
-    kNingenDisabled = 2,
-};
-
-extern int g_ningenState;
-int g_ningenState = kNotInitialized;
-
-// Removes all execution of managed or third-party code in the ngen compilation process.
-BOOL NingenEnabled()
-{
-    LIMITED_METHOD_CONTRACT;
-
-#ifdef CROSSGEN_COMPILE
-    // Always enable ningen for cross-compile
-    return TRUE;
-#else // CROSSGEN_COMPILE
-
-#ifdef FEATURE_NATIVE_IMAGE_GENERATION
-    // Note that ningen is enabled by default to get byte-to-byte identical NGen images between native compile and cross-compile
-    if (g_ningenState == kNotInitialized)
-    {
-        // This code must be idempotent as we don't have a lock to prevent a race to initialize g_ningenState.
-        g_ningenState = (IsCompilationProcess() && (0 != CLRConfig::GetConfigValue(CLRConfig::INTERNAL_Ningen))) ? kNingenEnabled : kNingenDisabled;
-    }
-
-    return g_ningenState == kNingenEnabled;
-#else
-    return FALSE;
-#endif
-
-#endif // CROSSGEN_COMPILE
-}

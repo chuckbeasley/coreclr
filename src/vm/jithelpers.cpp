@@ -20,8 +20,6 @@
 #include "excep.h"
 #include "float.h"      // for isnan
 #include "dbginterface.h"
-#include "security.h"
-#include "securitymeta.h"
 #include "dllimport.h"
 #include "gcheaputilities.h"
 #include "comdelegate.h"
@@ -47,7 +45,6 @@
 #include "genericdict.h"
 #include "array.h"
 #include "debuginfostore.h"
-#include "security.h"
 #include "safemath.h"
 #include "threadstatics.h"
 
@@ -459,7 +456,7 @@ HCIMPLEND
 HCIMPL2_VV(UINT64, JIT_LLsh, UINT64 num, int shift)
 {
     FCALL_CONTRACT;
-    return num << shift;
+    return num << (shift & 0x3F);
 }
 HCIMPLEND
 
@@ -2399,7 +2396,7 @@ HCIMPL2(Object*, JIT_ChkCastClass_Portable, MethodTable* pTargetMT, Object* pObj
         if (pMT == pTargetMT)
             return pObject;
 
-        pMT = MethodTable::GetParentMethodTableOrIndirection(pMT);
+        pMT = MethodTable::GetParentMethodTable(pMT);
     } while (pMT);
 
     ENDFORBIDGC();
@@ -2419,14 +2416,14 @@ HCIMPL2(Object*, JIT_ChkCastClassSpecial_Portable, MethodTable* pTargetMT, Objec
         PRECONDITION(pObject->GetMethodTable() != pTargetMT);
     } CONTRACTL_END;
 
-    PTR_VOID pMT = MethodTable::GetParentMethodTableOrIndirection(pObject->GetMethodTable());
+    PTR_VOID pMT = MethodTable::GetParentMethodTable(pObject->GetMethodTable());
 
     while (pMT)
     {
         if (pMT == pTargetMT)
             return pObject;
 
-        pMT = MethodTable::GetParentMethodTableOrIndirection(pMT);
+        pMT = MethodTable::GetParentMethodTable(pMT);
     }
 
     ENDFORBIDGC();
@@ -2453,7 +2450,7 @@ HCIMPL2(Object*, JIT_IsInstanceOfClass_Portable, MethodTable* pTargetMT, Object*
         if (pMT == pTargetMT)
             return pObject;
 
-        pMT = MethodTable::GetParentMethodTableOrIndirection(pMT);
+        pMT = MethodTable::GetParentMethodTable(pMT);
     } while (pMT);
 
     if (!pObject->GetMethodTable()->HasTypeEquivalence())
@@ -2752,7 +2749,7 @@ HCIMPL1(Object*, JIT_NewS_MP_FastPortable, CORINFO_CLASS_HANDLE typeHnd_)
 
     do
     {
-        _ASSERTE(GCHeapUtilities::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
 
         // This is typically the only call in the fast path. Making the call early seems to be better, as it allows the compiler
         // to use volatile registers for intermediate values. This reduces the number of push/pop instructions and eliminates
@@ -2844,7 +2841,7 @@ HCIMPL1(StringObject*, AllocateString_MP_FastPortable, DWORD stringLength)
 
     do
     {
-        _ASSERTE(GCHeapUtilities::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
 
         // Instead of doing elaborate overflow checks, we just limit the number of elements. This will avoid all overflow
         // problems, as well as making sure big string objects are correctly allocated in the big object heap.
@@ -3002,13 +2999,13 @@ HCIMPLEND
 //*************************************************************
 // Array allocation fast path for arrays of value type elements
 //
-HCIMPL2(Object*, JIT_NewArr1VC_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeHnd_, INT_PTR size)
+HCIMPL2(Object*, JIT_NewArr1VC_MP_FastPortable, CORINFO_CLASS_HANDLE arrayMT, INT_PTR size)
 {
     FCALL_CONTRACT;
 
     do
     {
-        _ASSERTE(GCHeapUtilities::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
 
         // Do a conservative check here.  This is to avoid overflow while doing the calculations.  We don't
         // have to worry about "large" objects, since the allocation quantum is never big enough for
@@ -3028,16 +3025,14 @@ HCIMPL2(Object*, JIT_NewArr1VC_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeHn
         // some reshuffling of intermediate values into nonvolatile registers around the call.
         Thread *thread = GetThread();
 
-        TypeHandle arrayTypeHandle(arrayTypeHnd_);
-        ArrayTypeDesc *arrayTypeDesc = arrayTypeHandle.AsArray();
-        MethodTable *arrayMethodTable = arrayTypeDesc->GetTemplateMethodTable();
+        MethodTable *pArrayMT = (MethodTable *)arrayMT;
 
-        _ASSERTE(arrayMethodTable->HasComponentSize());
-        SIZE_T componentSize = arrayMethodTable->RawGetComponentSize();
+        _ASSERTE(pArrayMT->HasComponentSize());
+        SIZE_T componentSize = pArrayMT->RawGetComponentSize();
         SIZE_T totalSize = componentCount * componentSize;
         _ASSERTE(totalSize / componentSize == componentCount);
 
-        SIZE_T baseSize = arrayMethodTable->GetBaseSize();
+        SIZE_T baseSize = pArrayMT->GetBaseSize();
         totalSize += baseSize;
         _ASSERTE(totalSize >= baseSize);
 
@@ -3056,7 +3051,7 @@ HCIMPL2(Object*, JIT_NewArr1VC_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeHn
 
         _ASSERTE(allocPtr != nullptr);
         ArrayBase *array = reinterpret_cast<ArrayBase *>(allocPtr);
-        array->SetMethodTable(arrayMethodTable);
+        array->SetArrayMethodTable(pArrayMT);
         _ASSERTE(static_cast<DWORD>(componentCount) == componentCount);
         array->m_NumComponents = static_cast<DWORD>(componentCount);
 
@@ -3072,20 +3067,20 @@ HCIMPL2(Object*, JIT_NewArr1VC_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeHn
 
     // Tail call to the slow helper
     ENDFORBIDGC();
-    return HCCALL2(JIT_NewArr1, arrayTypeHnd_, size);
+    return HCCALL2(JIT_NewArr1, arrayMT, size);
 }
 HCIMPLEND
 
 //*************************************************************
 // Array allocation fast path for arrays of object elements
 //
-HCIMPL2(Object*, JIT_NewArr1OBJ_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeHnd_, INT_PTR size)
+HCIMPL2(Object*, JIT_NewArr1OBJ_MP_FastPortable, CORINFO_CLASS_HANDLE arrayMT, INT_PTR size)
 {
     FCALL_CONTRACT;
 
     do
     {
-        _ASSERTE(GCHeapUtilities::UseAllocationContexts());
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
 
         // Make sure that the total size cannot reach LARGE_OBJECT_SIZE, which also allows us to avoid overflow checks. The
         // "256" slack is to cover the array header size and round-up, using a constant value here out of laziness.
@@ -3100,14 +3095,12 @@ HCIMPL2(Object*, JIT_NewArr1OBJ_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeH
         // some reshuffling of intermediate values into nonvolatile registers around the call.
         Thread *thread = GetThread();
 
-        TypeHandle arrayTypeHandle(arrayTypeHnd_);
-        ArrayTypeDesc *arrayTypeDesc = arrayTypeHandle.AsArray();
-        MethodTable *arrayMethodTable = arrayTypeDesc->GetTemplateMethodTable();
-
         SIZE_T totalSize = componentCount * sizeof(void *);
         _ASSERTE(totalSize / sizeof(void *) == componentCount);
 
-        SIZE_T baseSize = arrayMethodTable->GetBaseSize();
+        MethodTable *pArrayMT = (MethodTable *)arrayMT;
+
+        SIZE_T baseSize = pArrayMT->GetBaseSize();
         totalSize += baseSize;
         _ASSERTE(totalSize >= baseSize);
 
@@ -3124,7 +3117,7 @@ HCIMPL2(Object*, JIT_NewArr1OBJ_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeH
 
         _ASSERTE(allocPtr != nullptr);
         ArrayBase *array = reinterpret_cast<ArrayBase *>(allocPtr);
-        array->SetMethodTable(arrayMethodTable);
+        array->SetArrayMethodTable(pArrayMT);
         _ASSERTE(static_cast<DWORD>(componentCount) == componentCount);
         array->m_NumComponents = static_cast<DWORD>(componentCount);
 
@@ -3140,14 +3133,30 @@ HCIMPL2(Object*, JIT_NewArr1OBJ_MP_FastPortable, CORINFO_CLASS_HANDLE arrayTypeH
 
     // Tail call to the slow helper
     ENDFORBIDGC();
-    return HCCALL2(JIT_NewArr1, arrayTypeHnd_, size);
+    return HCCALL2(JIT_NewArr1, arrayMT, size);
+}
+HCIMPLEND
+
+//*************************************************************
+// R2R-specific array allocation wrapper that extracts array method table from ArrayTypeDesc
+//
+HCIMPL2(Object*, JIT_NewArr1_R2R, CORINFO_CLASS_HANDLE arrayTypeHnd_, INT_PTR size)
+{
+    FCALL_CONTRACT;
+
+    TypeHandle arrayTypeHandle(arrayTypeHnd_);
+    ArrayTypeDesc *pArrayTypeDesc = arrayTypeHandle.AsArray();
+    MethodTable *pArrayMT = pArrayTypeDesc->GetTemplateMethodTable();
+
+    ENDFORBIDGC();
+    return HCCALL2(JIT_NewArr1, (CORINFO_CLASS_HANDLE)pArrayMT, size);
 }
 HCIMPLEND
 
 #include <optdefault.h>
 
 /*************************************************************/
-HCIMPL2(Object*, JIT_NewArr1, CORINFO_CLASS_HANDLE arrayTypeHnd_, INT_PTR size)
+HCIMPL2(Object*, JIT_NewArr1, CORINFO_CLASS_HANDLE arrayMT, INT_PTR size)
 {
     FCALL_CONTRACT;
 
@@ -3155,11 +3164,11 @@ HCIMPL2(Object*, JIT_NewArr1, CORINFO_CLASS_HANDLE arrayTypeHnd_, INT_PTR size)
 
     HELPER_METHOD_FRAME_BEGIN_RET_0();    // Set up a frame
 
-    TypeHandle typeHnd(arrayTypeHnd_);
+    MethodTable *pArrayMT = (MethodTable *)arrayMT;
 
-    _ASSERTE(typeHnd.GetInternalCorElementType() == ELEMENT_TYPE_SZARRAY);
-    typeHnd.CheckRestore();
-    ArrayTypeDesc* pArrayClassRef = typeHnd.AsArray();
+    _ASSERTE(pArrayMT->IsFullyLoaded());
+    _ASSERTE(pArrayMT->IsArray());
+    _ASSERTE(!pArrayMT->IsMultiDimArray());
 
     if (size < 0)
         COMPlusThrow(kOverflowException);
@@ -3176,7 +3185,7 @@ HCIMPL2(Object*, JIT_NewArr1, CORINFO_CLASS_HANDLE arrayTypeHnd_, INT_PTR size)
     // is this a primitive type?
     //
 
-    CorElementType elemType = pArrayClassRef->GetArrayElementTypeHandle().GetSignatureCorElementType();
+    CorElementType elemType = pArrayMT->GetArrayElementType();
 
     if (CorTypeInfo::IsPrimitiveType(elemType)
 #ifdef FEATURE_64BIT_ALIGNMENT
@@ -3209,9 +3218,13 @@ HCIMPL2(Object*, JIT_NewArr1, CORINFO_CLASS_HANDLE arrayTypeHnd_, INT_PTR size)
 #endif
 
         if (g_pPredefinedArrayTypes[elemType] == NULL)
-            g_pPredefinedArrayTypes[elemType] = pArrayClassRef;
+        {
+            TypeHandle elemTypeHnd = TypeHandle(MscorlibBinder::GetElementType(elemType));
 
-        newArray = FastAllocatePrimitiveArray(pArrayClassRef->GetMethodTable(), static_cast<DWORD>(size), bAllocateInLargeHeap);
+            g_pPredefinedArrayTypes[elemType] = ClassLoader::LoadArrayTypeThrowing(elemTypeHnd, ELEMENT_TYPE_SZARRAY, 0).AsArray();
+        }
+
+        newArray = FastAllocatePrimitiveArray(pArrayMT, static_cast<DWORD>(size), bAllocateInLargeHeap);
     }
     else
     {
@@ -3221,7 +3234,7 @@ HCIMPL2(Object*, JIT_NewArr1, CORINFO_CLASS_HANDLE arrayTypeHnd_, INT_PTR size)
         }
 #endif // _DEBUG
         INT32 size32 = (INT32)size;
-        newArray = AllocateArrayEx(typeHnd, &size32, 1);
+        newArray = AllocateArrayEx(pArrayMT, &size32, 1);
     }
 
     HELPER_METHOD_FRAME_END();
@@ -4403,29 +4416,8 @@ NOINLINE static void JIT_MonEnter_Helper(Object* obj, BYTE* pbLockTaken, LPVOID 
         GET_THREAD()->PulseGCMode();
     }
     objRef->EnterObjMonitor();
-    _ASSERTE ((objRef->GetSyncBlock()->GetMonitor()->m_Recursion == 1 && pThread->m_dwLockCount == lockCount + 1) ||
+    _ASSERTE ((objRef->GetSyncBlock()->GetMonitor()->GetRecursionLevel() == 1 && pThread->m_dwLockCount == lockCount + 1) ||
               pThread->m_dwLockCount == lockCount);
-    if (pbLockTaken != 0) *pbLockTaken = 1;
-
-    GCPROTECT_END();
-    HELPER_METHOD_FRAME_END();
-
-    FC_INNER_EPILOG();
-}
-
-/*********************************************************************/
-NOINLINE static void JIT_MonContention_Helper(Object* obj, BYTE* pbLockTaken, LPVOID __me)
-{
-    FC_INNER_PROLOG_NO_ME_SETUP();
-
-    OBJECTREF objRef = ObjectToOBJECTREF(obj);
-
-    // Monitor helpers are used as both hcalls and fcalls, thus we need exact depth.
-    HELPER_METHOD_FRAME_BEGIN_ATTRIB_1(Frame::FRAME_ATTR_EXACT_DEPTH|Frame::FRAME_ATTR_CAPTURE_DEPTH_2, objRef);    
-
-    GCPROTECT_BEGININTERIOR(pbLockTaken);
-
-    objRef->GetSyncBlock()->QuickGetMonitor()->Contention();
     if (pbLockTaken != 0) *pbLockTaken = 1;
 
     GCPROTECT_END();
@@ -4440,44 +4432,13 @@ NOINLINE static void JIT_MonContention_Helper(Object* obj, BYTE* pbLockTaken, LP
 HCIMPL_MONHELPER(JIT_MonEnterWorker_Portable, Object* obj)
 {
     FCALL_CONTRACT;
-    
-    AwareLock::EnterHelperResult result;
-    Thread * pCurThread;
 
-    if (obj == NULL)
+    if (obj != nullptr && obj->TryEnterObjMonitorSpinHelper())
     {
-        goto FramedLockHelper;
-    }
-
-    pCurThread = GetThread();
-
-    if (pCurThread->CatchAtSafePointOpportunistic()) 
-    {
-        goto FramedLockHelper;
-    }
-
-    result = obj->EnterObjMonitorHelper(pCurThread);
-    if (result == AwareLock::EnterHelperResult_Entered)
-    {
-        MONHELPER_STATE(*pbLockTaken = 1;)
+        MONHELPER_STATE(*pbLockTaken = 1);
         return;
     }
-    else
-    if (result == AwareLock::EnterHelperResult_Contention)
-    {
-        AwareLock::EnterHelperResult resultSpin = obj->EnterObjMonitorHelperSpin(pCurThread);
-        if (resultSpin == AwareLock::EnterHelperResult_Entered)
-        {
-            MONHELPER_STATE(*pbLockTaken = 1;)
-            return;
-        }
-        if (resultSpin == AwareLock::EnterHelperResult_Contention)
-        {
-            FC_INNER_RETURN_VOID(JIT_MonContention_Helper(obj, MONHELPER_ARG, GetEEFuncEntryPointMacro(JIT_MonEnter)));
-        }
-    }
 
-FramedLockHelper:
     FC_INNER_RETURN_VOID(JIT_MonEnter_Helper(obj, MONHELPER_ARG, GetEEFuncEntryPointMacro(JIT_MonEnter)));
 }
 HCIMPLEND
@@ -4486,41 +4447,11 @@ HCIMPL1(void, JIT_MonEnter_Portable, Object* obj)
 {
     FCALL_CONTRACT;
 
-    Thread * pCurThread;
-    AwareLock::EnterHelperResult result;
-    
-    if (obj == NULL)
-    {
-        goto FramedLockHelper;
-    }
-
-    pCurThread = GetThread();
-
-    if (pCurThread->CatchAtSafePointOpportunistic()) 
-    {
-        goto FramedLockHelper;
-    }
-
-    result = obj->EnterObjMonitorHelper(pCurThread);
-    if (result == AwareLock::EnterHelperResult_Entered)
+    if (obj != nullptr && obj->TryEnterObjMonitorSpinHelper())
     {
         return;
     }
-    else
-    if (result == AwareLock::EnterHelperResult_Contention)
-    {
-        AwareLock::EnterHelperResult resultSpin = obj->EnterObjMonitorHelperSpin(pCurThread);
-        if (resultSpin == AwareLock::EnterHelperResult_Entered)
-        {
-            return;
-        }
-        if (resultSpin == AwareLock::EnterHelperResult_Contention)
-        {
-            FC_INNER_RETURN_VOID(JIT_MonContention_Helper(obj, NULL, GetEEFuncEntryPointMacro(JIT_MonEnter)));
-        }
-    }
 
-FramedLockHelper:
     FC_INNER_RETURN_VOID(JIT_MonEnter_Helper(obj, NULL, GetEEFuncEntryPointMacro(JIT_MonEnter)));
 }
 HCIMPLEND
@@ -4529,43 +4460,12 @@ HCIMPL2(void, JIT_MonReliableEnter_Portable, Object* obj, BYTE* pbLockTaken)
 {
     FCALL_CONTRACT;
 
-    Thread * pCurThread;
-    AwareLock::EnterHelperResult result;
-    
-    if (obj == NULL)
-    {
-        goto FramedLockHelper;
-    }
-
-    pCurThread = GetThread();
-
-    if (pCurThread->CatchAtSafePointOpportunistic()) 
-    {
-        goto FramedLockHelper;
-    }
-
-    result = obj->EnterObjMonitorHelper(pCurThread);
-    if (result == AwareLock::EnterHelperResult_Entered)
+    if (obj != nullptr && obj->TryEnterObjMonitorSpinHelper())
     {
         *pbLockTaken = 1;
         return;
     }
-    else
-    if (result == AwareLock::EnterHelperResult_Contention)
-    {
-        AwareLock::EnterHelperResult resultSpin = obj->EnterObjMonitorHelperSpin(pCurThread);
-        if (resultSpin == AwareLock::EnterHelperResult_Entered)
-        {
-            *pbLockTaken = 1;
-            return;
-        }
-        if (resultSpin == AwareLock::EnterHelperResult_Contention)
-        {
-            FC_INNER_RETURN_VOID(JIT_MonContention_Helper(obj, pbLockTaken, GetEEFuncEntryPointMacro(JIT_MonReliableEnter)));
-        }
-    }
 
-FramedLockHelper:
     FC_INNER_RETURN_VOID(JIT_MonEnter_Helper(obj, pbLockTaken, GetEEFuncEntryPointMacro(JIT_MonReliableEnter)));
 }
 HCIMPLEND
@@ -4636,14 +4536,15 @@ HCIMPL3(void, JIT_MonTryEnter_Portable, Object* obj, INT32 timeOut, BYTE* pbLock
         *pbLockTaken = 1;
         return;
     }
-    else
     if (result == AwareLock::EnterHelperResult_Contention)
     {
         if (timeOut == 0)
+        {
             return;
+        }
 
-        AwareLock::EnterHelperResult resultSpin = obj->EnterObjMonitorHelperSpin(pCurThread);
-        if (resultSpin == AwareLock::EnterHelperResult_Entered)
+        result = obj->EnterObjMonitorHelperSpin(pCurThread);
+        if (result == AwareLock::EnterHelperResult_Entered)
         {
             *pbLockTaken = 1;
             return;
@@ -4728,7 +4629,6 @@ FCIMPL1(void, JIT_MonExit_Portable, Object* obj)
     {
         return;
     }
-    else
     if (action == AwareLock::LeaveHelperAction_Signal)
     {
         FC_INNER_RETURN_VOID(JIT_MonExit_Signal(obj));
@@ -4760,7 +4660,6 @@ HCIMPL_MONHELPER(JIT_MonExitWorker_Portable, Object* obj)
         MONHELPER_STATE(*pbLockTaken = 0;)
         return;
     }
-    else
     if (action == AwareLock::LeaveHelperAction_Signal)
     {
         MONHELPER_STATE(*pbLockTaken = 0;)
@@ -4808,7 +4707,7 @@ HCIMPL_MONHELPER(JIT_MonEnterStatic_Portable, AwareLock *lock)
         goto FramedLockHelper;
     }
 
-    if (lock->EnterHelper(pCurThread) == AwareLock::EnterHelperResult_Entered)
+    if (lock->TryEnterHelper(pCurThread))
     {
 #if defined(_DEBUG) && defined(TRACK_SYNC)
         // The best place to grab this is from the ECall frame
@@ -4895,289 +4794,6 @@ HCIMPL_MONHELPER(JIT_MonExitStatic_Portable, AwareLock *lock)
 }
 HCIMPLEND
 #include <optdefault.h>
-
-/*********************************************************************/
-// JITutil_Mon* are helpers than handle slow paths for JIT_Mon* methods
-// implemented in assembly. They are not doing any spinning compared 
-// to the full fledged portable implementations above.
-/*********************************************************************/
-
-/*********************************************************************/
-HCIMPL_MONHELPER(JITutil_MonEnterWorker, Object* obj)
-{
-    CONTRACTL
-    {
-        FCALL_CHECK;
-    }
-    CONTRACTL_END;
-
-    OBJECTREF objRef = ObjectToOBJECTREF(obj);
-
-    // The following makes sure that Monitor.Enter shows up on thread abort
-    // stack walks (otherwise Monitor.Enter called within a CER can block a
-    // thread abort indefinitely). Setting the __me internal variable (normally
-    // only set for fcalls) will cause the helper frame below to be able to
-    // backtranslate into the method desc for the Monitor.Enter fcall.
-    //
-    // Note that we need explicitly initialize Monitor.Enter fcall in
-    // code:SystemDomain::LoadBaseSystemClasses to make this work in the case
-    // where the first call ever to Monitor.Enter is done as JIT helper 
-    // for synchronized method.
-    __me = GetEEFuncEntryPointMacro(JIT_MonEnter);
-
-    // Monitor helpers are used as both hcalls and fcalls, thus we need exact depth.
-    HELPER_METHOD_FRAME_BEGIN_ATTRIB_1(Frame::FRAME_ATTR_EXACT_DEPTH, objRef);
-
-    if (objRef == NULL)
-        COMPlusThrow(kArgumentNullException);
-
-    MONHELPER_STATE(GCPROTECT_BEGININTERIOR(pbLockTaken);)
-
-#ifdef _DEBUG
-    Thread *pThread = GetThread();
-    DWORD lockCount = pThread->m_dwLockCount;
-#endif
-    if (GET_THREAD()->CatchAtSafePointOpportunistic())
-    {
-        GET_THREAD()->PulseGCMode();
-    }
-    objRef->EnterObjMonitor();
-    _ASSERTE ((objRef->GetSyncBlock()->GetMonitor()->m_Recursion == 1 && pThread->m_dwLockCount == lockCount + 1) ||
-              pThread->m_dwLockCount == lockCount);
-    MONHELPER_STATE(if (pbLockTaken != 0) *pbLockTaken = 1;)
-
-    MONHELPER_STATE(GCPROTECT_END();)
-    HELPER_METHOD_FRAME_END();
-}
-HCIMPLEND
-
-/*********************************************************************/
-
-// This helper is only ever used as part of FCall, but it is implemented using HCIMPL macro
-// so that it can be tail called from assembly helper without triggering asserts in debug.
-HCIMPL2(void, JITutil_MonReliableEnter, Object* obj, BYTE* pbLockTaken)
-{
-    CONTRACTL
-    {
-        FCALL_CHECK;
-    }
-    CONTRACTL_END;
-
-    OBJECTREF objRef = ObjectToOBJECTREF(obj);
-
-    // The following makes sure that Monitor.Enter shows up on thread abort
-    // stack walks (otherwise Monitor.Enter called within a CER can block a
-    // thread abort indefinitely). Setting the __me internal variable (normally
-    // only set for fcalls) will cause the helper frame below to be able to
-    // backtranslate into the method desc for the Monitor.Enter fcall.
-    __me = GetEEFuncEntryPointMacro(JIT_MonReliableEnter);
-
-    // Monitor helpers are used as both hcalls and fcalls, thus we need exact depth.
-    HELPER_METHOD_FRAME_BEGIN_ATTRIB_1(Frame::FRAME_ATTR_EXACT_DEPTH, objRef);    
-
-    if (objRef == NULL)
-        COMPlusThrow(kArgumentNullException);
-
-    GCPROTECT_BEGININTERIOR(pbLockTaken);
-
-#ifdef _DEBUG
-    Thread *pThread = GetThread();
-    DWORD lockCount = pThread->m_dwLockCount;
-#endif
-    if (GET_THREAD()->CatchAtSafePointOpportunistic())
-    {
-        GET_THREAD()->PulseGCMode();
-    }
-    objRef->EnterObjMonitor();
-    _ASSERTE ((objRef->GetSyncBlock()->GetMonitor()->m_Recursion == 1 && pThread->m_dwLockCount == lockCount + 1) ||
-              pThread->m_dwLockCount == lockCount);
-    *pbLockTaken = 1;
-
-    GCPROTECT_END();
-    HELPER_METHOD_FRAME_END();
-}
-HCIMPLEND
-
-
-/*********************************************************************/
-
-// This helper is only ever used as part of FCall, but it is implemented using HCIMPL macro
-// so that it can be tail called from assembly helper without triggering asserts in debug.
-HCIMPL3(void, JITutil_MonTryEnter, Object* obj, INT32 timeOut, BYTE* pbLockTaken)
-{
-    CONTRACTL
-    {
-        FCALL_CHECK;
-    }
-    CONTRACTL_END;
-
-    BOOL result = FALSE;
-
-    OBJECTREF objRef = ObjectToOBJECTREF(obj);
-
-    // The following makes sure that Monitor.TryEnter shows up on thread
-    // abort stack walks (otherwise Monitor.TryEnter called within a CER can
-    // block a thread abort for long periods of time). Setting the __me internal
-    // variable (normally only set for fcalls) will cause the helper frame below
-    // to be able to backtranslate into the method desc for the Monitor.TryEnter
-    // fcall.
-    __me = GetEEFuncEntryPointMacro(JIT_MonTryEnter);
-
-    // Monitor helpers are used as both hcalls and fcalls, thus we need exact depth.
-    HELPER_METHOD_FRAME_BEGIN_ATTRIB_1(Frame::FRAME_ATTR_EXACT_DEPTH, objRef);    
-
-    if (objRef == NULL)
-        COMPlusThrow(kArgumentNullException);
-
-    if (timeOut < -1)
-        COMPlusThrow(kArgumentOutOfRangeException);
-
-    GCPROTECT_BEGININTERIOR(pbLockTaken);
-
-    if (GET_THREAD()->CatchAtSafePointOpportunistic())
-    {
-        GET_THREAD()->PulseGCMode();
-    }
-
-    result = objRef->TryEnterObjMonitor(timeOut);
-    *pbLockTaken = result != FALSE;
-
-    GCPROTECT_END();
-    HELPER_METHOD_FRAME_END();
-}
-HCIMPLEND
-
-/*********************************************************************/
-HCIMPL_MONHELPER(JITutil_MonExitWorker, Object* obj)
-{
-    CONTRACTL
-    {
-        FCALL_CHECK;
-    }
-    CONTRACTL_END;
-
-    MONHELPER_STATE(if (pbLockTaken != NULL && *pbLockTaken == 0) return;)
-
-    OBJECTREF objRef = ObjectToOBJECTREF(obj);
-
-    // Monitor helpers are used as both hcalls and fcalls, thus we need exact depth.
-    HELPER_METHOD_FRAME_BEGIN_ATTRIB_1(Frame::FRAME_ATTR_NO_THREAD_ABORT|Frame::FRAME_ATTR_EXACT_DEPTH, objRef);    
-    
-    if (objRef == NULL)
-        COMPlusThrow(kArgumentNullException);
-
-    if (!objRef->LeaveObjMonitor())
-        COMPlusThrow(kSynchronizationLockException);
-
-    MONHELPER_STATE(if (pbLockTaken != 0) *pbLockTaken = 0;)
-
-    TESTHOOKCALL(AppDomainCanBeUnloaded(GET_THREAD()->GetDomain()->GetId().m_dwId,FALSE));
-    
-    if (GET_THREAD()->IsAbortRequested()) {
-        GET_THREAD()->HandleThreadAbort();
-    }
-
-    HELPER_METHOD_FRAME_END();
-}
-HCIMPLEND
-
-/*********************************************************************/
-// A helper for JIT_MonEnter that is on the callee side of an ecall
-// frame and handles the contention case.
-
-HCIMPL_MONHELPER(JITutil_MonContention, AwareLock* lock)
-{
-    CONTRACTL
-    {
-        FCALL_CHECK;
-    }
-    CONTRACTL_END;
-
-    // The following makes sure that Monitor.Enter shows up on thread abort
-    // stack walks (otherwise Monitor.Enter called within a CER can block a
-    // thread abort indefinitely). Setting the __me internal variable (normally
-    // only set for fcalls) will cause the helper frame below to be able to
-    // backtranslate into the method desc for the Monitor.Enter fcall.
-    __me = GetEEFuncEntryPointMacro(JIT_MonEnter);
-
-    // Monitor helpers are used as both hcalls and fcalls, thus we need exact depth.
-    HELPER_METHOD_FRAME_BEGIN_ATTRIB(Frame::FRAME_ATTR_EXACT_DEPTH);    
-    MONHELPER_STATE(GCPROTECT_BEGININTERIOR(pbLockTaken);)
-
-#ifdef _DEBUG
-    Thread *pThread = GetThread();
-    DWORD lockCount = pThread->m_dwLockCount;
-#endif
-    lock->Contention();
-    _ASSERTE (pThread->m_dwLockCount == lockCount + 1);
-    MONHELPER_STATE(if (pbLockTaken != 0) *pbLockTaken = 1;)
-
-    MONHELPER_STATE(GCPROTECT_END();)
-    HELPER_METHOD_FRAME_END();
-}
-HCIMPLEND
-
-// This helper is only ever used as part of FCall, but it is implemented using HCIMPL macro
-// so that it can be tail called from assembly helper without triggering asserts in debug.
-HCIMPL2(void, JITutil_MonReliableContention, AwareLock* lock, BYTE* pbLockTaken)
-{
-    CONTRACTL
-    {
-        FCALL_CHECK;
-    }
-    CONTRACTL_END;
-
-    // The following makes sure that Monitor.Enter shows up on thread abort
-    // stack walks (otherwise Monitor.Enter called within a CER can block a
-    // thread abort indefinitely). Setting the __me internal variable (normally
-    // only set for fcalls) will cause the helper frame below to be able to
-    // backtranslate into the method desc for the Monitor.Enter fcall.
-    __me = GetEEFuncEntryPointMacro(JIT_MonReliableEnter);
-
-    // Monitor helpers are used as both hcalls and fcalls, thus we need exact depth.
-    HELPER_METHOD_FRAME_BEGIN_ATTRIB(Frame::FRAME_ATTR_EXACT_DEPTH);    
-    GCPROTECT_BEGININTERIOR(pbLockTaken);
-
-#ifdef _DEBUG
-    Thread *pThread = GetThread();
-    DWORD lockCount = pThread->m_dwLockCount;
-#endif
-    lock->Contention();
-    _ASSERTE (pThread->m_dwLockCount == lockCount + 1);
-    *pbLockTaken = 1;
-
-    GCPROTECT_END();
-    HELPER_METHOD_FRAME_END();
-}
-HCIMPLEND
-
-/*********************************************************************/
-// A helper for JIT_MonExit and JIT_MonExitStatic that is on the
-// callee side of an ecall frame and handles cases that might allocate,
-// throw or block.
-HCIMPL_MONHELPER(JITutil_MonSignal, AwareLock* lock)
-{
-    CONTRACTL
-    {
-        FCALL_CHECK;
-    }
-    CONTRACTL_END;
-
-    // Monitor helpers are used as both hcalls and fcalls, thus we need exact depth.
-    HELPER_METHOD_FRAME_BEGIN_ATTRIB(Frame::FRAME_ATTR_EXACT_DEPTH | Frame::FRAME_ATTR_NO_THREAD_ABORT);
-
-    lock->Signal();
-    MONHELPER_STATE(if (pbLockTaken != 0) *pbLockTaken = 0;)
-
-    TESTHOOKCALL(AppDomainCanBeUnloaded(GET_THREAD()->GetDomain()->GetId().m_dwId,FALSE));
-    
-    if (GET_THREAD()->IsAbortRequested()) {
-        GET_THREAD()->HandleThreadAbort();
-    }
-
-    HELPER_METHOD_FRAME_END();
-}
-HCIMPLEND
 
 HCIMPL1(void *, JIT_GetSyncFromClassHandle, CORINFO_CLASS_HANDLE typeHnd_)
     CONTRACTL {
@@ -5384,6 +5000,24 @@ HCIMPL0(void, JIT_ThrowArgumentOutOfRangeException)
 HCIMPLEND
 
 /*********************************************************************/
+HCIMPL0(void, JIT_ThrowPlatformNotSupportedException)
+{
+    FCALL_CONTRACT;
+
+    /* Make no assumptions about the current machine state */
+    ResetCurrentContext();
+
+    FC_GC_POLL_NOT_NEEDED();    // throws always open up for GC
+
+    HELPER_METHOD_FRAME_BEGIN_ATTRIB_NOPOLL(Frame::FRAME_ATTR_EXCEPTION);    // Set up a frame
+
+    COMPlusThrow(kPlatformNotSupportedException);
+
+    HELPER_METHOD_FRAME_END();
+}
+HCIMPLEND
+
+/*********************************************************************/
 HCIMPL0(void, JIT_Overflow)
 {
     FCALL_CONTRACT;
@@ -5460,7 +5094,7 @@ HCIMPL1(void, JIT_SecurityUnmanagedCodeException, CORINFO_CLASS_HANDLE typeHnd_)
 
     HELPER_METHOD_FRAME_BEGIN_ATTRIB_NOPOLL(Frame::FRAME_ATTR_EXCEPTION);    // Set up a frame
 
-    Security::ThrowSecurityException(g_SecurityPermissionClassName, SPFLAGSUNMANAGEDCODE);
+    COMPlusThrow(kSecurityException);
 
     HELPER_METHOD_FRAME_END();
 }
@@ -5654,328 +5288,47 @@ HCIMPLEND;
 //
 //========================================================================
 
-NOINLINE HCIMPL2(void, JIT_DelegateSecurityCheck_Internal, CORINFO_CLASS_HANDLE delegateHnd, CORINFO_METHOD_HANDLE calleeMethodHnd)
-{
-    FCALL_CONTRACT;
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-
-    TypeHandle delegateType(delegateHnd);
-    MethodDesc* pCallee = GetMethod(calleeMethodHnd);
-
-    Security::EnforceTransparentDelegateChecks(delegateType.AsMethodTable(), pCallee);
-
-    HELPER_METHOD_FRAME_END_POLL();
-}
-HCIMPLEND
-
-#include <optsmallperfcritical.h>
-/*************************************************************/
 HCIMPL2(void, JIT_DelegateSecurityCheck, CORINFO_CLASS_HANDLE delegateHnd, CORINFO_METHOD_HANDLE calleeMethodHnd)
 {
     FCALL_CONTRACT;
-
-    // If we're in full trust, then we don't enforce the delegate binding rules
-    if (GetAppDomain()->GetSecurityDescriptor()->IsFullyTrusted())
-    {
-        return;
-    }
-
-    // Tailcall to the real implementation
-    ENDFORBIDGC();
-    HCCALL2(JIT_DelegateSecurityCheck_Internal, delegateHnd, calleeMethodHnd);
-}
-HCIMPLEND
-#include <optdefault.h>
-
-
-/*************************************************************/
-//Make sure to allow check of 0 for COMPlus_Security_AlwaysInsertCallout
-NOINLINE HCIMPL4(void, JIT_MethodAccessCheck_Internal, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_METHOD_HANDLE calleeMethodHnd, CORINFO_CLASS_HANDLE calleeTypeHnd, CorInfoSecurityRuntimeChecks check)
-{
-    FCALL_CONTRACT;
-
-    //
-    // Verify with the security at runtime whether call is allowed.
-    // Throws an exception if the call is not allowed, returns if it is allowed.
-    //
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-
-    MethodDesc *pCaller = GetMethod(callerMethodHnd);
-    MethodDesc *pCallee = GetMethod(calleeMethodHnd);
-    // If we're being called because of a transparency violation (either a standard violation, or an attempt
-    // to call a conditional APTCA protected method from transparent code), process that now.
-    if (check & CORINFO_ACCESS_SECURITY_TRANSPARENCY)
-    {
-        Security::EnforceTransparentAssemblyChecks(pCaller, pCallee);
-    }
-
-    // Also make sure that we have access to the type that the method lives on
-    TypeHandle calleeTH(calleeTypeHnd);
-    Security::DoSecurityClassAccessChecks(pCaller, calleeTH, check);
-
-    // If the method has a generic instantiation, then we also need to do checks on its generic parameters
-    if (pCallee->HasMethodInstantiation())
-    {
-        Instantiation instantiation = pCallee->GetMethodInstantiation();
-        for (DWORD i = 0; i < instantiation.GetNumArgs(); i++)
-        {   
-            TypeHandle argTH = instantiation[i];
-            if (!argTH.IsGenericVariable())
-            {
-                Security::DoSecurityClassAccessChecks(pCaller, argTH, check);
-            }
-        }
-    }
-
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-
-#include <optsmallperfcritical.h>
-/*************************************************************/
-//Make sure to allow check of 0 for COMPlus_Security_AlwaysInsertCallout
 HCIMPL4(void, JIT_MethodAccessCheck, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_METHOD_HANDLE calleeMethodHnd, CORINFO_CLASS_HANDLE calleeTypeHnd, CorInfoSecurityRuntimeChecks check)
 {
     FCALL_CONTRACT;
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-    _ASSERTE(GetMethod(callerMethodHnd)->IsRestored());
-    _ASSERTE(GetMethod(calleeMethodHnd)->IsRestored());
-
-
-    // If we don't need to process this callout, then exit early
-    if (Security::SecurityCalloutQuickCheck(pCallerMD))
-    {
-        return;
-    }
-
-    // Tailcall to the slow helper
-    ENDFORBIDGC();
-    HCCALL4(JIT_MethodAccessCheck_Internal, callerMethodHnd, calleeMethodHnd, calleeTypeHnd, check);
-}
-HCIMPLEND
-#include <optdefault.h>
-
-
-// Slower checks (including failure paths) for determining if a method has runtime access to a field
-NOINLINE HCIMPL3(void, JIT_FieldAccessCheck_Internal, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_FIELD_HANDLE calleeFieldHnd, CorInfoSecurityRuntimeChecks check)
-{
-    FCALL_CONTRACT;
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-    FieldDesc *pFD = reinterpret_cast<FieldDesc *>(calleeFieldHnd);
-
-    // We can get caller checks of 0 if we're in AlwaysInsertCallout mode, so make sure to do all of our
-    // work under checks for specific flags
-    
-    if (check & CORINFO_ACCESS_SECURITY_TRANSPARENCY)
-    {
-        _ASSERTE(pCallerMD != NULL);
-        StaticAccessCheckContext accessContext(pCallerMD);
-
-        if (!Security::CheckCriticalAccess(&accessContext, NULL, pFD, NULL))
-        {
-            ThrowFieldAccessException(pCallerMD, pFD, TRUE, IDS_E_CRITICAL_FIELD_ACCESS_DENIED);
-        }
-    }
-
-    // Also make sure that we have access to the type that the field lives on
-    TypeHandle fieldTH(pFD->GetApproxEnclosingMethodTable());
-    Security::DoSecurityClassAccessChecks(pCallerMD, fieldTH, check);
-
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-#include <optsmallperfcritical.h>
-// Check to see if a method has runtime access to a field
 HCIMPL3(void, JIT_FieldAccessCheck, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_FIELD_HANDLE calleeFieldHnd, CorInfoSecurityRuntimeChecks check)
 {
     FCALL_CONTRACT;
-    _ASSERTE(GetMethod(callerMethodHnd)->IsRestored());
-    _ASSERTE(((FieldDesc*)calleeFieldHnd)->GetEnclosingMethodTable()->IsRestored_NoLogging());
-
-    // We want to try to exit JIT_FieldAccessCheck as soon as possible, preferably without
-    // entering JIT_FieldAccessCheck_Internal.  This method contains only quick checks to see if
-    // the access is definately allowed.  More complete checks are done in the Internal method.
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-
-    // If we don't need to process this callout at all, exit early
-    if (Security::SecurityCalloutQuickCheck(pCallerMD))
-    {
-        return;
-    }
-
-    // If the callout is for conditional APTCA only and we know the target is enabled, then we can also exit
-    // early
-
-    // We couldn't quickly determine that this access is legal, so tailcall to the slower helper to do some
-    // more work to process the access.
-    ENDFORBIDGC();
-    HCCALL3(JIT_FieldAccessCheck_Internal, callerMethodHnd, calleeFieldHnd, check);
-}
-HCIMPLEND
-#include <optdefault.h>
-
-// Slower checks (including failure paths) for determining if a method has runtime access to a type
-NOINLINE HCIMPL3(void, JIT_ClassAccessCheck_Internal, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_CLASS_HANDLE calleeClassHnd, CorInfoSecurityRuntimeChecks check)
-{
-    FCALL_CONTRACT;
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-    TypeHandle calleeClassTH(calleeClassHnd);
-
-    Security::DoSecurityClassAccessChecks(pCallerMD, calleeClassTH, check);
-
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-#include <optsmallperfcritical.h>
-// Check to see if a method has runtime access to a type
 HCIMPL3(void, JIT_ClassAccessCheck, CORINFO_METHOD_HANDLE callerMethodHnd, CORINFO_CLASS_HANDLE calleeClassHnd, CorInfoSecurityRuntimeChecks check)
 {
     FCALL_CONTRACT;
-    _ASSERTE(GetMethod(callerMethodHnd)->IsRestored());
-    _ASSERTE(TypeHandle(calleeClassHnd).IsRestored());
-
-    // We want to try to exit JIT_ClassAccessCheck as soon as possible, preferably without
-    // entering JIT_ClassAccessCheck_Internal.  This method contains only quick checks to see if
-    // the access is definately allowed.  More complete checks are done in the Internal method.
-
-    MethodDesc *pCallerMD = GetMethod(callerMethodHnd);
-       
-    // If we don't need to prrocess the callout at all, exit early
-    if (Security::SecurityCalloutQuickCheck(pCallerMD))
-    {
-        return;
-    }
-
-    // If the callout is for conditional APTCA only, and we know the target is enabled, then we can also
-    // exit early
-
-    // We couldn't quickly determine that this access is legal, so tailcall to the slower helper to do some
-    // more work processing the access.
-    ENDFORBIDGC();
-    HCCALL3(JIT_ClassAccessCheck_Internal, callerMethodHnd, calleeClassHnd, check);
-}
-HCIMPLEND
-#include <optdefault.h>
-
-NOINLINE HCIMPL2(void, JIT_Security_Prolog_Framed, CORINFO_METHOD_HANDLE methHnd_, OBJECTREF* ppFrameSecDesc)
-{
-    FCALL_CONTRACT;
-
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-    {
-        ASSUME_BYREF_FROM_JIT_STACK_BEGIN(ppFrameSecDesc);
-
-        MethodDesc *pCurrent = GetMethod(methHnd_);
-
-        g_IBCLogger.LogMethodDescAccess(pCurrent);
-
-        // Note: This check is replicated in JIT_Security_Prolog
-        if ((pCurrent->IsInterceptedForDeclSecurity() &&
-            !(pCurrent->IsInterceptedForDeclSecurityCASDemandsOnly() &&
-                SecurityStackWalk::HasFlagsOrFullyTrusted(0)))
-                )
-        {
-            MethodSecurityDescriptor MDSecDesc(pCurrent);
-            MethodSecurityDescriptor::LookupOrCreateMethodSecurityDescriptor(&MDSecDesc);
-
-            // Do the Declarative CAS actions check
-            DeclActionInfo* pRuntimeDeclActionInfo = MDSecDesc.GetRuntimeDeclActionInfo();
-            if (pRuntimeDeclActionInfo != NULL || pCurrent->IsLCGMethod())
-            {
-                 // Tell the debugger not to start on any managed code that we call in this method    
-                FrameWithCookie<DebuggerSecurityCodeMarkFrame> __dbgSecFrame;
-
-                Security::DoDeclarativeActions(pCurrent, pRuntimeDeclActionInfo, ppFrameSecDesc, &MDSecDesc);
-
-                // Pop the debugger frame
-                __dbgSecFrame.Pop();
-            }
-        }
-
-        ASSUME_BYREF_FROM_JIT_STACK_END();
-    }  
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-/*************************************************************/
-#include <optsmallperfcritical.h>
 HCIMPL2(void, JIT_Security_Prolog, CORINFO_METHOD_HANDLE methHnd_, OBJECTREF* ppFrameSecDesc)
 {
     FCALL_CONTRACT;
-
-    //
-    // do the security prolog work
-    //
-
-    MethodDesc *pCurrent = GetMethod(methHnd_);
-
-    // Note: This check is replicated in JIT_Security_Prolog_Framed
-    if ((pCurrent->IsInterceptedForDeclSecurity() &&
-        !(pCurrent->IsInterceptedForDeclSecurityCASDemandsOnly() &&
-        SecurityStackWalk::HasFlagsOrFullyTrusted(0)))
-        // We don't necessarily need to do work for LCG methods, but we need a frame
-        // to find out for sure
-        || pCurrent->IsLCGMethod())
-    {
-        // Tailcall to the slow helper
-        ENDFORBIDGC();
-        HCCALL2(JIT_Security_Prolog_Framed, methHnd_, ppFrameSecDesc);
-    }
 }
 HCIMPLEND
-#include <optdefault.h>
 
-/*************************************************************/
-NOINLINE HCIMPL1(void, JIT_VerificationRuntimeCheck_Internal, CORINFO_METHOD_HANDLE methHnd_)
+HCIMPL2(void, JIT_Security_Prolog_Framed, CORINFO_METHOD_HANDLE methHnd_, OBJECTREF* ppFrameSecDesc)
 {
     FCALL_CONTRACT;
-
-    
-    HELPER_METHOD_FRAME_BEGIN_NOPOLL();
-    {
-        // Transparent methods that contains unverifiable code is not allowed.
-        MethodDesc *pMethod = GetMethod(methHnd_);
-        SecurityTransparent::ThrowMethodAccessException(pMethod);
-    }
-    HELPER_METHOD_FRAME_END_POLL();
 }
 HCIMPLEND
 
-#include <optsmallperfcritical.h>
-/*************************************************************/
 HCIMPL1(void, JIT_VerificationRuntimeCheck, CORINFO_METHOD_HANDLE methHnd_)
 {
     FCALL_CONTRACT;
-
-    if (SecurityStackWalk::HasFlagsOrFullyTrustedIgnoreMode(0)) 
-        return;
-    //
-    // inject a full-demand for unmanaged code permission at runtime
-    // around methods in transparent assembly that contains unverifiable code
-    {
-        // Tailcall to the slow helper
-        ENDFORBIDGC();
-        HCCALL1(JIT_VerificationRuntimeCheck_Internal, methHnd_);
-    }
-
 }
 HCIMPLEND
-#include <optdefault.h>
-
 
 
 //========================================================================

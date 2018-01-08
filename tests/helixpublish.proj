@@ -1,4 +1,9 @@
 <Project ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <PropertyGroup>
+    <__BuildArch>$(Platform)</__BuildArch>
+  </PropertyGroup>
+  
   <Import Project="..\dir.props" />
   <!-- CoreClr-Specific Helix test submission project. -->
 
@@ -11,8 +16,8 @@
 
     <!-- Finally, these archives represent the zips of tests that are OSPlatform specific 
          This is used by CloudTest.Helix.Targets to generate relative blob paths for archives. -->
-    <ArchivesRoot>$(TestWorkingDir)/archive</ArchivesRoot>
-    <TestArchivesRoot>$(ArchivesRoot)/tests</TestArchivesRoot>
+    <ArchivesRoot>$(TestWorkingDir)/archive/</ArchivesRoot>
+    <TestArchivesRoot>$(ArchivesRoot)tests</TestArchivesRoot> 
 
     <RunnerScript Condition="'$(RunnerScript)' == ''">$(TestRunnerScript)</RunnerScript>
     <SupplementalPayloadDir Condition="'$(SupplementalPayloadDir)' == ''">$(TestWorkingDir)SupplementalPayload/</SupplementalPayloadDir>
@@ -32,13 +37,13 @@
     <HelixSource Condition="'$(HelixSource)'==''">pr/unknown/</HelixSource>
 
     <!-- Local path for storing submission-related files -->
-    <HelixLogFolder>$(ArchivesRoot)/</HelixLogFolder>
+    <HelixLogFolder>$(ArchivesRoot)</HelixLogFolder>
 
     <!-- Properties used for submission by CloudTest.Helix.Targets-->
     <BuildMoniker>$(CurrentDate)</BuildMoniker>
     <BuildMoniker Condition="'$(IsOfficial)'=='true'">$(OfficialBuildId)</BuildMoniker>
     <HelixArchLabel>$(Platform)</HelixArchLabel>
-    <HelixConfigLabel>$(ConfigurationGroup)</HelixConfigLabel>
+    <HelixConfigLabel>$(BuildType)</HelixConfigLabel>
   </PropertyGroup>
 
   <!-- Set Helix environment vars based on target platform -->
@@ -61,7 +66,7 @@
          If you change binplacing behavior and official runs break, 
          this is a good place to check.-->
     <ItemGroup>
-      <HelixWorkItem Include="$(TestArchivesRoot)/*.zip" />
+      <HelixWorkItem Include="$(TestArchivesRoot)/*.zip" /> 
     </ItemGroup>
     <Message Text="Full test archive collection : @(HelixWorkItem)" Importance="Low" />
 
@@ -70,7 +75,7 @@
     <Warning Condition="'@(HelixWorkItem->Count())' == '0'" Text="Didn't find any test archives in supplied folders!!! Review logs to see where test archive(s) were placed and fix." />
 
     <ItemGroup>      
-      <HelixCorrelationPayloadFile Include="$(ArchivesRoot)\Core_Root*\*.zip">
+      <HelixCorrelationPayloadFile Include="$(ArchivesRoot)Core_Root*/*.zip">
         <RelativeBlobPath>$(Platform)$(ConfigurationGroup)/%(Identity)</RelativeBlobPath>
       </HelixCorrelationPayloadFile>
       <HelixWorkItem>

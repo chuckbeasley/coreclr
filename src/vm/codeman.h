@@ -91,10 +91,8 @@ typedef struct
 } EH_CLAUSE_ENUMERATOR;
 class EECodeInfo;
 
-#define PAGE_MASK               (PAGE_SIZE-1)
-#define PAGE_ALIGN              ~(PAGE_MASK)
-#define ROUND_DOWN_TO_PAGE(x)   ( (size_t) (x)              & PAGE_ALIGN)
-#define ROUND_UP_TO_PAGE(x)     (((size_t) (x) + PAGE_MASK) & PAGE_ALIGN)
+#define ROUND_DOWN_TO_PAGE(x)   ( (size_t) (x)                        & ~((size_t)GetOsPageSize()-1))
+#define ROUND_UP_TO_PAGE(x)     (((size_t) (x) + (GetOsPageSize()-1)) & ~((size_t)GetOsPageSize()-1))
 
 enum StubCodeBlockKind : int
 {
@@ -367,10 +365,14 @@ struct CodeHeapRequestInfo
     const BYTE * m_hiAddr;          // hihest address to use to satisfy our request (0 -- don't care)
     size_t       m_requestSize;     // minimum size that must be made available
     size_t       m_reserveSize;     // Amount that VirtualAlloc will reserved
+    size_t       m_reserveForJumpStubs; // Amount to reserve for jump stubs (won't be allocated)
     bool         m_isDynamicDomain;
     bool         m_isCollectible;
-    
+    bool         m_throwOnOutOfMemoryWithinRange;
+
     bool   IsDynamicDomain()                    { return m_isDynamicDomain;    }
+    void   SetDynamicDomain()                   { m_isDynamicDomain = true;    }
+
     bool   IsCollectible()                      { return m_isCollectible;      }
     
     size_t getRequestSize()                     { return m_requestSize;        }
@@ -378,20 +380,26 @@ struct CodeHeapRequestInfo
     
     size_t getReserveSize()                     { return m_reserveSize;        }
     void   setReserveSize(size_t reserveSize)   { m_reserveSize = reserveSize; }
+
+    size_t getReserveForJumpStubs()             { return m_reserveForJumpStubs; }
+    void   setReserveForJumpStubs(size_t size)  { m_reserveForJumpStubs = size; }
+
+    bool   getThrowOnOutOfMemoryWithinRange()   { return m_throwOnOutOfMemoryWithinRange; }
+    void   setThrowOnOutOfMemoryWithinRange(bool value) { m_throwOnOutOfMemoryWithinRange = value; }
         
     void   Init();
     
     CodeHeapRequestInfo(MethodDesc *pMD)
         : m_pMD(pMD), m_pAllocator(0), 
           m_loAddr(0), m_hiAddr(0),
-          m_requestSize(0), m_reserveSize(0)
+          m_requestSize(0), m_reserveSize(0), m_reserveForJumpStubs(0)
     { WRAPPER_NO_CONTRACT;   Init(); }
     
     CodeHeapRequestInfo(MethodDesc *pMD, LoaderAllocator* pAllocator,
                         BYTE * loAddr, BYTE * hiAddr)
         : m_pMD(pMD), m_pAllocator(pAllocator), 
           m_loAddr(loAddr), m_hiAddr(hiAddr),
-          m_requestSize(0), m_reserveSize(0)
+          m_requestSize(0), m_reserveSize(0), m_reserveForJumpStubs(0)
     { WRAPPER_NO_CONTRACT;   Init(); }
 };
 
@@ -433,7 +441,7 @@ public:
 
     // Alloc the specified numbers of bytes for code. Returns NULL if the request does not fit
     // Space for header is reserved immediately before. It is not included in size.
-    virtual void* AllocMemForCode_NoThrow(size_t header, size_t size, DWORD alignment) = 0;
+    virtual void* AllocMemForCode_NoThrow(size_t header, size_t size, DWORD alignment, size_t reserveForJumpStubs) = 0;
 
 #ifdef DACCESS_COMPILE
     virtual void EnumMemoryRegions(CLRDataEnumMemoryFlags flags) = 0;
@@ -463,13 +471,11 @@ typedef struct _HeapList
     TADDR               startAddress;
     TADDR               endAddress;     // the current end of the used portion of the Heap
 
-    TADDR               mapBase;        // "startAddress" rounded down to PAGE_SIZE. pHdrMap is relative to this address
+    TADDR               mapBase;        // "startAddress" rounded down to GetOsPageSize(). pHdrMap is relative to this address
     PTR_DWORD           pHdrMap;        // bit array used to find the start of methods
 
     size_t              maxCodeHeapSize;// Size of the entire contiguous block of memory
-    DWORD               cBlocks;        // Number of allocations
-    bool                bFull;          // Heap is considered full do not use for new allocations
-    bool                bFullForJumpStubs; // Heap is considered full do not use for new allocations of jump stubs
+    size_t              reserveForJumpStubs; // Amount of memory reserved for jump stubs in this block
 
 #if defined(_TARGET_AMD64_)
     BYTE        CLRPersonalityRoutine[JUMP_ALLOCATE_SIZE];                 // jump thunk to personality routine
@@ -482,18 +488,6 @@ typedef struct _HeapList
 
     void SetNext(PTR_HeapList next)
     { hpNext = next; }
-
-    void SetHeapFull() 
-    { VolatileStore(&bFull, true); }
-
-    bool IsHeapFull() 
-    { return VolatileLoad(&bFull); }
-
-    void SetHeapFullForJumpStubs() 
-    { VolatileStore(&bFullForJumpStubs, true); }
-
-    bool IsHeapFullForJumpStubs() 
-    { return VolatileLoad(&bFullForJumpStubs); }
 
 } HeapList;
 
@@ -527,7 +521,7 @@ public:
         WRAPPER_NO_CONTRACT;
     }
 
-    virtual void* AllocMemForCode_NoThrow(size_t header, size_t size, DWORD alignment) DAC_EMPTY_RET(NULL);
+    virtual void* AllocMemForCode_NoThrow(size_t header, size_t size, DWORD alignment, size_t reserveForJumpStubs) DAC_EMPTY_RET(NULL);
 
 #ifdef DACCESS_COMPILE
     virtual void EnumMemoryRegions(CLRDataEnumMemoryFlags flags)
@@ -1015,7 +1009,7 @@ public:
 
     BOOL                LoadJIT();
 
-    CodeHeader*         allocCode(MethodDesc* pFD, size_t blockSize, CorJitAllocMemFlag flag
+    CodeHeader*         allocCode(MethodDesc* pFD, size_t blockSize, size_t reserveForJumpStubs, CorJitAllocMemFlag flag
 #ifdef WIN64EXCEPTIONS
                                   , UINT nUnwindInfos
                                   , TADDR * pModuleBase
@@ -1025,7 +1019,8 @@ public:
     EE_ILEXCEPTION*     allocEHInfo(CodeHeader* pCodeHeader, unsigned numClauses, size_t * pAllocationSize);
     JumpStubBlockHeader* allocJumpStubBlock(MethodDesc* pMD, DWORD numJumps, 
                                             BYTE * loAddr, BYTE * hiAddr,
-                                            LoaderAllocator *pLoaderAllocator);
+                                            LoaderAllocator *pLoaderAllocator,
+                                            bool throwOnOutOfMemoryWithinRange);
 
     void *              allocCodeFragmentBlock(size_t blockSize, unsigned alignment, LoaderAllocator *pLoaderAllocator, StubCodeBlockKind kind);
 #endif // !DACCESS_COMPILE && !CROSSGEN_COMPILE
@@ -1091,13 +1086,12 @@ private :
 #ifndef DACCESS_COMPILE
 #ifndef CROSSGEN_COMPILE
     HeapList*   NewCodeHeap(CodeHeapRequestInfo *pInfo, DomainCodeHeapList *pADHeapList);
-    HeapList*   GetCodeHeap(CodeHeapRequestInfo *pInfo);
     bool        CanUseCodeHeap(CodeHeapRequestInfo *pInfo, HeapList *pCodeHeap);
     void*       allocCodeRaw(CodeHeapRequestInfo *pInfo, 
                              size_t header, size_t blockSize, unsigned align,
-                             HeapList ** ppCodeHeap /* Writeback, Can be null */ );
+                             HeapList ** ppCodeHeap);
 
-    DomainCodeHeapList *GetCodeHeapList(MethodDesc *pMD, LoaderAllocator *pAllocator, BOOL fDynamicOnly = FALSE);
+    DomainCodeHeapList *GetCodeHeapList(CodeHeapRequestInfo *pInfo, LoaderAllocator *pAllocator, BOOL fDynamicOnly = FALSE);
     DomainCodeHeapList *CreateCodeHeapList(CodeHeapRequestInfo *pInfo);
     LoaderHeap* GetJitMetaHeap(MethodDesc *pMD);
 #endif // !CROSSGEN_COMPILE
@@ -1200,12 +1194,6 @@ public:
 #if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
     HINSTANCE           m_JITCompilerOther; // Stores the handle of the legacy JIT, if one is loaded.
 #endif
-
-    // TRUE if the legacy/compat JIT was loaded successfully and will be used.
-    // This is available in all builds so if COMPlus_RequireLegacyJit=1 is set in a test,
-    // the test will fail in any build where the legacy JIT is not loaded, even if legacy
-    // fallback is not available in that build. This prevents unexpected silent successes.
-    BOOL                m_fLegacyJitUsed;
 
 #ifdef ALLOW_SXS_JIT
     //put these at the end so that we don't mess up the offsets in the DAC.
@@ -1363,7 +1351,8 @@ public:
                           PCODE target,
                           BYTE * loAddr,
                           BYTE * hiAddr,
-                          LoaderAllocator *pLoaderAllocator = NULL);
+                          LoaderAllocator *pLoaderAllocator = NULL,
+                          bool throwOnOutOfMemoryWithinRange = true);
 #endif
 
 private:
@@ -1436,7 +1425,8 @@ private:
     static PCODE getNextJumpStub(MethodDesc* pMD,
                                  PCODE target,
                                  BYTE * loAddr,  BYTE * hiAddr,
-                                 LoaderAllocator *pLoaderAllocator);
+                                 LoaderAllocator *pLoaderAllocator,
+                                 bool throwOnOutOfMemoryWithinRange);
 #endif    
 
 private:
@@ -1490,6 +1480,7 @@ private:
     static unsigned m_LCG_JumpStubBlockAllocCount;
     static unsigned m_LCG_JumpStubBlockFullCount;
 
+public:
     struct JumpStubCache
     {
         JumpStubCache() 

@@ -110,8 +110,6 @@ CONFIG_DWORD_INFO(INTERNAL_ADLogMemory, W("ADLogMemory"), 0, "Superseded by test
 CONFIG_DWORD_INFO(INTERNAL_ADTakeDHSnapShot, W("ADTakeDHSnapShot"), 0, "Superseded by test hooks")
 CONFIG_DWORD_INFO(INTERNAL_ADTakeSnapShot, W("ADTakeSnapShot"), 0, "Superseded by test hooks")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_EnableFullDebug, W("EnableFullDebug"), "Heavy-weight checking for AD boundary violations (AD leaks)")
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_DisableMSIPeek, W("DisableMSIPeek"), 0, "Disable MSI check in Fusion")
-CONFIG_DWORD_INFO(INTERNAL_MsiPeekForbid, W("MsiPeekForbid"), 0, "Assert on MSI calls")
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_ADULazyMemoryRelease, W("ADULazyMemoryRelease"), 1, "On by default. Turned off in cases when people try to catch memory leaks, in which case AD unload should be immediately followed by GC)")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_ADURetryCount, W("ADURetryCount"), "Controls timeout of AD unload. Used for workarounds when machine is too slow, there are network issues etc.")
 RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_LEGACY_APPDOMAIN_MANAGER_ASM, W("APPDOMAIN_MANAGER_ASM"), "Legacy method to specify the assembly containing the AppDomainManager to use for the default domain", CLRConfig::DontPrependCOMPlus_ | CLRConfig::IgnoreHKLM | CLRConfig::IgnoreHKCU)
@@ -134,28 +132,21 @@ RETAIL_CONFIG_DWORD_INFO(EXTERNAL_FinalizeOnShutdown, W("FinalizeOnShutdown"), D
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_ARMEnabled, W("ARMEnabled"), (DWORD)0, "Set it to 1 to enable ARM")
 
 //
+// Jit Pitching
+//
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_JitPitchEnabled, W("JitPitchEnabled"), (DWORD)0, "Set it to 1 to enable Jit Pitching")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_JitPitchMemThreshold, W("JitPitchMemThreshold"), (DWORD)0, "Do Jit Pitching when code heap usage is larger than this (in bytes)")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_JitPitchMethodSizeThreshold, W("JitPitchMethodSizeThreshold"), (DWORD)0, "Do Jit Pitching for methods whose native code size larger than this (in bytes)")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_JitPitchTimeInterval, W("JitPitchTimeInterval"), (DWORD)0, "Time interval between Jit Pitchings in ms")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_JitPitchPrintStat, W("JitPitchPrintStat"), (DWORD)0, "Print statistics about Jit Pitching")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_JitPitchMinVal, W("JitPitchMinVal"), (DWORD)0, "Do Jit Pitching if the value of the inner counter greater than this value (for debugging purpose only)")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_JitPitchMaxVal, W("JitPitchMaxVal"), (DWORD)0xffffffff, "Do Jit Pitching the value of the inner counter less then this value (for debuggin purpose only)")
+
+//
 // Assembly Loader
 //
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_DesignerNamespaceResolutionEnabled, W("designerNamespaceResolution"), FALSE, "Set it to 1 to enable DesignerNamespaceResolve event for WinRT types", CLRConfig::IgnoreEnv | CLRConfig::IgnoreHKLM | CLRConfig::IgnoreHKCU | CLRConfig::FavorConfigFile)
 CONFIG_DWORD_INFO_EX(INTERNAL_GetAssemblyIfLoadedIgnoreRidMap, W("GetAssemblyIfLoadedIgnoreRidMap"), 0, "Used to force loader to ignore assemblies cached in the rid-map", CLRConfig::REGUTIL_default)
-
-// 
-// BCL
-// 
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_BCLCorrectnessWarnings, W("BCLCorrectnessWarnings"), "Flag a few common correctness bugs in the library with additional runtime checks.")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_BCLPerfWarnings, W("BCLPerfWarnings"), "Flag some performance-related problems via asserts when people mis-use the library.")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_TimeSpan_LegacyFormatMode, W("TimeSpan_LegacyFormatMode"), 0, "Flag to enable System.TimeSpan legacy (.NET Framework 3.5 and earlier) ToString behavior.")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_CompatSortNLSVersion, W("CompatSortNLSVersion"), 0, "Determines the version of desired sorting behavior for AppCompat.")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_NetFx45_CultureAwareComparerGetHashCode_LongStrings, W("NetFx45_CultureAwareComparerGetHashCode_LongStrings"), 0, "Opt in to use the new (as of v4.5) constant space hash algorithm for strings")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_Resources_DisableUserPreferredFallback, W("DisableUserPreferredFallback"), 0, "Resource lookups should be dependent only on the CurrentUICulture, not a user-defined list of preferred languages nor the OS preferred fallback language.  Intended to avoid falling back to a right-to-left language, which is undisplayable in console apps.")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_RelativeBindForResources , W("relativeBindForResources"), 0, "Enables probing for satellite assemblies only next to the parent assembly")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_NetFx45_LegacyManagedDeflateStream, W("NetFx45_LegacyManagedDeflateStream"), 0, "Flag to enable legacy managed implementation of the deflater used by System.IO.Compression.DeflateStream.")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_DateTime_NetFX35ParseMode, W("DateTime_NetFX35ParseMode"), 0, "Flag to enable the .NET 3.5 System.DateTime Token Replacement Policy")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_ThrowUnobservedTaskExceptions, W("ThrowUnobservedTaskExceptions"), 0, "Flag to propagate unobserved task exceptions on the finalizer thread.")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_DateTime_NetFX40AmPmParseAdjustment, W("EnableAmPmParseAdjustment"), 0, "Flag to enable the .NET 4.0 DateTimeParse to correctly parse AM/PM cases")
-#ifdef FEATURE_RANDOMIZED_STRING_HASHING
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_UseRandomizedStringHashAlgorithm, W("UseRandomizedStringHashAlgorithm"), 0, "Flag to use a string hashing algorithm who's behavior differs between AppDomains")
-#endif // FEATURE_RANDOMIZED_STRING_HASHING
 
 // 
 // Conditional breakpoints
@@ -269,6 +260,9 @@ CONFIG_DWORD_INFO(UNSUPPORTED_Debugging_RequiredVersion, W("UNSUPPORTED_Debuggin
 #ifdef FEATURE_MINIMETADATA_IN_TRIAGEDUMPS
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_MiniMdBufferCapacity, W("MiniMdBufferCapacity"), 64 * 1024, "The max size of the buffer to store mini metadata information for triage- and mini-dumps.")
 #endif // FEATURE_MINIMETADATA_IN_TRIAGEDUMPS
+
+CONFIG_DWORD_INFO_EX(INTERNAL_DbgNativeCodeBpBindsAcrossVersions, W("DbgNativeCodeBpBindsAcrossVersions"), 0, "If non-zero causes native breakpoints at offset 0 to bind in all tiered compilation versions of the given method", CLRConfig::REGUTIL_default)
+
 //
 // Diagnostics (internal general-purpose)
 //
@@ -276,7 +270,6 @@ CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_ConditionalContracts, W("ConditionalCon
 CONFIG_DWORD_INFO(INTERNAL_ConsistencyCheck, W("ConsistencyCheck"), 0, "")
 CONFIG_DWORD_INFO_EX(INTERNAL_ContinueOnAssert, W("ContinueOnAssert"), 0, "If set, doesn't break on asserts.", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_disableStackOverflowProbing, W("disableStackOverflowProbing"), 0, "", CLRConfig::FavorConfigFile)
-CONFIG_DWORD_INFO(INTERNAL_EnforceEEThreadNotRequiredContracts, W("EnforceEEThreadNotRequiredContracts"), 0, "Indicates whether to enforce EE_THREAD_NOT_REQUIRED contracts (not enforced by default for perf reasons).  Only applicable in dbg/chk builds--EE_THREAD_NOT_REQUIRED contracts never enforced in ret builds.")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_InjectFatalError, W("InjectFatalError"), "")
 CONFIG_DWORD_INFO_EX(INTERNAL_InjectFault, W("InjectFault"), 0, "", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SuppressChecks, W("SuppressChecks"), "")
@@ -325,7 +318,6 @@ RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_GCLogFileSize, W("GCLogFileSize"), 0, "Spec
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_GCCompactRatio, W("GCCompactRatio"), 0, "Specifies the ratio compacting GCs vs sweeping ")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_GCPollType, W("GCPollType"), "")
 RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_NewGCCalc, W("NewGCCalc"), "", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_GCprnLvl, W("GCprnLvl"), "Specifies the maximum level of GC logging")
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_GCRetainVM, W("GCRetainVM"), 0, "When set we put the segments that should be deleted on a standby list (instead of releasing them back to the OS) which will be considered to satisfy new segment requests (note that the same thing can be specified via API which is the supported way)")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_GCSegmentSize, W("GCSegmentSize"), "Specifies the managed heap segment size")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_GCLOHCompact, W("GCLOHCompact"), "Specifies the LOH compaction mode")
@@ -334,9 +326,6 @@ RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_GCStress, W("GCStress"), 0, "trigger GCs at
 CONFIG_DWORD_INFO_EX(INTERNAL_GcStressOnDirectCalls, W("GcStressOnDirectCalls"), 0, "whether to trigger a GC on direct calls", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_GCStressStart, W("GCStressStart"), 0, "start GCStress after N stress GCs have been attempted")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_GCStressStartAtJit, W("GCStressStartAtJit"), 0, "start GCStress after N items are jitted")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_GCtraceEnd, W("GCtraceEnd"), "Specifies the index of the GC when the logging should end")
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_GCtraceFacility, W("GCtraceFacility"), "Specifies where to log to (this allows you to log to console, the stress log or a normal CLR log (good when you need to correlate the GC activities with other CLR activities)")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_GCtraceStart, W("GCtraceStart"), "Specifies the index of the GC when the logging should start")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_gcTrimCommitOnLowMemory, W("gcTrimCommitOnLowMemory"), "When set we trim the committed space more aggressively for the ephemeral seg. This is used for running many instances of server processes where they want to keep as little memory committed as possible")
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_BGCSpinCount, W("BGCSpinCount"), 140, "Specifies the bgc spin count")
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_BGCSpin, W("BGCSpin"), 2, "Specifies the bgc spin time")
@@ -346,6 +335,7 @@ RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_GCNumaAware, W("GCNumaAware"), 1, "Specifie
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_GCCpuGroup, W("GCCpuGroup"), 0, "Specifies if to enable GC to support CPU groups")
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_GCHeapCount, W("GCHeapCount"), 0, "")
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_GCNoAffinitize, W("GCNoAffinitize"), 0, "")
+RETAIL_CONFIG_STRING_INFO(EXTERNAL_GCName, W("GCName"), "")
 
 //
 // IBC
@@ -460,27 +450,13 @@ RETAIL_CONFIG_STRING_INFO_EX(INTERNAL_AltJitNgen, W("AltJitNgen"), "Enables AltJ
 #endif // defined(ALLOW_SXS_JIT_NGEN)
 CONFIG_DWORD_INFO_EX(INTERNAL_JitNoCMOV, W("JitNoCMOV"), 0, "", CLRConfig::REGUTIL_default)
 
-#if defined(_TARGET_AMD64_)
-// UseRyuJIT is only looked up in HKLM in the registry, not in config files or environment variables. It should only be set by the .NET 4.6 (and later version) installers,
-// not by users. See the "RyuJIT Compatibility Fallback Design Specification.docx" document for details.
-RETAIL_CONFIG_DWORD_INFO_EX(INTERNAL_UseRyuJit, W("UseRyuJIT"), 0, "Set to 1 by .NET 4.6 installer to indicate RyuJIT should be used, not JIT64.", CLRConfig::IgnoreEnv | CLRConfig::IgnoreHKCU | CLRConfig::IgnoreConfigFiles)
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_UseLegacyJit, W("useLegacyJit"), 0, "Set to 1 to do all JITing with compatjit.dll. Only applicable to x64.")
-RETAIL_CONFIG_STRING_INFO_EX(EXTERNAL_DisableNativeImageLoadList, W("DisableNativeImageLoadList"), "Refuse to load native images corresponding to one of the assemblies on this semicolon-delimited list of assembly names.", CLRConfig::REGUTIL_default)
-#endif
-
-#if defined(_TARGET_X86_)
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_UseWindowsX86CoreLegacyJit, W("UseWindowsX86CoreLegacyJit"), 0, "Set to 1 to do all JITing with compatjit.dll. Only applicable to Windows x86 .NET Core.")
-#endif
-
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_RequireLegacyJit, W("RequireLegacyJit"), 0, "Set to 1 to require the use of legacy JIT (via COMPlus_useLegacyJit=1 or COMPlus_UseWindowsX86CoreLegacyJit=1).")
-
 CONFIG_STRING_INFO_EX(INTERNAL_JitValNumCSE,  W("JitValNumCSE"),  "Enables ValNum CSE for the specified methods", CLRConfig::REGUTIL_default) 
 CONFIG_STRING_INFO_EX(INTERNAL_JitLexicalCSE, W("JitLexicalCSE"), "Enables Lexical CSE for the specified methods", CLRConfig::REGUTIL_default) 
 CONFIG_DWORD_INFO_EX(INTERNAL_JitNoCSE, W("JitNoCSE"), 0, "", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_EX(INTERNAL_JitNoCSE2, W("JitNoCSE2"), 0, "", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_EX(INTERNAL_JitNoHoist, W("JitNoHoist"), 0, "", CLRConfig::REGUTIL_default)
 
-RETAIL_CONFIG_DWORD_INFO_EX(INTERNAL_JitNoInline, W("JitNoInline"), 0, "Disables inlining of all methods", CLRConfig::REGUTIL_default)
+CONFIG_DWORD_INFO_EX(INTERNAL_JitNoInline, W("JitNoInline"), 0, "Disables inlining of all methods", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO_EX(INTERNAL_JitAggressiveInlining, W("JitAggressiveInlining"), 0, "Aggressive inlining of all methods", CLRConfig::REGUTIL_default)
 
 CONFIG_STRING_INFO_EX(INTERNAL_JitNoProcedureSplitting, W("JitNoProcedureSplitting"), "Disallow procedure splitting for specified methods", CLRConfig::REGUTIL_default)
@@ -553,14 +529,18 @@ CONFIG_DWORD_INFO_EX(INTERNAL_JitLoopHoistStats, W("JitLoopHoistStats"), 0, "Dis
 CONFIG_DWORD_INFO_EX(INTERNAL_JitDebugLogLoopCloning, W("JitDebugLogLoopCloning"), 0, "In debug builds log places where loop cloning optimizations are performed on the fast path.", CLRConfig::REGUTIL_default);
 CONFIG_DWORD_INFO_EX(INTERNAL_JitVNMapSelLimit, W("JitVNMapSelLimit"), 0, "If non-zero, assert if # of VNF_MapSelect applications considered reaches this", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_JitVNMapSelBudget, W("JitVNMapSelBudget"), 100, "Max # of MapSelect's considered for a particular top-level invocation.")
-#if defined(_TARGET_AMD64_) || defined(_TARGET_X86_)
+#if defined(_TARGET_AMD64_) || defined(_TARGET_X86_) || defined(_TARGET_ARM64_)
 #define EXTERNAL_FeatureSIMD_Default 1
-#define EXTERNAL_JitEnableAVX_Default 1
-#else // !defined(_TARGET_AMD64_) && !defined(_TARGET_X86_)
+#else // !(defined(_TARGET_AMD64_) || defined(_TARGET_X86_) || defined(_TARGET_ARM64_))
 #define EXTERNAL_FeatureSIMD_Default 0
+#endif // !(defined(_TARGET_AMD64_) || defined(_TARGET_X86_) || defined(_TARGET_ARM64_))
+#if defined(_TARGET_AMD64_) || defined(_TARGET_X86_)
+#define EXTERNAL_JitEnableAVX_Default 1
+#else // !(defined(_TARGET_AMD64_) || defined(_TARGET_X86_)
 #define EXTERNAL_JitEnableAVX_Default 0
-#endif // !defined(_TARGET_AMD64_) && !defined(_TARGET_X86_)
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_FeatureSIMD, W("FeatureSIMD"), EXTERNAL_FeatureSIMD_Default, "Enable SIMD support with companion SIMDVector.dll", CLRConfig::REGUTIL_default)
+#endif // !(defined(_TARGET_AMD64_) || defined(_TARGET_X86_)
+RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_FeatureSIMD, W("FeatureSIMD"), EXTERNAL_FeatureSIMD_Default, "Enable SIMD intrinsics recognition in System.Numerics.dll and/or System.Numerics.Vectors.dll", CLRConfig::REGUTIL_default)
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_SIMD16ByteOnly, W("SIMD16ByteOnly"), 0, "Limit maximum SIMD vector length to 16 bytes (used by x64_arm64_altjit)")
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_EnableAVX, W("EnableAVX"), EXTERNAL_JitEnableAVX_Default, "Enable AVX instruction set for wide operations as default", CLRConfig::REGUTIL_default)
 
 #if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
@@ -623,7 +603,7 @@ RETAIL_CONFIG_STRING_INFO(INTERNAL_WinMDPath, W("WinMDPath"), "Path for Windows 
 // Loader heap
 // 
 CONFIG_DWORD_INFO_EX(INTERNAL_LoaderHeapCallTracing, W("LoaderHeapCallTracing"), 0, "Loader heap troubleshooting", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_CodeHeapReserveForJumpStubs, W("CodeHeapReserveForJumpStubs"), 2, "Percentage of code heap to reserve for jump stubs")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_CodeHeapReserveForJumpStubs, W("CodeHeapReserveForJumpStubs"), 1, "Percentage of code heap to reserve for jump stubs")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_NGenReserveForJumpStubs, W("NGenReserveForJumpStubs"), 0, "Percentage of ngen image size to reserve for jump stubs")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_BreakOnOutOfMemoryWithinRange, W("BreakOnOutOfMemoryWithinRange"), 0, "Break before out of memory within range exception is thrown")
 
@@ -643,7 +623,6 @@ RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_LogToConsole, W("LogToConsole"),
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_LogToDebugger, W("LogToDebugger"), "Writes the CLR log to debugger (OutputDebugStringA).")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_LogToFile, W("LogToFile"), "Writes the CLR log to a file.")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_LogWithPid, W("LogWithPid"), "Appends pid to filename for the CLR log.")
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_FusionLogFileNamesIncludePid, W("FusionLogFileNamesIncludePid"), 0, "Fusion logging will append process id to log filenames.", CLRConfig::REGUTIL_default)
 
 // 
 // MetaData
@@ -658,8 +637,6 @@ CONFIG_DWORD_INFO_EX(INTERNAL_MD_MiniMDBreak, W("MD_MiniMDBreak"), 0, "ASSERT wh
 CONFIG_DWORD_INFO_EX(INTERNAL_MD_PreSaveBreak, W("MD_PreSaveBreak"), 0, "ASSERT when calling CMiniMdRw::PreSave", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_EX(INTERNAL_MD_RegMetaBreak, W("MD_RegMetaBreak"), 0, "ASSERT when creating RegMeta class", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_EX(INTERNAL_MD_RegMetaDump, W("MD_RegMetaDump"), 0, "? Dump MD in 4 functions?", CLRConfig::REGUTIL_default)
-CONFIG_DWORD_INFO_EX(INTERNAL_MD_TlbImp_BreakOnErr, W("MD_TlbImp_BreakOnErr"), 0, "ASSERT when importing TLB into MD", CLRConfig::REGUTIL_default)
-CONFIG_STRING_INFO_EX(INTERNAL_MD_TlbImp_BreakOnTypeImport, W("MD_TlbImp_BreakOnTypeImport"), "ASSERT when importing a type from TLB", (CLRConfig::LookupOptions) (CLRConfig::REGUTIL_default | CLRConfig::DontPrependCOMPlus_))
 // MetaData - Desktop-only
 CONFIG_DWORD_INFO_EX(INTERNAL_MD_WinMD_Disable, W("MD_WinMD_Disable"), 0, "Never activate the WinMD import adapter", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_EX(INTERNAL_MD_WinMD_AssertOnIllegalUsage, W("MD_WinMD_AssertOnIllegalUsage"), 0, "ASSERT if a WinMD import adapter detects a tool incompatibility", CLRConfig::REGUTIL_default)
@@ -684,6 +661,7 @@ RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_SpinLimitProcCap, W("SpinLimitProcCap"), 0x
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_SpinLimitProcFactor, W("SpinLimitProcFactor"), 0x4E20, "Hex value specifying the multiplier on NumProcs to use when calculating the maximum spin duration", EEConfig_default)
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_SpinLimitConstant, W("SpinLimitConstant"), 0x0, "Hex value specifying the constant to add when calculating the maximum spin duration", EEConfig_default)
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_SpinRetryCount, W("SpinRetryCount"), 0xA, "Hex value specifying the number of times the entire spin process is repeated (when applicable)", EEConfig_default)
+RETAIL_CONFIG_DWORD_INFO_EX(INTERNAL_Monitor_SpinCount, W("Monitor_SpinCount"), 0x1e, "Hex value specifying the maximum number of spin iterations Monitor may perform upon contention on acquiring the lock before waiting.", EEConfig_default)
 
 // 
 // Native Binder
@@ -751,21 +729,8 @@ CONFIG_DWORD_INFO_EX(INTERNAL_NgenForceFailureCount, W("NgenForceFailureCount"),
 CONFIG_DWORD_INFO_EX(INTERNAL_NgenForceFailureKind, W("NgenForceFailureKind"), 1, "If set to 1, We will throw a TypeLoad exception; If set to 2, We will cause an A/V", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_NGenEnableCreatePdb, W("NGenEnableCreatePdb"), 0, "If set to >0 ngen.exe displays help on, recognizes createpdb in the command line")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_NGenSimulateDiskFull, W("NGenSimulateDiskFull"), 0, "If set to 1, ngen will throw a Disk full exception in ZapWriter.cpp:Save()")
-RETAIL_CONFIG_STRING_INFO(INTERNAL_NGenAssemblyUsageLog, W("NGenAssemblyUsageLog"), "Directory to store ngen usage logs in.")
-#ifdef FEATURE_APPX
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_NGenAssemblyUsageLogRefreshInterval, W("NGenAssemblyUsageLogRefreshInterval"), 24 * 60 * 60, "Interval to update usage log timestamp (seconds)");
-#endif
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_AppLocalAutongenNGenDisabled, W("AppLocalAutongenNGenDisabled"), 0, "Autongen disable flag.")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_PartialNGen, W("PartialNGen"), -1, "Generate partial NGen images")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_NgenAllowMscorlibSoftbind, W("NgenAllowMscorlibSoftbind"), 0, "Disable forced hard-binding to mscorlib")
-RETAIL_CONFIG_STRING_INFO_EX(UNSUPPORTED_RegistryRoot, W("RegistryRoot"), "Redirects all registry access under HKLM\Software to a specified alternative", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_STRING_INFO_EX(UNSUPPORTED_AssemblyPath, W("AssemblyPath"), "Redirects v2 GAC access to a specified alternative path", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_STRING_INFO_EX(UNSUPPORTED_AssemblyPath2, W("AssemblyPath2"), "Redirects v4 GAC access to a specified alternative path", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_STRING_INFO_EX(UNSUPPORTED_NicPath, W("NicPath"), "Redirects NIC access to a specified alternative", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_NGenTaskDelayStart, W("NGenTaskDelayStart"), 0, "Use NGen Task delay start trigger, instead of critical idle task")
-
-// Flag for cross-platform ngen: Removes all execution of managed or third-party code in the ngen compilation process.
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_Ningen, W("Ningen"), 1, "Enable no-impact ngen")
 
 CONFIG_DWORD_INFO(INTERNAL_NoASLRForNgen, W("NoASLRForNgen"), 0, "Turn off IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE bit in generated ngen images. Makes nidump output repeatable from run to run.")
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_NgenAllowOutput, W("NgenAllowOutput"), 0, "If set to 1, the NGEN worker will bind to the parent console, thus allowing stdout output to work", CLRConfig::REGUTIL_default)
@@ -774,41 +739,6 @@ RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_NgenAllowOutput, W("NgenAllowOutput"), 0, "
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_CrossGenAssumeInputSigned, W("CrossGenAssumeInputSigned"), 1, "CrossGen should assume that its input assemblies will be signed before deployment")
 #endif
 
-// 
-// NGEN service
-// 
-// UNSUPPORTED_NGenMaxLogSize from NGEN section also applies to NGEN service.
-RETAIL_CONFIG_DWORD_INFO_EX(INTERNAL_NGENServiceAbortIdleWorkUnderDebugger, W("NGENServiceAbortIdleWorkUnderDebugger"), 1, "Determines whether the Ngen service will abort idle-time tasks while under a debugger. Off by default. Allows for single-machine debugging of the idle-time logic.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_NGENServiceAggressiveHardDiskIdleTimeout, W("NGENServiceAggressiveHardDiskIdleTimeout"), 1*60*60*1000, "This flag was intended as a backstop for HDD idle time detection (i.e. even if the hard disk is not idle, proceed with the compilation of the high-priority assemblies after the specified timeout). The current implementation compiles high-priority assemblies regardless of the state of the machine.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_NGENServiceAggressiveWorkWaitTimeout, W("NGENServiceAggressiveWorkWaitTimeout"), 0, "This flag was intended as a backstop for machine idle time detection (i.e. even if the machine is not idle, proceed with the compilation of the high-priority assemblies after the specified timeout). The current implementation compiles high-priority assemblies regardless of the state of the machine.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceBreakOnStart, W("NGENServiceBreakOnStart"), 0, "Determines whether the Ngen service will call DebugBreak in its start routing. Off by default. Marginally useful for debugging service startup (there are other techniques as well).", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceConservative, W("NGENServiceConservative"), 0, "Determines whether the Ngen service will avoid compiling low-priority assemblies if multiple sessions exist on the machine and it can't determine their state. Off by default.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGenServiceDebugLog, W("NGenServiceDebugLog"), 0, "Configures the level of debug logging.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceIdleBatteryThreshold, W("NGENServiceIdleBatteryThreshold"), 50, "When a battery-powered system is below the threshold, Ngen will not process low-priority assemblies.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceIdleDebugInfo, W("NGENServiceIdleDebugInfo"), 0, "Determines whether the Ngen service will print the idle-time detection criteria to the debug log. Off by default. Ignored if NGenServiceDebugLog is 0.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceIdleDiskLogic, W("NGENServiceIdleDiskLogic"), 1, "Determines if the Ngen service will use hard disk idle time  for its machine idle time heuristics.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceIdleDiskThreshold, W("NGENServiceIdleDiskThreshold"), 80, "The amount of time after which a disk is declared idle.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceIdleNoInputPeriod, W("NGENServiceIdleNoInputPeriod"), 5*60*1000, "The amount of time after which the machine is declared idle if no input was received.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServicePassiveExceptInputTimeout, W("NGENServicePassiveExceptInputTimeout"), 15*60*60*1000, "The amount of time after which only input state is considered for idle time detection (input backstop mode, which ignores everything except input).", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServicePassiveHardDiskIdleTimeout, W("NGENServicePassiveHardDiskIdleTimeout"), 36*60*60*1000, "The amount of time after which the state of the hard disk is ignored for idle time detection.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServicePassiveWorkWaitTimeout, W("NGENServicePassiveWorkWaitTimeout"), 0, "The amount of time after which the machine is declared idle and low priority assemblies are compiled no matter what the actual state is (absolute backstop mode: declaring the machine as idle disregarding the actual state).", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_NGENServicePolicy, W("NGENServicePolicy"), "The policy that will be used for the machine (client or server). By default, it's determined from the OS SKU.")
-RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_NGENServiceRestrictWorkersPrivileges, W("NGENServiceRestrictWorkersPrivileges"), 1, "Determines if worker processes are launched with restricted tokens.")
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceSynchronization, W("NGENServiceSynchronization"), 1, "Determines if multiple services coordinate themselves so that only one service is working at a time.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_STRING_INFO_DIRECT_ACCESS(UNSUPPORTED_NGENServiceTestHookDll, W("NGENServiceTestHookDll"), "The name of a module used for testing in-process")
-RETAIL_CONFIG_STRING_INFO_DIRECT_ACCESS(UNSUPPORTED_NGENServiceWaitAggressiveWork, W("NGENServiceWaitAggressiveWork"), "Specifies how often the service will check the machine state when trying to do high-priority work.")
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceWaitPassiveWork, W("NGENServiceWaitPassiveWork"), 1*60*1000, "Specifies how often the service will check the machine state when trying to do low-priority work.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_NGENServiceWaitWorking, W("NGENServiceWaitWorking"), 1000, "While working, the Ngen service polls the state of the machine for changes (another service trying to do higher priority work, the Ngen command line tool trying to do work, machine coming out of idle state). This variable controls the frequency of the polling.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_NGENServiceWorkerPriority, W("NGENServiceWorkerPriority"), "The process priority class for workers.")
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_EnableMultiproc, W("EnableMultiproc"), 1, "Turns on multiproc ngen", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_SvcRetryNgenFailures, W("SvcRetryNgenFailures"), 1, "If set to 1, The Ngen service will retry once when ngen fails", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(INTERNAL_NGenTaskDelayStartAmount, W("NGenTaskDelayStartAmount"), 5 * 60, "Number of seconds to delay for ngen update /queue /delay", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_EX(INTERNAL_NGenProtectedProcess_FeatureEnabled, W("NGenProtectedProcess_FeatureEnabled"), -1, "Run ngen as PPL (protected process) if needed. Set to 0 to disable the feature for compat with older Win8 builds.", CLRConfig::IgnoreConfigFiles)
-CONFIG_STRING_INFO_EX(INTERNAL_NGenProtectedProcess_RequiredList,  W("NGenProtectedProcess_RequiredList"),  "Semicolon-separated list of assembly names that are required to be ngen'd in PPL process. Each name in the list is matched as prefix or suffix of assembly name/assembly file name.", CLRConfig::IgnoreConfigFiles)
-CONFIG_STRING_INFO_EX(INTERNAL_NGenProtectedProcess_ForbiddenList, W("NGenProtectedProcess_ForbiddenList"), "Semicolon-separated list of assembly names that are forbidden to be ngen'd in PPL process. Each name in the list is matched as prefix or suffix of assembly name/assembly file name.", CLRConfig::IgnoreConfigFiles)
-RETAIL_CONFIG_DWORD_INFO_EX(INTERNAL_NGenCopyFromRepository_SetCachedSigningLevel, W("NGenCopyFromRepository_SetCachedSigningLevel"), 0, "Support for test tree ngen.exe flag /CopyFromRepository to also vouch for the output NIs.", CLRConfig::IgnoreConfigFiles)
-
-//
 // Perf
 //
 RETAIL_CONFIG_STRING_INFO(EXTERNAL_PerformanceScenario, W("performanceScenario"), "Activates a set of workload-specific default values for performance settings")
@@ -852,6 +782,7 @@ RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_ProfAPI_ValidateNGENInstrumentation, W("Pro
 
 #ifdef FEATURE_PERFMAP
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_PerfMapEnabled, W("PerfMapEnabled"), 0, "This flag is used on Linux to enable writing /tmp/perf-$pid.map. It is disabled by default", CLRConfig::REGUTIL_default)
+RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_PerfMapIgnoreSignal, W("PerfMapIgnoreSignal"), 0, "When perf map is enabled, this option will configure the specified signal to be accepeted and ignored as a marker in the perf logs.  It is disabled by default", CLRConfig::REGUTIL_default)
 #endif
 
 //
@@ -872,49 +803,8 @@ RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_ApplicationMigrationRuntimeActiv
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_TestOnlyEnsureImmersive, W("TestOnlyEnsureImmersive"), "Test-only flag used to indicate that it is expected that a process should be running as immersive.")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_EnableCoreClrHost, W("EnableCoreClrHost"), "Enables hosting coreclr from desktop mscoreei.dll to run windows store apps")
 
-
-//
-// Security
-//
-CONFIG_STRING_INFO_EX(INTERNAL_Security_AptcaAssemblyBreak, W("AptcaAssemblyBreak"), "Sets a breakpoint when checking if an assembly is APTCA or not", CLRConfig::REGUTIL_default)
-CONFIG_STRING_INFO(INTERNAL_Security_AptcaAssemblySharingBreak, W("AptcaAssemblySharingBreak"), "Sets a breakpoint when checking if we can code share an assembly")
-CONFIG_DWORD_INFO(INTERNAL_Security_AptcaAssemblySharingDomainBreak, W("AptcaAssemblySharingDomainBreak"), 0, "Sets a breakpoint only in the specified domain when checking if we can code share an assembly")
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_Security_DefaultSecurityRuleSet, W("DefaultSecurityRuleSet"), 0, "Overrides the security rule set that assemblies which don't explicitly select their own rule set should use")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_Security_LegacyCasPolicy, W("legacyCasPolicy"), 0, "Enable CAS policy for the process - for test use only, official access to this switch is through NetFx40_LegacySecurityPolicy.")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_Security_LoadFromRemoteSources, W("loadFromRemoteSources"), 0, "Enable loading from zones that are not MyComputer when not in CAS mode.")
-CONFIG_DWORD_INFO(UNSUPPORTED_Security_LogTransparencyErrors, W("LogTransparencyErrors"), 0, "Add an entry to the CLR log file for all transparency errors, rather than throwing an exception")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_Security_NetFx40LegacySecurityPolicy, W("NetFx40_LegacySecurityPolicy"), 0, "Enable CAS policy for the process.")
-CONFIG_DWORD_INFO(INTERNAL_Security_NGenForPartialTrust, W("NGenForPartialTrust"), 0, "Force NGEN to generate code for assemblies that could be used in partial trust.")
-CONFIG_STRING_INFO_EX(INTERNAL_Security_TransparencyFieldBreak, W("TransparencyFieldBreak"), "Sets a breakpoint when figuring out the transparency of a specific field", CLRConfig::REGUTIL_default)
-CONFIG_STRING_INFO_EX(INTERNAL_Security_TransparencyMethodBreak, W("TransparencyMethodBreak"), "Sets a breakpoint when figuring out the transparency of a specific method", CLRConfig::REGUTIL_default)
-CONFIG_STRING_INFO_EX(INTERNAL_Security_TransparencyTypeBreak, W("TransparencyTypeBreak"), "Sets a breakpoint when figuring out the transparency of a specific type", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO(INTERNAL_Security_AlwaysInsertCallout, W("AlwaysInsertCallout"), 0, "Always insert security access/transparency/APTCA callouts")
-RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_Security_DisableAnonymouslyHostedDynamicMethodCreatorSecurityCheck, W("DisableAnonymouslyHostedDynamicMethodCreatorSecurityCheck"), 0, "Disables security checks for anonymously hosted dynamic methods based on their creator's security.")
 
-//
-// Serialization
-//
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_Serialization_UnsafeTypeForwarding, W("unsafeTypeForwarding"), 0, "Enable unsafe type forwarding between unrelated assemblies")
-
-// 
-// Stack overflow
-// 
-CONFIG_DWORD_INFO_EX(INTERNAL_SOBreakOnProbeDuringSO, W("SOBreakOnProbeDuringSO"), 0, "", CLRConfig::REGUTIL_default)
-CONFIG_STRING_INFO_EX(INTERNAL_SODumpViolationsDir, W("SODumpViolationsDir"), "", CLRConfig::REGUTIL_default)
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SODumpViolationsStackTraceLength, W("SODumpViolationsStackTraceLength"), "")
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SOEnableBackoutStackValidation, W("SOEnableBackoutStackValidation"), "")
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SOEnableDefaultRWValidation, W("SOEnableDefaultRWValidation"), "")
-CONFIG_DWORD_INFO_EX(INTERNAL_SOEnableStackProtectionInDebugger, W("SOEnableStackProtectionInDebugger"), 0, "", CLRConfig::REGUTIL_default)
-CONFIG_DWORD_INFO_EX(INTERNAL_SOEnableStackProtectionInDebuggerForProbeAtLine, W("SOEnableStackProtectionInDebuggerForProbeAtLine"), 0, "", CLRConfig::REGUTIL_default)
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SOEntryPointProbe, W("SOEntryPointProbe"), "")
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SOInteriorProbe, W("SOInteriorProbe"), "")
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SOLogger, W("SOLogger"), "")
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SOProbeAssertOnOverrun, W("SOProbeAssertOnOverrun"), "")
-CONFIG_DWORD_INFO_EX(INTERNAL_SOUpdateProbeAtLine, W("SOUpdateProbeAtLine"), 0, "", CLRConfig::REGUTIL_default)
-CONFIG_DWORD_INFO_EX(INTERNAL_SOUpdateProbeAtLineAmount, W("SOUpdateProbeAtLineAmount"), 0, "", CLRConfig::REGUTIL_default)
-CONFIG_STRING_INFO_EX(INTERNAL_SOUpdateProbeAtLineInFile, W("SOUpdateProbeAtLineInFile"), "", CLRConfig::REGUTIL_default)
-CONFIG_DWORD_INFO_EX(INTERNAL_StackWalkStressUsingOldImpl, W("StackWalkStressUsingOldImpl"), 0, "to be removed", CLRConfig::REGUTIL_default)
-CONFIG_DWORD_INFO_EX(INTERNAL_StackWalkStressUsingOS, W("StackWalkStressUsingOS"), 0, "to be removed", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_STRING_INFO(EXTERNAL_StartupDelayMS, W("StartupDelayMS"), "")
 
 // 
@@ -936,6 +826,12 @@ CONFIG_DWORD_INFO(INTERNAL_SuspendDeadlockTimeout, W("SuspendDeadlockTimeout"), 
 CONFIG_DWORD_INFO(INTERNAL_SuspendThreadDeadlockTimeoutMs, W("SuspendThreadDeadlockTimeoutMs"), 2000, "")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_ThreadSuspendInjection, W("INTERNAL_ThreadSuspendInjection"), 1, "Specifies whether to inject activations for thread suspension on Unix")
 
+//
+// Thread (miscellaneous)
+//
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_Thread_DeadThreadCountThresholdForGCTrigger, W("Thread_DeadThreadCountThresholdForGCTrigger"), 75, "In the heuristics to clean up dead threads, this threshold must be reached before triggering a GC will be considered. Set to 0 to disable triggering a GC based on dead threads.")
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_Thread_DeadThreadGCTriggerPeriodMilliseconds, W("Thread_DeadThreadGCTriggerPeriodMilliseconds"), 1000 * 60 * 30, "In the heuristics to clean up dead threads, this much time must have elapsed since the previous max-generation GC before triggering another GC will be considered")
+
 // 
 // Threadpool
 // 
@@ -944,11 +840,17 @@ RETAIL_CONFIG_DWORD_INFO(INTERNAL_ThreadPool_ForceMaxWorkerThreads, W("ThreadPoo
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_ThreadPool_DisableStarvationDetection, W("ThreadPool_DisableStarvationDetection"), 0, "Disables the ThreadPool feature that forces new threads to be added when workitems run for too long")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_ThreadPool_DebugBreakOnWorkerStarvation, W("ThreadPool_DebugBreakOnWorkerStarvation"), 0, "Breaks into the debugger if the ThreadPool detects work queue starvation")
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_ThreadPool_EnableWorkerTracking, W("ThreadPool_EnableWorkerTracking"), 0, "Enables extra expensive tracking of how many workers threads are working simultaneously")
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_ThreadPool_UnfairSemaphoreSpinLimit, W("ThreadPool_UnfairSemaphoreSpinLimit"), 50, "Per processor limit used when calculating spin duration in UnfairSemaphore::Wait")
+#ifdef _TARGET_ARM64_
+// Spinning scheme is currently different on ARM64, see CLRLifoSemaphore::Wait(DWORD, UINT32, UINT32)
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_ThreadPool_UnfairSemaphoreSpinLimit, W("ThreadPool_UnfairSemaphoreSpinLimit"), 0x32, "Maximum number of spins per processor a thread pool worker thread performs before waiting for work")
+#else // !_TARGET_ARM64_
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_ThreadPool_UnfairSemaphoreSpinLimit, W("ThreadPool_UnfairSemaphoreSpinLimit"), 0x46, "Maximum number of spins a thread pool worker thread performs before waiting for work")
+#endif // _TARGET_ARM64_
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_Thread_UseAllCpuGroups, W("Thread_UseAllCpuGroups"), 0, "Specifies if to automatically distribute thread across CPU Groups")
 
 CONFIG_DWORD_INFO(INTERNAL_ThreadpoolTickCountAdjustment, W("ThreadpoolTickCountAdjustment"), 0, "")
 
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_HillClimbing_Disable,                             W("HillClimbing_Disable"),                            0, "Disables hill climbing for thread adjustments in the thread pool");
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_HillClimbing_WavePeriod,                          W("HillClimbing_WavePeriod"),                         4, "");
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_HillClimbing_TargetSignalToNoiseRatio,            W("HillClimbing_TargetSignalToNoiseRatio"),           300, "");
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_HillClimbing_ErrorSmoothingFactor,                W("HillClimbing_ErrorSmoothingFactor"),               1, "");
@@ -962,6 +864,15 @@ RETAIL_CONFIG_DWORD_INFO(INTERNAL_HillClimbing_MaxSampleErrorPercent,           
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_HillClimbing_SampleIntervalLow,                   W("HillClimbing_SampleIntervalLow"),                  10, "");
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_HillClimbing_SampleIntervalHigh,                  W("HillClimbing_SampleIntervalHigh"),                 200, "");
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_HillClimbing_GainExponent,                        W("HillClimbing_GainExponent"),                       200, "The exponent to apply to the gain, times 100.  100 means to use linear gain, higher values will enhance large moves and damp small ones.");
+
+
+//
+// Tiered Compilation
+//
+#ifdef FEATURE_TIERED_COMPILATION
+RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_TieredCompilation, W("EXPERIMENTAL_TieredCompilation"), 0, "Enables tiered compilation")
+#endif
+
 
 // 
 // TypeLoader
@@ -1026,7 +937,6 @@ RETAIL_CONFIG_STRING_INFO(INTERNAL_EventNameFilter, W("EventNameFilter"), "")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_ExposeExceptionsInCOM, W("ExposeExceptionsInCOM"), "")
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_ComInsteadOfManagedRemoting, W("PreferComInsteadOfManagedRemoting"), 0, "When communicating with a cross app domain CCW, use COM instead of managed remoting.")
 CONFIG_DWORD_INFO(INTERNAL_GenerateStubForHost, W("GenerateStubForHost"), 0, "Forces the host hook stub to be built for all unmanaged calls, even when not running hosted.")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_legacyApartmentInitPolicy, W("legacyApartmentInitPolicy"), "")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_legacyComHierarchyVisibility, W("legacyComHierarchyVisibility"), "")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_legacyComVTableLayout, W("legacyComVTableLayout"), "")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_newComVTableLayout, W("newComVTableLayout"), "")
@@ -1037,6 +947,21 @@ RETAIL_CONFIG_STRING_INFO(UNSUPPORTED_LogCCWRefCountChange, W("LogCCWRefCountCha
 RETAIL_CONFIG_DWORD_INFO(INTERNAL_EnableRCWCleanupOnSTAShutdown, W("EnableRCWCleanupOnSTAShutdown"), 0, "Performs RCW cleanup when STA shutdown is detected using IInitializeSpy in classic processes.")
 RETAIL_CONFIG_STRING_INFO(INTERNAL_LocalWinMDPath, W("LocalWinMDPath"), "Additional path to probe for WinMD files in if a WinRT type is not resolved using the standard paths.")
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_AllowDComReflection, W("AllowDComReflection"), 0, "Allows out of process DCOM clients to marshal blocked reflection types.")
+
+//
+// Performance Tracing
+//
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_PerformanceTracing, W("PerformanceTracing"), 0, "Enable/disable performance tracing.  Non-zero values enable tracing.")
+
+#ifdef FEATURE_GDBJIT
+//
+// GDBJIT
+//
+CONFIG_STRING_INFO(INTERNAL_GDBJitElfDump, W("GDBJitElfDump"), "Dump ELF for specified method")
+#ifdef FEATURE_GDBJIT_FRAME
+RETAIL_CONFIG_DWORD_INFO(INTERNAL_GDBJitEmitDebugFrame, W("GDBJitEmitDebugFrame"), TRUE, "Enable .debug_frame generation")
+#endif
+#endif
 
 //
 // Unknown
@@ -1064,10 +989,6 @@ CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_CPUFeatures, W("CPUFeatures"), "")
 CONFIG_STRING_INFO_EX(INTERNAL_DeadCodeMax, W("DeadCodeMax"), "Sets internal jit constants for Dead Code elmination", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_STRING_INFO_DIRECT_ACCESS(INTERNAL_DefaultVersion, W("DefaultVersion"), "Version of CLR to load.")
 RETAIL_CONFIG_STRING_INFO_DIRECT_ACCESS(EXTERNAL_developerInstallation, W("developerInstallation"), "Flag to enable DEVPATH binding feature") // TODO: check special handling
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_shadowCopyVerifyByTimestamp, W("shadowCopyVerifyByTimestamp"), 0, "Fusion flag to enable quick verification of files in the shadow copy directory by using timestamps.", CLRConfig::FavorConfigFile | CLRConfig::MayHavePerformanceDefault)
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_disableFusionUpdatesFromADManager, W("disableFusionUpdatesFromADManager"), 0, "Fusion flag to prevent changes to the AppDomainSetup object made by implementations of AppDomainManager.InitializeNewDomain from propagating to Fusion", CLRConfig::FavorConfigFile)
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_disableCachingBindingFailures, W("disableCachingBindingFailures"), 0, "Fusion flag to re-enable Everett bind caching behavior (Whidbey caches failures for sharing)", CLRConfig::FavorConfigFile)
-RETAIL_CONFIG_DWORD_INFO(INTERNAL_EnableVerboseInstallLogging, W("enableVerboseInstallLogging"), 0, "Fusion flag to enable detailed logging of GAC install operations")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_disableCommitThreadStack, W("disableCommitThreadStack"), "This should only be internal but I believe ASP.Net uses this")
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_DisableConfigCache, W("DisableConfigCache"), 0, "Used to disable the \"probabilistic\" config cache, which walks through the appropriate config registry keys on init and probabilistically keeps track of which exist.", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_DisableStackwalkCache, W("DisableStackwalkCache"), "")
@@ -1081,26 +1002,17 @@ RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_FORCE_ASSEMREF_DUPCHECK, W("FORCE_ASSEMR
 CONFIG_STRING_INFO_DIRECT_ACCESS(INTERNAL_ForcedRuntime, W("ForcedRuntime"), "Verify version of CLR loaded")
 CONFIG_DWORD_INFO_EX(INTERNAL_ForceRelocs, W("ForceRelocs"), 0, "", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_GenerateLongJumpDispatchStubRatio, W("GenerateLongJumpDispatchStubRatio"), "Useful for testing VSD on AMD64")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_generatePublisherEvidence, W("generatePublisherEvidence"), "If set, when the CLR loads an assembly that has an Authenticode signature we will verify that signature to generate Publisher evidence, at the expense of network hits and perf.")
 CONFIG_DWORD_INFO_EX(INTERNAL_HashStack, W("HashStack"), 0, "", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO(INTERNAL_HostManagerConfig, W("HostManagerConfig"), (DWORD)-1, "")
 CONFIG_DWORD_INFO(INTERNAL_HostTestADUnload, W("HostTestADUnload"), 0, "Alows setting Rude unload as default")
 CONFIG_DWORD_INFO(INTERNAL_HostTestThreadAbort, W("HostTestThreadAbort"), 0, "")
 RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_IgnoreDllMainReturn, W("IgnoreDllMainReturn"), 0, "Don't check the return value of DllMain if this is set", CLRConfig::ConfigFile_ApplicationFirst)
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_IJWEntrypointCompatMode, W("IJWEntrypointCompatMode"), 1, "Makes us run managed EP from DllMain. Basically brings the buggy behavior back.", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_STRING_INFO_DIRECT_ACCESS(INTERNAL_InstallRoot, W("InstallRoot"), "Directory with installed CLRs")
 CONFIG_STRING_INFO(INTERNAL_InvokeHalt, W("InvokeHalt"), "Throws an assert when the given method is invoked through reflection.")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_legacyHMACMode, W("legacyHMACMode"), "v2.0 of the CLR shipped with a bug causing HMAC-SHA-384 and HMAC-SHA-512 to be calculated incorrectly.  Orcas fixes this bug, but the config flag is added so that code which must verify v2.0 RTM HMACs can still interop with them.")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_legacyImpersonationPolicy, W("legacyImpersonationPolicy"), FALSE, "Windows identities should never flow across async points")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_legacyLoadMscorsnOnStartup, W("legacyLoadMscorsnOnStartup"), "Force mscorsn.dll to load when the VM starts")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_legacyNullReferenceExceptionPolicy, W("legacyNullReferenceExceptionPolicy"), "")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_legacyUnhandledExceptionPolicy, W("legacyUnhandledExceptionPolicy"), "")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_legacyVirtualMethodCallVerification, W("legacyVirtualMethodCallVerification"), "")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_ManagedLogFacility, W("ManagedLogFacility"), "?Log facility for managed code using the log")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_MaxStackDepth, W("MaxStackDepth"), "")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_MaxStubUnwindInfoSegmentSize, W("MaxStubUnwindInfoSegmentSize"), "")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_MaxThreadRecord, W("MaxThreadRecord"), "")
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_MergeCriticalAttributes, W("MergeCriticalAttributes"), 1, "", CLRConfig::REGUTIL_default)
 CONFIG_DWORD_INFO(INTERNAL_MessageDebugOut, W("MessageDebugOut"), 0, "")
 CONFIG_DWORD_INFO_EX(INTERNAL_MscorsnLogging, W("MscorsnLogging"), 0, "Enables strong name logging", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_NativeImageRequire, W("NativeImageRequire"), 0, "", CLRConfig::REGUTIL_default)
@@ -1124,7 +1036,6 @@ RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_RepositoryFlags, W("RepositoryFl
 RETAIL_CONFIG_STRING_INFO(EXTERNAL_RestrictedGCStressExe, W("RestrictedGCStressExe"), "")
 CONFIG_DWORD_INFO_EX(INTERNAL_ReturnSourceTypeForTesting, W("ReturnSourceTypeForTesting"), 0, "allows returning the (internal only) source type of an IL to Native mapping for debugging purposes", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO_EX(UNSUPPORTED_RSStressLog, W("RSStressLog"), 0, "allows turning on logging for RS startup", CLRConfig::REGUTIL_default)
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SafeHandleStackTraces, W("SafeHandleStackTraces"), "Debug-only ability to get a stack trace attached to every SafeHandle instance at creation time, for tracking down handle corruption problems.")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SaveThreadInfo, W("SaveThreadInfo"), "")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_SaveThreadInfoMask, W("SaveThreadInfoMask"), "")
 CONFIG_DWORD_INFO(INTERNAL_SBDumpOnNewIndex, W("SBDumpOnNewIndex"), 0, "Used for Syncblock debugging. It's been a while since any of those have been used.")
@@ -1139,8 +1050,6 @@ RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_SymbolReadingPolicy, W("SymbolRe
 RETAIL_CONFIG_DWORD_INFO(UNSUPPORTED_TestDataConsistency, W("TestDataConsistency"), FALSE, "allows ensuring the left side is not holding locks (and may thus be in an inconsistent state) when inspection occurs")
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_ThreadGuardPages, W("ThreadGuardPages"), 0, "", CLRConfig::REGUTIL_default)
 RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_Timeline, W("Timeline"), 0, "", CLRConfig::REGUTIL_default)
-CONFIG_STRING_INFO_EX(INTERNAL_TlbImpShouldBreakOnConvFunction, W("TlbImpShouldBreakOnConvFunction"), "", CLRConfig::REGUTIL_default)
-CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_TlbImpSkipLoading, W("TlbImpSkipLoading"), "")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(UNSUPPORTED_TotalStressLogSize, W("TotalStressLogSize"), "Total stress log size in bytes.")
 
 #ifdef _DEBUG
@@ -1149,15 +1058,10 @@ RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_TraceWrap, W("TraceWrap"), "")
 #endif
 
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_TURNOFFDEBUGINFO, W("TURNOFFDEBUGINFO"), "")
-RETAIL_CONFIG_DWORD_INFO(EXTERNAL_UseGenericTlsGetters, W("UseGenericTlsGetters"), 0, "")
-RETAIL_CONFIG_DWORD_INFO_EX(EXTERNAL_useLegacyIdentityFormat, W("useLegacyIdentityFormat"), 0, "Fusion flag to switch between Whidbey and Everett textual identity parser (have semantic differences)", CLRConfig::FavorConfigFile)
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_UseMethodDataCache, W("UseMethodDataCache"), FALSE, "Used during feature development; may now be removed.")
-RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_UseNewCrossDomainRemoting, W("UseNewCrossDomainRemoting"), "Forces the managed remoting stack to be used even for cross-domain remoting if set to 0 (default is 1)")
 RETAIL_CONFIG_DWORD_INFO(EXTERNAL_UseParentMethodData, W("UseParentMethodData"), TRUE, "Used during feature development; may now be removed.")
 CONFIG_DWORD_INFO_DIRECT_ACCESS(INTERNAL_VerifierOff, W("VerifierOff"), "")
 RETAIL_CONFIG_DWORD_INFO_DIRECT_ACCESS(EXTERNAL_VerifyAllOnLoad, W("VerifyAllOnLoad"), "")
-RETAIL_CONFIG_STRING_INFO_DIRECT_ACCESS(INTERNAL_Version, W("Version"), "Version of CLR to load.")
-RETAIL_CONFIG_STRING_INFO_DIRECT_ACCESS(INTERNAL_ShimHookLibrary, W("ShimHookLibrary"), "Path to a DLL that should be notified when shim loads the runtime DLL.")
 // **
 // PLEASE MOVE ANY CONFIG SWITCH YOU OWN OUT OF THIS SECTION INTO A CATEGORY ABOVE
 // 

@@ -48,21 +48,13 @@
 
 */
 
-
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Security;
-using System.Text;
-using System.Threading;
-using System.IO;
-using System.Runtime.Remoting;
-using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
-using System.Runtime.Versioning;
-using System.Globalization;
-using System.Diagnostics.Contracts;
-using System.Diagnostics.CodeAnalysis;
+using System;
+using System.Buffers;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
 
 namespace Microsoft.Win32
 {
@@ -125,27 +117,6 @@ namespace Microsoft.Win32
         private volatile bool remoteKey = false;
         private volatile RegistryKeyPermissionCheck checkMode;
         private volatile RegistryView regView = RegistryView.Default;
-
-        /**
-         * RegistryInternalCheck values.  Useful only for CheckPermission
-         */
-        private enum RegistryInternalCheck
-        {
-            CheckSubKeyWritePermission = 0,
-            CheckSubKeyReadPermission = 1,
-            CheckSubKeyCreatePermission = 2,
-            CheckSubTreeReadPermission = 3,
-            CheckSubTreeWritePermission = 4,
-            CheckSubTreeReadWritePermission = 5,
-            CheckValueWritePermission = 6,
-            CheckValueCreatePermission = 7,
-            CheckValueReadPermission = 8,
-            CheckKeyReadPermission = 9,
-            CheckSubTreePermission = 10,
-            CheckOpenSubKeyWithWritablePermission = 11,
-            CheckOpenSubKeyPermission = 12
-        };
-
 
         /**
          * Creates a RegistryKey.
@@ -228,7 +199,6 @@ namespace Microsoft.Win32
         public void DeleteValue(String name, bool throwOnMissingValue)
         {
             EnsureWriteable();
-            CheckPermission(RegistryInternalCheck.CheckValueWritePermission, name, false, RegistryKeyPermissionCheck.Default);
             int errorCode = Win32Native.RegDeleteValue(hkey, name);
 
             //
@@ -246,7 +216,7 @@ namespace Microsoft.Win32
             }
             // We really should throw an exception here if errorCode was bad,
             // but we can't for compatibility reasons.
-            BCLDebug.Correctness(errorCode == 0, "RegDeleteValue failed.  Here's your error code: " + errorCode);
+            Debug.Assert(errorCode == 0, "RegDeleteValue failed.  Here's your error code: " + errorCode);
         }
 
         /**
@@ -273,8 +243,8 @@ namespace Microsoft.Win32
         internal static RegistryKey GetBaseKey(IntPtr hKey, RegistryView view)
         {
             int index = ((int)hKey) & 0x0FFFFFFF;
-            BCLDebug.Assert(index >= 0 && index < hkeyNames.Length, "index is out of range!");
-            BCLDebug.Assert((((int)hKey) & 0xFFFFFFF0) == 0x80000000, "Invalid hkey value!");
+            Debug.Assert(index >= 0 && index < hkeyNames.Length, "index is out of range!");
+            Debug.Assert((((int)hKey) & 0xFFFFFFF0) == 0x80000000, "Invalid hkey value!");
 
             bool isPerf = hKey == HKEY_PERFORMANCE_DATA;
             // only mark the SafeHandle as ownsHandle if the key is HKEY_PERFORMANCE_DATA.
@@ -299,9 +269,8 @@ namespace Microsoft.Win32
         {
             ValidateKeyName(name);
             EnsureNotDisposed();
-            name = FixupName(name); // Fixup multiple slashes to a single slash            
+            name = FixupName(name); // Fixup multiple slashes to a single slash
 
-            CheckPermission(RegistryInternalCheck.CheckOpenSubKeyWithWritablePermission, name, writable, RegistryKeyPermissionCheck.Default);
             SafeRegistryHandle result = null;
             int ret = Win32Native.RegOpenKeyEx(hkey,
                 name,
@@ -328,29 +297,6 @@ namespace Microsoft.Win32
             return null;
         }
 
-        // This required no security checks. This is to get around the Deleting SubKeys which only require
-        // write permission. They call OpenSubKey which required read. Now instead call this function w/o security checks
-        internal RegistryKey InternalOpenSubKey(String name, bool writable)
-        {
-            ValidateKeyName(name);
-            EnsureNotDisposed();
-
-            SafeRegistryHandle result = null;
-            int ret = Win32Native.RegOpenKeyEx(hkey,
-                name,
-                0,
-                GetRegistryKeyAccess(writable) | (int)regView,
-                out result);
-
-            if (ret == 0 && !result.IsInvalid)
-            {
-                RegistryKey key = new RegistryKey(result, writable, false, remoteKey, false, regView);
-                key.keyName = keyName + "\\" + name;
-                return key;
-            }
-            return null;
-        }
-
         /**
          * Returns a subkey with read only permissions.
          *
@@ -363,144 +309,131 @@ namespace Microsoft.Win32
             return OpenSubKey(name, false);
         }
 
-        internal int InternalSubKeyCount()
+        /// <summary>
+        /// Retrieves an array of strings containing all the subkey names.
+        /// </summary>
+        public string[] GetSubKeyNames()
         {
             EnsureNotDisposed();
 
-            int subkeys = 0;
-            int junk = 0;
-            int ret = Win32Native.RegQueryInfoKey(hkey,
-                                      null,
-                                      null,
-                                      IntPtr.Zero,
-                                      ref subkeys,  // subkeys
-                                      null,
-                                      null,
-                                      ref junk,     // values
-                                      null,
-                                      null,
-                                      null,
-                                      null);
+            var names = new List<string>();
+            char[] name = ArrayPool<char>.Shared.Rent(MaxKeyLength + 1);
 
-            if (ret != 0)
-                Win32Error(ret, null);
-            return subkeys;
-        }
-
-        /**
-         * Retrieves an array of strings containing all the subkey names.
-         *
-         * @return all subkey names.
-         */
-        public String[] GetSubKeyNames()
-        {
-            CheckPermission(RegistryInternalCheck.CheckKeyReadPermission, null, false, RegistryKeyPermissionCheck.Default);
-            return InternalGetSubKeyNames();
-        }
-
-        internal unsafe String[] InternalGetSubKeyNames()
-        {
-            EnsureNotDisposed();
-            int subkeys = InternalSubKeyCount();
-            String[] names = new String[subkeys];  // Returns 0-length array if empty.
-
-            if (subkeys > 0)
+            try
             {
-                char[] name = new char[MaxKeyLength + 1];
+                int result;
+                int nameLength = name.Length;
 
-                int namelen;
-
-                fixed (char* namePtr = &name[0])
+                while ((result = Win32Native.RegEnumKeyEx(
+                    hkey,
+                    names.Count,
+                    name,
+                    ref nameLength,
+                    null,
+                    null,
+                    null,
+                    null)) != Interop.Errors.ERROR_NO_MORE_ITEMS)
                 {
-                    for (int i = 0; i < subkeys; i++)
+                    switch (result)
                     {
-                        namelen = name.Length; // Don't remove this. The API's doesn't work if this is not properly initialised.
-                        int ret = Win32Native.RegEnumKeyEx(hkey,
-                            i,
-                            namePtr,
-                            ref namelen,
-                            null,
-                            null,
-                            null,
-                            null);
-                        if (ret != 0)
-                            Win32Error(ret, null);
-                        names[i] = new String(namePtr);
+                        case Interop.Errors.ERROR_SUCCESS:
+                            names.Add(new string(name, 0, nameLength));
+                            nameLength = name.Length;
+                            break;
+                        default:
+                            // Throw the error
+                            Win32Error(result, null);
+                            break;
                     }
                 }
             }
-
-            return names;
-        }
-
-        internal int InternalValueCount()
-        {
-            EnsureNotDisposed();
-            int values = 0;
-            int junk = 0;
-            int ret = Win32Native.RegQueryInfoKey(hkey,
-                                      null,
-                                      null,
-                                      IntPtr.Zero,
-                                      ref junk,     // subkeys
-                                      null,
-                                      null,
-                                      ref values,   // values
-                                      null,
-                                      null,
-                                      null,
-                                      null);
-            if (ret != 0)
-                Win32Error(ret, null);
-            return values;
-        }
-
-        /**
-         * Retrieves an array of strings containing all the value names.
-         *
-         * @return all value names.
-         */
-        public unsafe String[] GetValueNames()
-        {
-            CheckPermission(RegistryInternalCheck.CheckKeyReadPermission, null, false, RegistryKeyPermissionCheck.Default);
-            EnsureNotDisposed();
-
-            int values = InternalValueCount();
-            String[] names = new String[values];
-
-            if (values > 0)
+            finally
             {
-                char[] name = new char[MaxValueLength + 1];
-                int namelen;
-
-                fixed (char* namePtr = &name[0])
-                {
-                    for (int i = 0; i < values; i++)
-                    {
-                        namelen = name.Length;
-
-                        int ret = Win32Native.RegEnumValue(hkey,
-                            i,
-                            namePtr,
-                            ref namelen,
-                            IntPtr.Zero,
-                            null,
-                            null,
-                            null);
-
-                        if (ret != 0)
-                        {
-                            // ignore ERROR_MORE_DATA if we're querying HKEY_PERFORMANCE_DATA
-                            if (!(IsPerfDataKey() && ret == Win32Native.ERROR_MORE_DATA))
-                                Win32Error(ret, null);
-                        }
-
-                        names[i] = new String(namePtr);
-                    }
-                }
+                ArrayPool<char>.Shared.Return(name);
             }
 
-            return names;
+            return names.ToArray();
+        }
+
+        /// <summary>
+        /// Retrieves an array of strings containing all the value names.
+        /// </summary>
+        public unsafe string[] GetValueNames()
+        {
+            EnsureNotDisposed();
+            var names = new List<string>();
+
+            // Names in the registry aren't usually very long, although they can go to as large
+            // as 16383 characters (MaxValueLength).
+            //
+            // Every call to RegEnumValue will allocate another buffer to get the data from
+            // NtEnumerateValueKey before copying it back out to our passed in buffer. This can
+            // add up quickly- we'll try to keep the memory pressure low and grow the buffer
+            // only if needed.
+
+            char[] name = ArrayPool<char>.Shared.Rent(100);
+
+            try
+            {
+                int result;
+                int nameLength = name.Length;
+
+                while ((result = Win32Native.RegEnumValue(
+                    hkey,
+                    names.Count,
+                    name,
+                    ref nameLength,
+                    IntPtr.Zero,
+                    null,
+                    null,
+                    null)) != Interop.Errors.ERROR_NO_MORE_ITEMS)
+                {
+                    switch (result)
+                    {
+                        // The size is only ever reported back correctly in the case
+                        // of ERROR_SUCCESS. It will almost always be changed, however.
+                        case Interop.Errors.ERROR_SUCCESS:
+                            names.Add(new string(name, 0, nameLength));
+                            break;
+                        case Interop.Errors.ERROR_MORE_DATA:
+                            if (IsPerfDataKey())
+                            {
+                                // Enumerating the values for Perf keys always returns
+                                // ERROR_MORE_DATA, but has a valid name. Buffer does need
+                                // to be big enough however. 8 characters is the largest
+                                // known name. The size isn't returned, but the string is
+                                // null terminated.
+                                fixed (char* c = &name[0])
+                                {
+                                    names.Add(new string(c));
+                                }
+                            }
+                            else
+                            {
+                                char[] oldName = name;
+                                int oldLength = oldName.Length;
+                                name = null;
+                                ArrayPool<char>.Shared.Return(oldName);
+                                name = ArrayPool<char>.Shared.Rent(checked(oldLength * 2));
+                            }
+                            break;
+                        default:
+                            // Throw the error
+                            Win32Error(result, null);
+                            break;
+                    }
+
+                    // Always set the name length back to the buffer size
+                    nameLength = name.Length;
+                }
+            }
+            finally
+            {
+                if (name != null)
+                    ArrayPool<char>.Shared.Return(name);
+            }
+
+            return names.ToArray();
         }
 
         /**
@@ -516,7 +449,6 @@ namespace Microsoft.Win32
          */
         public Object GetValue(String name)
         {
-            CheckPermission(RegistryInternalCheck.CheckValueReadPermission, name, false, RegistryKeyPermissionCheck.Default);
             return InternalGetValue(name, null, false, true);
         }
 
@@ -526,9 +458,7 @@ namespace Microsoft.Win32
          * Note that <var>name</var> can be null or "", at which point the
          * unnamed or default value of this Registry key is returned, if any.
          * The default values for RegistryKeys are OS-dependent.  NT doesn't
-         * have them by default, but they can exist and be of any type.  On
-         * Win95, the default value is always an empty key of type REG_SZ.
-         * Win98 supports default values of any type, but defaults to REG_SZ.
+         * have them by default, but they can exist and be of any type. 
          *
          * @param name Name of value to retrieve.
          * @param defaultValue Value to return if <i>name</i> doesn't exist.
@@ -537,7 +467,6 @@ namespace Microsoft.Win32
          */
         public Object GetValue(String name, Object defaultValue)
         {
-            CheckPermission(RegistryInternalCheck.CheckValueReadPermission, name, false, RegistryKeyPermissionCheck.Default);
             return InternalGetValue(name, defaultValue, false, true);
         }
 
@@ -545,10 +474,9 @@ namespace Microsoft.Win32
         {
             if (options < RegistryValueOptions.None || options > RegistryValueOptions.DoNotExpandEnvironmentNames)
             {
-                throw new ArgumentException(Environment.GetResourceString("Arg_EnumIllegalVal", (int)options), nameof(options));
+                throw new ArgumentException(SR.Format(SR.Arg_EnumIllegalVal, (int)options), nameof(options));
             }
             bool doNotExpand = (options == RegistryValueOptions.DoNotExpandEnvironmentNames);
-            CheckPermission(RegistryInternalCheck.CheckValueReadPermission, name, false, RegistryKeyPermissionCheck.Default);
             return InternalGetValue(name, defaultValue, doNotExpand, true);
         }
 
@@ -611,7 +539,7 @@ namespace Microsoft.Win32
             if (datasize < 0)
             {
                 // unexpected code path
-                BCLDebug.Assert(false, "[InternalGetValue] RegQueryValue returned ERROR_SUCCESS but gave a negative datasize");
+                Debug.Fail("[InternalGetValue] RegQueryValue returned ERROR_SUCCESS but gave a negative datasize");
                 datasize = 0;
             }
 
@@ -635,7 +563,7 @@ namespace Microsoft.Win32
                             goto case Win32Native.REG_BINARY;
                         }
                         long blob = 0;
-                        BCLDebug.Assert(datasize == 8, "datasize==8");
+                        Debug.Assert(datasize == 8, "datasize==8");
                         // Here, datasize must be 8 when calling this
                         ret = Win32Native.RegQueryValueEx(hkey, name, null, ref type, ref blob, ref datasize);
 
@@ -650,7 +578,7 @@ namespace Microsoft.Win32
                             goto case Win32Native.REG_QWORD;
                         }
                         int blob = 0;
-                        BCLDebug.Assert(datasize == 4, "datasize==4");
+                        Debug.Assert(datasize == 4, "datasize==4");
                         // Here, datasize must be four when calling this
                         ret = Win32Native.RegQueryValueEx(hkey, name, null, ref type, ref blob, ref datasize);
 
@@ -669,7 +597,7 @@ namespace Microsoft.Win32
                             }
                             catch (OverflowException e)
                             {
-                                throw new IOException(Environment.GetResourceString("Arg_RegGetOverflowBug"), e);
+                                throw new IOException(SR.Arg_RegGetOverflowBug, e);
                             }
                         }
                         char[] blob = new char[datasize / 2];
@@ -699,7 +627,7 @@ namespace Microsoft.Win32
                             }
                             catch (OverflowException e)
                             {
-                                throw new IOException(Environment.GetResourceString("Arg_RegGetOverflowBug"), e);
+                                throw new IOException(SR.Arg_RegGetOverflowBug, e);
                             }
                         }
                         char[] blob = new char[datasize / 2];
@@ -732,7 +660,7 @@ namespace Microsoft.Win32
                             }
                             catch (OverflowException e)
                             {
-                                throw new IOException(Environment.GetResourceString("Arg_RegGetOverflowBug"), e);
+                                throw new IOException(SR.Arg_RegGetOverflowBug, e);
                             }
                         }
                         char[] blob = new char[datasize / 2];
@@ -754,7 +682,7 @@ namespace Microsoft.Win32
                             }
                             catch (OverflowException e)
                             {
-                                throw new IOException(Environment.GetResourceString("Arg_RegGetOverflowBug"), e);
+                                throw new IOException(SR.Arg_RegGetOverflowBug, e);
                             }
                             blob[blob.Length - 1] = (char)0;
                         }
@@ -774,7 +702,7 @@ namespace Microsoft.Win32
 
                             if (nextNull < len)
                             {
-                                BCLDebug.Assert(blob[nextNull] == (char)0, "blob[nextNull] should be 0");
+                                Debug.Assert(blob[nextNull] == (char)0, "blob[nextNull] should be 0");
                                 if (nextNull - cur > 0)
                                 {
                                     strings.Add(new String(blob, cur, nextNull - cur));
@@ -844,22 +772,13 @@ namespace Microsoft.Win32
 
             if (name != null && name.Length > MaxValueLength)
             {
-                throw new ArgumentException(Environment.GetResourceString("Arg_RegValStrLenBug"));
+                throw new ArgumentException(SR.Arg_RegValStrLenBug);
             }
 
             if (!Enum.IsDefined(typeof(RegistryValueKind), valueKind))
-                throw new ArgumentException(Environment.GetResourceString("Arg_RegBadKeyKind"), nameof(valueKind));
+                throw new ArgumentException(SR.Arg_RegBadKeyKind, nameof(valueKind));
 
             EnsureWriteable();
-
-            if (!remoteKey && ContainsRegistryValue(name))
-            { // Existing key 
-                CheckPermission(RegistryInternalCheck.CheckValueWritePermission, name, false, RegistryKeyPermissionCheck.Default);
-            }
-            else
-            { // Creating a new value
-                CheckPermission(RegistryInternalCheck.CheckValueCreatePermission, name, false, RegistryKeyPermissionCheck.Default);
-            }
 
             if (valueKind == RegistryValueKind.Unknown)
             {
@@ -1013,7 +932,7 @@ namespace Microsoft.Win32
                 else if (value is String[])
                     return RegistryValueKind.MultiString;
                 else
-                    throw new ArgumentException(Environment.GetResourceString("Arg_RegSetBadArrType", value.GetType().Name));
+                    throw new ArgumentException(SR.Format(SR.Arg_RegSetBadArrType, value.GetType().Name));
             }
             else
                 return RegistryValueKind.String;
@@ -1043,7 +962,7 @@ namespace Microsoft.Win32
             {
                 case Win32Native.ERROR_ACCESS_DENIED:
                     if (str != null)
-                        throw new UnauthorizedAccessException(Environment.GetResourceString("UnauthorizedAccess_RegistryKeyGeneric_Key", str));
+                        throw new UnauthorizedAccessException(SR.Format(SR.UnauthorizedAccess_RegistryKeyGeneric_Key, str));
                     else
                         throw new UnauthorizedAccessException();
 
@@ -1068,16 +987,16 @@ namespace Microsoft.Win32
                     goto default;
 
                 case Win32Native.ERROR_FILE_NOT_FOUND:
-                    throw new IOException(Environment.GetResourceString("Arg_RegKeyNotFound"), errorCode);
+                    throw new IOException(SR.Arg_RegKeyNotFound, errorCode);
 
                 default:
-                    throw new IOException(Win32Native.GetMessage(errorCode), errorCode);
+                    throw new IOException(Interop.Kernel32.GetMessage(errorCode), errorCode);
             }
         }
 
         internal static String FixupName(String name)
         {
-            BCLDebug.Assert(name != null, "[FixupName]name!=null");
+            Debug.Assert(name != null, "[FixupName]name!=null");
             if (name.IndexOf('\\') == -1)
                 return name;
 
@@ -1092,7 +1011,7 @@ namespace Microsoft.Win32
 
         private static void FixupPath(StringBuilder path)
         {
-            Contract.Requires(path != null);
+            Debug.Assert(path != null);
             int length = path.Length;
             bool fixup = false;
             char markerChar = (char)0xFFFF;
@@ -1135,19 +1054,6 @@ namespace Microsoft.Win32
                 }
                 path.Length += j - i;
             }
-        }
-
-        private void CheckPermission(RegistryInternalCheck check, string item, bool subKeyWritable, RegistryKeyPermissionCheck subKeyCheck)
-        {
-            // TODO: Cleanup
-        }
-
-        private bool ContainsRegistryValue(string name)
-        {
-            int type = 0;
-            int datasize = 0;
-            int retval = Win32Native.RegQueryValueEx(hkey, name, null, ref type, (byte[])null, ref datasize);
-            return retval == 0;
         }
 
         private void EnsureNotDisposed()
@@ -1201,7 +1107,6 @@ namespace Microsoft.Win32
 
         static private void ValidateKeyName(string name)
         {
-            Contract.Ensures(name != null);
             if (name == null)
             {
                 ThrowHelper.ThrowArgumentNullException(ExceptionArgument.name);

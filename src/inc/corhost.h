@@ -26,8 +26,6 @@
 
 #include "clrinternal.h"
 
-#include "ivehandler.h"
-#include "ivalidator.h"
 #include "holder.h"
 
 #include "clrprivhosting.h"
@@ -137,6 +135,7 @@ protected:
 
     STDMETHODIMP UnloadAppDomain(DWORD dwDomainId, BOOL fWaitUntilDone);
 
+    STDMETHODIMP UnloadAppDomain2(DWORD dwDomainId, BOOL fWaitUntilDone, int *pLatchedExitCode);
 public:
     static ULONG GetHostVersion()
     {
@@ -275,7 +274,7 @@ class CorHost2 :
 #ifndef FEATURE_PAL    
     , public IPrivateManagedExceptionReporting /* This interface is for internal Watson testing only*/
 #endif // FEATURE_PAL    
-    , public ICLRRuntimeHost2
+    , public ICLRRuntimeHost4
     , public CorExecutionManager
 {
     friend struct _DacGlobals;
@@ -337,6 +336,8 @@ public:
 
     STDMETHODIMP UnloadAppDomain(DWORD dwDomainId, BOOL fWaitUntilDone);
 
+    STDMETHODIMP UnloadAppDomain2(DWORD dwDomainId, BOOL fWaitUntilDone, int *pLatchedExitCode);
+
     STDMETHODIMP GetCurrentAppDomainId(DWORD *pdwAppDomainId);
 
     STDMETHODIMP ExecuteApplication(LPCWSTR  pwzAppFullName,
@@ -388,24 +389,12 @@ public:
 
     static STARTUP_FLAGS GetStartupFlags();
 
-    static LPCWSTR GetAppDomainManagerAsm();
-
-    static LPCWSTR GetAppDomainManagerType();
-
     static EInitializeNewDomainFlags GetAppDomainManagerInitializeNewDomainFlags();
-
-    static BOOL HasAppDomainManagerInfo()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return GetAppDomainManagerAsm() != NULL && GetAppDomainManagerType() != NULL;
-    }
 
     static BOOL HasStarted()
     {
         return m_RefCount != 0;
     }
-    
-    static BOOL IsLoadFromBlocked(); // LoadFrom, LoadFile and Load(byte[]) are blocked in certain hosting scenarios
 
 private:
     // This flag indicates if this instance was the first to load and start CoreCLR
@@ -439,11 +428,6 @@ private:
     static LONG  m_RefCount;
 
     static IHostControl *m_HostControl;
-
-    static LPCWSTR s_wszAppDomainManagerAsm;
-    static LPCWSTR s_wszAppDomainManagerType;
-    static EInitializeNewDomainFlags s_dwDomainManagerInitFlags;
-
 
     SVAL_DECL(STARTUP_FLAGS, m_dwStartupFlags);
 };

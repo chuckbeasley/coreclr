@@ -18,24 +18,25 @@ using System.Runtime.Serialization;
 namespace System.Runtime.InteropServices
 {
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public class InvalidComObjectException : SystemException
     {
         public InvalidComObjectException()
-            : base(Environment.GetResourceString("Arg_InvalidComObjectException"))
+            : base(SR.Arg_InvalidComObjectException)
         {
-            SetErrorCode(__HResults.COR_E_INVALIDCOMOBJECT);
+            HResult = HResults.COR_E_INVALIDCOMOBJECT;
         }
 
         public InvalidComObjectException(String message)
             : base(message)
         {
-            SetErrorCode(__HResults.COR_E_INVALIDCOMOBJECT);
+            HResult = HResults.COR_E_INVALIDCOMOBJECT;
         }
 
         public InvalidComObjectException(String message, Exception inner)
             : base(message, inner)
         {
-            SetErrorCode(__HResults.COR_E_INVALIDCOMOBJECT);
+            HResult = HResults.COR_E_INVALIDCOMOBJECT;
         }
 
         protected InvalidComObjectException(SerializationInfo info, StreamingContext context) : base(info, context)

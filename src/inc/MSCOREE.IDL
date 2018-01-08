@@ -22,7 +22,6 @@ import "unknwn.idl";
 #if defined(FEATURE_WINDOWSPHONE)
 import "gchost.idl";
 #endif
-import "ivalidator.idl";
 
 #include "product_version.h"
 
@@ -85,6 +84,9 @@ cpp_quote("EXTERN_GUID(IID_ICLRRuntimeHost, 0x90F1A06C, 0x7712, 0x4762, 0x86, 0x
 
 // IID ICLRRuntimeHost2: uuid(712AB73F-2C22-4807-AD7E-F501D7B72C2D)
 cpp_quote("EXTERN_GUID(IID_ICLRRuntimeHost2, 0x712AB73F, 0x2C22, 0x4807, 0xAD, 0x7E, 0xF5, 0x01, 0xD7, 0xb7, 0x2C, 0x2D);")
+
+// IID ICLRRuntimeHost4: uuid(64F6D366-D7C2-4F1F-B4B2-E8160CAC43AF)
+cpp_quote("EXTERN_GUID(IID_ICLRRuntimeHost4, 0x64F6D366, 0xD7C2, 0x4F1F, 0xB4, 0xB2, 0xE8, 0x16, 0x0C, 0xAC, 0x43, 0xAF);")
 
 // IID IID_ICLRExecutionManager: uuid(1000A3E7-B420-4620-AE30-FB19B587AD1D)
 cpp_quote("EXTERN_GUID(IID_ICLRExecutionManager, 0x1000A3E7, 0xB420, 0x4620, 0xAE, 0x30, 0xFB, 0x19, 0xB5, 0x87, 0xAD, 0x1D);")
@@ -161,7 +163,7 @@ typedef enum {
   STARTUP_ARM                   = 0x400000,                     // Enable the ARM feature.
   STARTUP_SINGLE_APPDOMAIN      = 0x800000,                      // application runs in default domain, no more domains are created 
   STARTUP_APPX_APP_MODEL        = 0x1000000,                     // jupiter app
-  STARTUP_DISABLE_RANDOMIZED_STRING_HASHING     = 0x2000000      // Disable the randomized string hashing
+  STARTUP_DISABLE_RANDOMIZED_STRING_HASHING     = 0x2000000      // Disable the randomized string hashing (not supported)
 } STARTUP_FLAGS;
 
 typedef enum {
@@ -848,6 +850,21 @@ interface ICLRRuntimeHost2 : ICLRRuntimeHost
 };
 
 [
+    object,
+    uuid(64F6D366-D7C2-4F1F-B4B2-E8160CAC43AF),
+    version(4.0),
+    helpstring("Common Language Runtime Hosting Interface"),
+    pointer_default(unique),
+    local
+]
+interface ICLRRuntimeHost4 : ICLRRuntimeHost2
+{
+    HRESULT UnloadAppDomain2([in] DWORD dwAppDomainId,
+                                          [in] BOOL fWaitUntilDone,
+                                          [out] int *pLatchedExitCode);
+};
+
+[
     uuid(1000A3E7-B420-4620-AE30-FB19B587AD1D),
     version(1.0),
     helpstring("Pause and Resume Interface"),
@@ -912,11 +929,6 @@ EInitializeNewDomainFlags;
 library mscoree
 {
     importlib("stdole32.tlb");
-
-#ifdef INCLUDE_SVC_IDL
-#define IN_MSCOREE
-#include "mscorsvc.idl"
-#endif
 
     //*****************************************************************************
     //

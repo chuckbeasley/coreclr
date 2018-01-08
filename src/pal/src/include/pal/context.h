@@ -39,6 +39,16 @@ typedef ucontext_t native_context_t;
 #else   // HAVE_UCONTEXT_T
 #error Native context type is not known on this platform!
 #endif  // HAVE_UCONTEXT_T
+
+#if defined(XSTATE_SUPPORTED) && !HAVE_PUBLIC_XSTATE_STRUCT
+namespace asm_sigcontext
+{
+#include <asm/sigcontext.h>
+};
+using asm_sigcontext::_fpx_sw_bytes;
+using asm_sigcontext::_xstate;
+#endif // defined(XSTATE_SUPPORTED) && !HAVE_PUBLIC_XSTATE_STRUCT
+
 #else // !HAVE_MACH_EXCEPTIONS
 #include <mach/kern_return.h>
 #include <mach/mach_port.h>
@@ -141,15 +151,21 @@ typedef ucontext_t native_context_t;
 
 #ifdef XSTATE_SUPPORTED
 
+#if HAVE_FPSTATE_GLIBC_RESERVED1
+#define FPSTATE_RESERVED __glibc_reserved1
+#else
+#define FPSTATE_RESERVED padding
+#endif
+
 inline _fpx_sw_bytes *FPREG_FpxSwBytes(const ucontext_t *uc)
 {
     // Bytes 464..511 in the FXSAVE format are available for software to use for any purpose. In this case, they are used to
     // indicate information about extended state.
-    _ASSERTE(reinterpret_cast<UINT8 *>(&FPREG_Fpstate(uc)->padding[12]) - reinterpret_cast<UINT8 *>(FPREG_Fpstate(uc)) == 464);
+    _ASSERTE(reinterpret_cast<UINT8 *>(&FPREG_Fpstate(uc)->FPSTATE_RESERVED[12]) - reinterpret_cast<UINT8 *>(FPREG_Fpstate(uc)) == 464);
 
     _ASSERTE(FPREG_Fpstate(uc) != nullptr);
 
-    return reinterpret_cast<_fpx_sw_bytes *>(&FPREG_Fpstate(uc)->padding[12]);
+    return reinterpret_cast<_fpx_sw_bytes *>(&FPREG_Fpstate(uc)->FPSTATE_RESERVED[12]);
 }
 
 inline UINT32 FPREG_ExtendedSize(const ucontext_t *uc)

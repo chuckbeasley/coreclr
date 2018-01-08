@@ -39,7 +39,6 @@ CLREventBase * ThreadSuspend::s_hAbortEvtCache = NULL;
 extern "C" void             RedirectedHandledJITCaseForGCThreadControl_Stub(void);
 extern "C" void             RedirectedHandledJITCaseForDbgThreadControl_Stub(void);
 extern "C" void             RedirectedHandledJITCaseForUserSuspend_Stub(void);
-extern "C" void             RedirectedHandledJITCaseForYieldTask_Stub(void);
 
 #define GetRedirectHandlerForGCThreadControl()      \
                 ((PFN_REDIRECTTARGET) GetEEFuncEntryPoint(RedirectedHandledJITCaseForGCThreadControl_Stub))
@@ -47,8 +46,6 @@ extern "C" void             RedirectedHandledJITCaseForYieldTask_Stub(void);
                 ((PFN_REDIRECTTARGET) GetEEFuncEntryPoint(RedirectedHandledJITCaseForDbgThreadControl_Stub))
 #define GetRedirectHandlerForUserSuspend()          \
                 ((PFN_REDIRECTTARGET) GetEEFuncEntryPoint(RedirectedHandledJITCaseForUserSuspend_Stub))
-#define GetRedirectHandlerForYieldTask()            \
-                ((PFN_REDIRECTTARGET) GetEEFuncEntryPoint(RedirectedHandledJITCaseForYieldTask_Stub))
 
 #if defined(_TARGET_AMD64_) || defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
 #if defined(HAVE_GCCOVER) && defined(USE_REDIRECT_FOR_GCSTRESS) // GCCOVER
@@ -1412,10 +1409,18 @@ BOOL Thread::IsContextSafeToRedirect(CONTEXT* pContext)
     }
     CONTRACTL_END;
 
+    BOOL isSafeToRedirect = TRUE;
+
 #ifndef FEATURE_PAL
     
 #if !defined(_TARGET_X86_)
-    CONSISTENCY_CHECK_MSG(pContext->ContextFlags & CONTEXT_EXCEPTION_REPORTING, "ERROR: you didn't pass CONTEXT_EXCEPTION_REQUEST into GetThreadContext\n");
+    // In some cases (x86 WOW64, ARM32 on ARM64) Windows will not set the CONTEXT_EXCEPTION_REPORTING flag
+    // if the thread is executing in kernel mode (i.e. in the middle of a syscall or exception handling).
+    // Therefore, we should treat the absence of the CONTEXT_EXCEPTION_REPORTING flag as an indication that
+    // it is not safe to manipulate with the current state of the thread context.
+    // Note: the x86 WOW64 case is already handled in GetSafelyRedirectableThreadContext; in addition, this
+    // flag is never set on Windows7 x86 WOW64. So this check is valid for non-x86 architectures only.
+    isSafeToRedirect = (pContext->ContextFlags & CONTEXT_EXCEPTION_REPORTING) != 0;
 #endif // !defined(_TARGET_X86_)
 
     if (pContext->ContextFlags & CONTEXT_EXCEPTION_REPORTING)
@@ -1424,13 +1429,13 @@ BOOL Thread::IsContextSafeToRedirect(CONTEXT* pContext)
         {
             // cannot process exception
             LOG((LF_ALWAYS, LL_WARNING, "thread [os id=0x08%x id=0x08%x] redirect failed due to ContextFlags of 0x%08x\n", m_OSThreadId, m_ThreadId, pContext->ContextFlags));
-            return FALSE;
+            isSafeToRedirect = FALSE;
         }
     }
 
 #endif // !FEATURE_PAL
 
-    return TRUE;
+    return isSafeToRedirect;
 }
 
 void Thread::SetAbortEndTime(ULONGLONG endTime, BOOL fRudeAbort)
@@ -1977,6 +1982,9 @@ LRetry:
 #ifdef _DEBUG
             m_dwAbortPoint = 7;
 #endif
+
+            // CoreCLR does not support user-requested thread suspension
+            _ASSERTE(!(m_State & TS_UserSuspendPending));
 
             //
             // If it's stopped by the debugger, we don't want to throw an exception.
@@ -3079,16 +3087,13 @@ void Thread::RareDisablePreemptiveGC()
     // waiting for GC
     _ASSERTE ((m_StateNC & Thread::TSNC_OwnsSpinLock) == 0);
 
-    // If this thread is asked to yield
-    if (m_State & TS_YieldRequested)
-    {
-        __SwitchToThread(0, CALLER_LIMITS_SPINNING);
-    }
-
     if (!GCHeapUtilities::IsGCHeapInitialized())
     {
         goto Exit;
     }
+
+    // CoreCLR does not support user-requested thread suspension
+    _ASSERTE(!(m_State & TS_UserSuspendPending));
 
     // Note IsGCInProgress is also true for say Pause (anywhere SuspendEE happens) and GCThread is the 
     // thread that did the Pause. While in Pause if another thread attempts Rev/Pinvoke it should get inside the following and 
@@ -3105,6 +3110,9 @@ void Thread::RareDisablePreemptiveGC()
 
             do
             {
+                // CoreCLR does not support user-requested thread suspension
+                _ASSERTE(!(m_State & TS_UserSuspendPending));
+
                 EnablePreemptiveGC();
 
                 // Cannot use GCX_PREEMP_NO_DTOR here because we're inside of the thread
@@ -3495,7 +3503,11 @@ void Thread::PerformPreemptiveGC()
     {
         GCX_COOP();
         m_bGCStressing = TRUE;
-        GCHeapUtilities::GetGCHeap()->StressHeap();
+
+        // BUG(github #10318) - when not using allocation contexts, the alloc lock
+        // must be acquired here. Until fixed, this assert prevents random heap corruption.
+        _ASSERTE(GCHeapUtilities::UseThreadAllocationContexts());
+        GCHeapUtilities::GetGCHeap()->StressHeap(GetThread()->GetAllocContext());
         m_bGCStressing = FALSE;
     }
     m_GCOnTransitionsOK = TRUE;
@@ -3554,7 +3566,6 @@ void Thread::RareEnablePreemptiveGC()
 #endif // FEATURE_HIJACK
 
         // wake up any threads waiting to suspend us, like the GC thread.
-        SetSafeEvent();
         ThreadSuspend::g_pGCSuspendEvent->Set();
 
         // for GC, the fact that we are leaving the EE means that it no longer needs to
@@ -3562,6 +3573,9 @@ void Thread::RareEnablePreemptiveGC()
         // Give the debugger precedence over user suspensions:
         while (m_State & (TS_DebugSuspendPending | TS_UserSuspendPending))
         {
+            // CoreCLR does not support user-requested thread suspension
+            _ASSERTE(!(m_State & TS_UserSuspendPending));
+
 #ifdef DEBUGGING_SUPPORTED
             // We don't notify the debugger that this thread is now suspended. We'll just
             // let the debugger's helper thread sweep and pick it up.
@@ -3899,13 +3913,6 @@ void __stdcall Thread::RedirectedHandledJITCase(RedirectReason reason)
             // Enable PGC before calling out to the client to allow runtime suspend to finish
             GCX_PREEMP_NO_DTOR();
 
-            // <REVISIT_TODO>@TODO: Is this necessary?  Does debugger wait on the events, or does it just
-            //        poll every so often?</REVISIT_TODO>
-            // Notify the thread that is performing the suspension that this thread
-            // is now in PGC mode and that it can remove this thread from the list of
-            // threads it needs to wait for.
-            pThread->SetSafeEvent();
-
             // Notify the interface of the pending suspension
             switch (reason) {
             case RedirectReason_GCSuspension:
@@ -3914,12 +3921,6 @@ void __stdcall Thread::RedirectedHandledJITCase(RedirectReason reason)
                 break;
             case RedirectReason_UserSuspension:
                 // Do nothing;
-                break;
-            case RedirectReason_YieldTask:
-                if (pThread->IsYieldRequested())
-                {
-                    __SwitchToThread(0, CALLER_LIMITS_SPINNING);
-                }
                 break;
             default:
                 _ASSERTE(!"Invalid redirect reason");
@@ -4080,15 +4081,6 @@ void __stdcall Thread::RedirectedHandledJITCaseForUserSuspend()
 {
     WRAPPER_NO_CONTRACT;
     RedirectedHandledJITCase(RedirectReason_UserSuspension);
-}
-
-//***********************
-// Like the above, but called for YieldTask.
-//
-void __stdcall Thread::RedirectedHandledJITCaseForYieldTask()
-{
-    WRAPPER_NO_CONTRACT;
-    RedirectedHandledJITCase(RedirectReason_YieldTask);
 }
 
 #if defined(HAVE_GCCOVER) && defined(USE_REDIRECT_FOR_GCSTRESS) // GCCOVER
@@ -4332,8 +4324,7 @@ BOOL Thread::IsAddrOfRedirectFunc(void * pFuncAddr)
     return
         (pFuncAddr == GetRedirectHandlerForGCThreadControl()) ||
         (pFuncAddr == GetRedirectHandlerForDbgThreadControl()) ||
-        (pFuncAddr == GetRedirectHandlerForUserSuspend()) ||
-        (pFuncAddr == GetRedirectHandlerForYieldTask());
+        (pFuncAddr == GetRedirectHandlerForUserSuspend());
 }
 
 //************************************************************************
@@ -4382,22 +4373,6 @@ BOOL Thread::CheckForAndDoRedirectForUserSuspend()
 
     LOG((LF_SYNC, LL_INFO1000, "Redirecting thread %08x for UserSuspension", GetThreadId()));
     return CheckForAndDoRedirect(GetRedirectHandlerForUserSuspend());
-}
-
-//*************************************************************************
-// Redirect thread to make task yield.
-BOOL Thread::CheckForAndDoRedirectForYieldTask()
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_NOTRIGGER;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-
-    LOG((LF_SYNC, LL_INFO1000, "Redirecting thread %08x for YieldTask", GetThreadId()));
-    return CheckForAndDoRedirect(GetRedirectHandlerForYieldTask());
 }
 
 #if defined(HAVE_GCCOVER) && defined(USE_REDIRECT_FOR_GCSTRESS) // GCCOVER
@@ -5331,6 +5306,7 @@ int RedirectedThrowControlExceptionFilter(
     return (EXCEPTION_CONTINUE_EXECUTION);
 }
 #endif
+#endif // !FEATURE_PAL
 
 // Resume a thread at this location, to persuade it to throw a ThreadStop.  The
 // exception handler needs a reasonable idea of how large this method is, so don't
@@ -5405,7 +5381,6 @@ ThrowControlForThread(
     // Here we raise an exception.
     RaiseComPlusException();
 }
-#endif // !FEATURE_PAL
 
 #if defined(FEATURE_HIJACK) && !defined(PLATFORM_UNIX)
 // This function is called by UserAbort and StopEEAndUnwindThreads.
@@ -6012,20 +5987,6 @@ void Thread::SysResumeFromDebug(AppDomain *pAppDomain)
     LOG((LF_CORDB, LL_INFO1000, "RESUME: resume complete. Trap count: %d\n", g_TrapReturningThreads.Load()));
 }
 
-
-
-void Thread::SetSafeEvent()
-{
-    CONTRACTL {
-        NOTHROW;
-        GC_NOTRIGGER;
-    }
-    CONTRACTL_END;
-
-    m_SafeEvent.Set();
-}
-
-
 /*
  *
  * WaitSuspendEventsHelper
@@ -6052,28 +6013,10 @@ BOOL Thread::WaitSuspendEventsHelper(void)
 
     EX_TRY {
 
-        if (m_State & TS_UserSuspendPending) {
+        // CoreCLR does not support user-requested thread suspension
+        _ASSERTE(!(m_State & TS_UserSuspendPending));
 
-            ThreadState oldState = m_State;
-
-            while (oldState & TS_UserSuspendPending) {
-
-                ThreadState newState = (ThreadState)(oldState | TS_SyncSuspended);
-                if (FastInterlockCompareExchange((LONG *)&m_State, newState, oldState) == (LONG)oldState)
-                {
-                    result = m_UserSuspendEvent.Wait(INFINITE,FALSE);
-#if _DEBUG
-                    newState = m_State;
-                    _ASSERTE(!(newState & TS_SyncSuspended) || (newState & TS_DebugSuspendPending));
-#endif
-                    break;
-                }
-
-                oldState = m_State;
-            }
-
-
-        } else if (m_State & TS_DebugSuspendPending) {
+        if (m_State & TS_DebugSuspendPending) {
 
             ThreadState oldState = m_State;
 
@@ -6122,6 +6065,9 @@ void Thread::WaitSuspendEvents(BOOL fDoWait)
             WaitSuspendEventsHelper();
 
             ThreadState oldState = m_State;
+
+            // CoreCLR does not support user-requested thread suspension
+            _ASSERTE(!(oldState & TS_UserSuspendPending));
 
             //
             // If all reasons to suspend are off, we think we can exit
@@ -7102,9 +7048,9 @@ void Thread::MarkForSuspension(ULONG bit)
     }
     CONTRACTL_END;
 
+    // CoreCLR does not support user-requested thread suspension
     _ASSERTE(bit == TS_DebugSuspendPending ||
-             bit == (TS_DebugSuspendPending | TS_DebugWillSync) ||
-             bit == TS_UserSuspendPending);
+             bit == (TS_DebugSuspendPending | TS_DebugWillSync));
 
     _ASSERTE(IsAtProcessExit() || ThreadStore::HoldingThreadStore());
 
@@ -7122,8 +7068,8 @@ void Thread::UnmarkForSuspension(ULONG mask)
     }
     CONTRACTL_END;
 
-    _ASSERTE(mask == ~TS_DebugSuspendPending ||
-             mask == ~TS_UserSuspendPending);
+    // CoreCLR does not support user-requested thread suspension
+    _ASSERTE(mask == ~TS_DebugSuspendPending);
 
     _ASSERTE(IsAtProcessExit() || ThreadStore::HoldingThreadStore());
 
@@ -7185,7 +7131,7 @@ void ThreadSuspend::RestartEE(BOOL bFinishedGC, BOOL SuspendSucceded)
     // Revert to being a normal thread
     // 
     ClrFlsClearThreadType (ThreadType_DynamicSuspendEE);
-    GCHeapUtilities::GetGCHeap()->SetGCInProgress(FALSE);
+    GCHeapUtilities::GetGCHeap()->SetGCInProgress(false);
 
     //
     // Allow threads to enter COOP mode (though we still need to wake the ones
@@ -7202,7 +7148,7 @@ void ThreadSuspend::RestartEE(BOOL bFinishedGC, BOOL SuspendSucceded)
     // 
     // Any threads that are waiting in WaitUntilGCComplete will continue now.
     //
-    GCHeapUtilities::GetGCHeap()->GetWaitForGCEvent()->Set();
+    GCHeapUtilities::GetGCHeap()->SetWaitForGCEvent();
     _ASSERTE(IsGCSpecialThread() || ThreadStore::HoldingThreadStore());
 
     ResumeRuntime(bFinishedGC, SuspendSucceded);
@@ -7328,7 +7274,7 @@ retry_for_debugger:
         //
         // First, we reset the event that we're about to tell other threads to wait for.
         //
-        GCHeapUtilities::GetGCHeap()->GetWaitForGCEvent()->Reset();
+        GCHeapUtilities::GetGCHeap()->ResetWaitForGCEvent();
 
         //
         // Remember that we're the one doing the GC.  Actually, maybe we're not doing a GC -
@@ -7353,7 +7299,7 @@ retry_for_debugger:
             // It seems like much of the above is redundant.  We should investigate reducing the number
             // of mechanisms we use to indicate that a suspension is in progress.
             //
-            GCHeapUtilities::GetGCHeap()->SetGCInProgress(TRUE);
+            GCHeapUtilities::GetGCHeap()->SetGCInProgress(true);
 
             //
             // Gratuitous memory barrier.  (may be needed - but I'm not sure why.)
@@ -7534,6 +7480,11 @@ void HandleGCSuspensionForInterruptedThread(CONTEXT *interruptedContext)
 
     if (pThread->PreemptiveGCDisabled() != TRUE)
         return;
+
+#ifdef FEATURE_PERFTRACING
+    // Mark that the thread is currently in managed code.
+    pThread->SaveGCModeOnSuspension();
+#endif // FEATURE_PERFTRACING
 
     PCODE ip = GetIP(interruptedContext);
 

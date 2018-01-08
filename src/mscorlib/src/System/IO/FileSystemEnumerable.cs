@@ -20,7 +20,6 @@ using System.Runtime.InteropServices;
 using System.Globalization;
 using System.Runtime.Versioning;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.Threading;
 
 namespace System.IO
@@ -34,9 +33,9 @@ namespace System.IO
         internal static IEnumerable<String> CreateFileNameIterator(String path, String originalUserPath, String searchPattern,
                                                                     bool includeFiles, bool includeDirs, SearchOption searchOption, bool checkHost)
         {
-            Contract.Requires(path != null);
-            Contract.Requires(originalUserPath != null);
-            Contract.Requires(searchPattern != null);
+            Debug.Assert(path != null);
+            Debug.Assert(originalUserPath != null);
+            Debug.Assert(searchPattern != null);
 
             SearchResultHandler<String> handler = new StringResultHandler(includeFiles, includeDirs);
             return new FileSystemEnumerableIterator<String>(path, originalUserPath, searchPattern, searchOption, handler, checkHost);
@@ -146,17 +145,21 @@ namespace System.IO
         private SearchOption searchOption;
         private String fullPath;
         private String normalizedSearchPath;
-        private int oldMode;
-
+#if !PLATFORM_UNIX
+        private int _oldMode;
+        private bool _setBackOldMode;
+#endif
         internal FileSystemEnumerableIterator(String path, String originalUserPath, String searchPattern, SearchOption searchOption, SearchResultHandler<TSource> resultHandler, bool checkHost)
         {
-            Contract.Requires(path != null);
-            Contract.Requires(originalUserPath != null);
-            Contract.Requires(searchPattern != null);
-            Contract.Requires(searchOption == SearchOption.AllDirectories || searchOption == SearchOption.TopDirectoryOnly);
-            Contract.Requires(resultHandler != null);
+            Debug.Assert(path != null);
+            Debug.Assert(originalUserPath != null);
+            Debug.Assert(searchPattern != null);
+            Debug.Assert(searchOption == SearchOption.AllDirectories || searchOption == SearchOption.TopDirectoryOnly);
+            Debug.Assert(resultHandler != null);
 
-            oldMode = Win32Native.SetErrorMode(Win32Native.SEM_FAILCRITICALERRORS);
+#if !PLATFORM_UNIX
+            _setBackOldMode = Interop.Kernel32.SetThreadErrorMode(Interop.Kernel32.SEM_FAILCRITICALERRORS, out _oldMode);
+#endif
 
             searchStack = new List<Directory.SearchData>();
 
@@ -284,7 +287,14 @@ namespace System.IO
             }
             finally
             {
-                Win32Native.SetErrorMode(oldMode);
+#if !PLATFORM_UNIX
+                if (_setBackOldMode)
+                {
+                    uint _ignore;
+                    Interop.Kernel32.SetThreadErrorMode(_oldMode, out _ignore);
+                }
+#endif
+
                 base.Dispose(disposing);
             }
         }
@@ -422,12 +432,12 @@ namespace System.IO
         private void HandleError(int hr, String path)
         {
             Dispose();
-            __Error.WinIOError(hr, path);
+            throw Win32Marshal.GetExceptionForWin32Error(hr, path);
         }
 
         private void AddSearchableDirsToStack(Directory.SearchData localSearchData)
         {
-            Contract.Requires(localSearchData != null);
+            Debug.Assert(localSearchData != null);
 
             String searchPath = Path.Combine(localSearchData.fullPath, "*");
             SafeFindHandle hnd = null;
@@ -483,26 +493,23 @@ namespace System.IO
 
         private static String NormalizeSearchPattern(String searchPattern)
         {
-            Contract.Requires(searchPattern != null);
-
-            // Win32 normalization trims only U+0020.
-            String tempSearchPattern = searchPattern.TrimEnd(PathInternal.s_trimEndChars);
+            Debug.Assert(searchPattern != null);
 
             // Make this corner case more useful, like dir
-            if (tempSearchPattern.Equals("."))
+            if (searchPattern.Equals("."))
             {
-                tempSearchPattern = "*";
+                return "*";
             }
 
-            PathInternal.CheckSearchPattern(tempSearchPattern);
-            return tempSearchPattern;
+            PathInternal.CheckSearchPattern(searchPattern);
+            return searchPattern;
         }
 
         private static String GetNormalizedSearchCriteria(String fullSearchString, String fullPathMod)
         {
-            Contract.Requires(fullSearchString != null);
-            Contract.Requires(fullPathMod != null);
-            Contract.Requires(fullSearchString.Length >= fullPathMod.Length);
+            Debug.Assert(fullSearchString != null);
+            Debug.Assert(fullPathMod != null);
+            Debug.Assert(fullSearchString.Length >= fullPathMod.Length);
 
             String searchCriteria = null;
             char lastChar = fullPathMod[fullPathMod.Length - 1];
@@ -521,8 +528,8 @@ namespace System.IO
 
         private static String GetFullSearchString(String fullPath, String searchPattern)
         {
-            Contract.Requires(fullPath != null);
-            Contract.Requires(searchPattern != null);
+            Debug.Assert(fullPath != null);
+            Debug.Assert(searchPattern != null);
 
             String tempStr = Path.Combine(fullPath, searchPattern);
 
@@ -539,7 +546,6 @@ namespace System.IO
 
     internal abstract class SearchResultHandler<TSource>
     {
-
         internal abstract bool IsResultIncluded(SearchResult result);
 
         internal abstract TSource CreateObject(SearchResult result);
@@ -579,8 +585,8 @@ namespace System.IO
 
         internal SearchResult(String fullPath, String userPath, Win32Native.WIN32_FIND_DATA findData)
         {
-            Contract.Requires(fullPath != null);
-            Contract.Requires(userPath != null);
+            Debug.Assert(fullPath != null);
+            Debug.Assert(userPath != null);
 
             this.fullPath = fullPath;
             this.userPath = userPath;

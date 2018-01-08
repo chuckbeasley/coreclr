@@ -52,6 +52,39 @@ public class StringMarshalingTest
         }
     }
 
+    private unsafe void SecureStringToBSTRToString()
+    {
+        foreach (String ts in TestStrings)
+        {
+            SecureString secureString = new SecureString();
+            foreach (char character in ts)
+            {
+                secureString.AppendChar(character);
+            }
+
+            IntPtr BStr = IntPtr.Zero;
+            String str;
+
+            try
+            {
+                BStr = Marshal.SecureStringToBSTR(secureString);
+                str = Marshal.PtrToStringBSTR(BStr);
+            }
+            finally
+            {
+                if (BStr != IntPtr.Zero)
+                {
+                    Marshal.ZeroFreeBSTR(BStr);
+                }
+            }
+
+            if (!str.Equals(ts))
+            {
+                throw new Exception();
+            }
+        }
+    }
+
     private void StringToCoTaskMemAnsiToString()
     {
         foreach (String ts in TestStrings)
@@ -198,14 +231,34 @@ public class StringMarshalingTest
         }
     }
 
+    private void TestNullString()
+    {
+        if (Marshal.PtrToStringUTF8(IntPtr.Zero) != null)
+        {
+            throw new Exception("IntPtr.Zero not marshaled to null for UTF8 strings");
+        }
+
+        if (Marshal.PtrToStringUni(IntPtr.Zero) != null)
+        {
+            throw new Exception("IntPtr.Zero not marshaled to null for Unicode strings");
+        }
+
+        if (Marshal.PtrToStringAnsi(IntPtr.Zero) != null)
+        {
+            throw new Exception("IntPtr.Zero not marshaled to null for ANSI strings");
+        }
+    }
+
     public  bool RunTests()
     {
         StringToBStrToString();
+        SecureStringToBSTRToString();
         StringToCoTaskMemAnsiToString();
         StringToCoTaskMemUniToString();
         StringToHGlobalAnsiToString();
         StringToHGlobalUniToString();
         TestUTF8String();
+        TestNullString();
         return true;
     }
 

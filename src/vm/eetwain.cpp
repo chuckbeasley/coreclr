@@ -2413,6 +2413,18 @@ unsigned scanArgRegTableI(PTR_CBYTE     table,
     _ASSERTE(*castto(table, unsigned short *)++ == 0xBABE);
 #endif
 
+    bool      hasPartialArgInfo;
+
+#ifndef UNIX_X86_ABI
+    hasPartialArgInfo = info->ebpFrame;
+#else
+    // For x86/Linux, interruptible code always has full arg info
+    //
+    // This should be aligned with emitFullArgInfo setting at
+    // emitter::emitEndCodeGen (in JIT)
+    hasPartialArgInfo = false;
+#endif
+
   /*
       Encoding table for methods that are fully interruptible
 
@@ -2611,9 +2623,9 @@ unsigned scanArgRegTableI(PTR_CBYTE     table,
 
                         argOfs--;
                     }
-                    else if (info->ebpFrame)
+                    else if (hasPartialArgInfo)
                         argCnt--;
-                    else /* !ebpFrame && not a ref */
+                    else /* full arg info && not a ref */
                         argOfs--;
 
                     /* Continue with the next lower bit */
@@ -2622,11 +2634,11 @@ unsigned scanArgRegTableI(PTR_CBYTE     table,
                 }
                 while (argOfs);
 
-                _ASSERTE((info->ebpFrame != 0) ||
+                _ASSERTE(!hasPartialArgInfo    ||
                          isZero(argHigh)       ||
                         (argHigh == CONSTRUCT_ptrArgTP(1, (argCnt-1))));
 
-                if (info->ebpFrame)
+                if (hasPartialArgInfo)
                 {
                     while (!intersect(argHigh, ptrArgs) && (!isZero(argHigh)))
                         argHigh >>= 1;
@@ -2643,10 +2655,10 @@ unsigned scanArgRegTableI(PTR_CBYTE     table,
                 }
                 else
                 {
-                    /* For ESP-frames, all pushes are reported, and so
+                    /* Full arg info reports all pushes, and thus
                        argOffs has to be consistent with argCnt */
 
-                    _ASSERTE(info->ebpFrame || argCnt == argOfs);
+                    _ASSERTE(hasPartialArgInfo || argCnt == argOfs);
 
                     /* store arg count */
 
@@ -2692,7 +2704,7 @@ unsigned scanArgRegTableI(PTR_CBYTE     table,
             }
             else {
                 /* non-ptr arg push */
-                _ASSERTE(!(info->ebpFrame));
+                _ASSERTE(!hasPartialArgInfo);
                 ptrOffs += (val & 0x07);
                 if (ptrOffs > curOffs) {
                     iptr = isThis = false;
@@ -2753,9 +2765,9 @@ unsigned scanArgRegTableI(PTR_CBYTE     table,
                 }
             }
 
-            // For ebp-frames, need to find the next higest pointer for argHigh
+            // For partial arg info, need to find the next higest pointer for argHigh
 
-            if (info->ebpFrame)
+            if (hasPartialArgInfo)
             {
                 for(argHigh = ptrArgTP(0); !isZero(argMask); argMask >>= 1)
                 {
@@ -2794,7 +2806,7 @@ REPORT_REFS:
     info->thisPtrResult  = thisPtrReg;
     _ASSERTE(thisPtrReg == REGI_NA || (regNumToMask(thisPtrReg) & info->regMaskResult));
 
-    if (info->ebpFrame)
+    if (hasPartialArgInfo)
     {
         return 0;
     }
@@ -3007,12 +3019,12 @@ unsigned SKIP_ALLOC_FRAME(int size, PTR_CBYTE base, unsigned offset)
         return (SKIP_PUSH_REG(base, offset));
     }
 
-    if (size >= OS_PAGE_SIZE)
+    if (size >= (int)GetOsPageSize())
     {
-        if (size < (3 * OS_PAGE_SIZE))
+        if (size < int(3 * GetOsPageSize()))
         {
-            // add 7 bytes for one or two TEST EAX, [ESP+OS_PAGE_SIZE]
-            offset += (size / OS_PAGE_SIZE) * 7;
+            // add 7 bytes for one or two TEST EAX, [ESP+GetOsPageSize()]
+            offset += (size / GetOsPageSize()) * 7;
         }
         else
         {
@@ -3789,7 +3801,9 @@ bool UnwindEbpDoubleAlignFrame(
         PREGDISPLAY     pContext,
         EECodeInfo     *pCodeInfo,
         hdrInfo        *info,
+        PTR_CBYTE       table,
         PTR_CBYTE       methodStart,
+        DWORD           curOffs,
         unsigned        flags,
         StackwalkCacheUnwindInfo  *pUnwindInfo) // out-only, perf improvement
 {
@@ -3815,7 +3829,11 @@ bool UnwindEbpDoubleAlignFrame(
         // TODO Currently we assume that ESP of funclet frames is always fixed but actually it could change.
         if (pCodeInfo->IsFunclet())
         {
-            baseSP = curESP + 12; // padding for 16byte stack alignment allocated in genFuncletProlog()
+            baseSP = curESP;
+            // Set baseSP as initial SP
+            baseSP += GetPushedArgSize(info, table, curOffs);
+            // 16-byte stack alignment padding (allocated in genFuncletProlog)
+            baseSP += 12;
 
             pContext->PCTAddr = baseSP;
             pContext->ControlPC = *PTR_PCODE(pContext->PCTAddr);
@@ -4011,7 +4029,7 @@ bool UnwindStackFrame(PREGDISPLAY     pContext,
          *  Now we know that have an EBP frame
          */
 
-        if (!UnwindEbpDoubleAlignFrame(pContext, pCodeInfo, info, methodStart, flags, pUnwindInfo))
+        if (!UnwindEbpDoubleAlignFrame(pContext, pCodeInfo, info, table, methodStart, curOffs, flags, pUnwindInfo))
             return false;
     }
 
@@ -4029,6 +4047,54 @@ bool UnwindStackFrame(PREGDISPLAY     pContext,
 }
 
 #endif // _TARGET_X86_
+
+#ifdef WIN64EXCEPTIONS
+#ifdef _TARGET_X86_
+size_t EECodeManager::GetResumeSp( PCONTEXT  pContext )
+{
+    PCODE currentPc = PCODE(pContext->Eip);
+
+    _ASSERTE(ExecutionManager::IsManagedCode(currentPc));
+
+    EECodeInfo codeInfo(currentPc);
+
+    PTR_CBYTE methodStart = PTR_CBYTE(codeInfo.GetSavedMethodCode());
+
+    GCInfoToken gcInfoToken = codeInfo.GetGCInfoToken();
+    PTR_VOID    methodInfoPtr = gcInfoToken.Info;
+    DWORD       curOffs = codeInfo.GetRelOffset();
+
+    CodeManStateBuf stateBuf;
+
+    stateBuf.hdrInfoSize = (DWORD)DecodeGCHdrInfo(gcInfoToken,
+                                                  curOffs,
+                                                  &stateBuf.hdrInfoBody);
+
+    PTR_CBYTE table = dac_cast<PTR_CBYTE>(methodInfoPtr) + stateBuf.hdrInfoSize;
+
+    hdrInfo *info = &stateBuf.hdrInfoBody;
+
+    _ASSERTE(info->epilogOffs == hdrInfo::NOT_IN_EPILOG && info->prologOffs == hdrInfo::NOT_IN_PROLOG);
+
+    bool isESPFrame = !info->ebpFrame && !info->doubleAlign;
+
+    if (codeInfo.IsFunclet())
+    {
+        // Treat funclet's frame as ESP frame
+        isESPFrame = true;
+    }
+
+    if (isESPFrame)
+    {
+        const size_t curESP = (size_t)(pContext->Esp);
+        return curESP + GetPushedArgSize(info, table, curOffs);
+    }
+
+    const size_t curEBP = (size_t)(pContext->Ebp);
+    return GetOutermostBaseFP(curEBP, info);
+}
+#endif // _TARGET_X86_
+#endif // WIN64EXCEPTIONS
 
 #ifndef CROSSGEN_COMPILE
 #ifndef WIN64EXCEPTIONS
@@ -4163,6 +4229,14 @@ bool EECodeManager::EnumGcRefs( PREGDISPLAY     pContext,
         GC_NOTRIGGER;
     } CONTRACTL_END;
 
+#ifdef WIN64EXCEPTIONS
+    if (flags & ParentOfFuncletStackFrame)
+    {
+        LOG((LF_GCROOTS, LL_INFO100000, "Not reporting this frame because it was already reported via another funclet.\n"));
+        return true;
+    }
+#endif // WIN64EXCEPTIONS
+
     GCInfoToken gcInfoToken = pCodeInfo->GetGCInfoToken();
     unsigned  curOffs = pCodeInfo->GetRelOffset();
 
@@ -4293,7 +4367,6 @@ bool EECodeManager::EnumGcRefs( PREGDISPLAY     pContext,
                                      &info);
         }
     }
-
 
     bool        willContinueExecution = !(flags & ExecutionAborted);
     unsigned    pushedSize = 0;
@@ -4589,60 +4662,69 @@ bool EECodeManager::EnumGcRefs( PREGDISPLAY     pContext,
 
     /* Process the untracked frame variable table */
 
-    count = info.untrackedCnt;
-    int lastStkOffs = 0;
-    while (count-- > 0)
+#if defined(WIN64EXCEPTIONS)   // funclets
+    // Filters are the only funclet that run during the 1st pass, and must have
+    // both the leaf and the parent frame reported.  In order to avoid double
+    // reporting of the untracked variables, do not report them for the filter.
+    if (!pCodeInfo->GetJitManager()->IsFilterFunclet(pCodeInfo))
+#endif // WIN64EXCEPTIONS
     {
-        int stkOffs = fastDecodeSigned(table);
-        stkOffs = lastStkOffs - stkOffs;
-        lastStkOffs = stkOffs;
+        count = info.untrackedCnt;
+        int lastStkOffs = 0;
+        while (count-- > 0)
+        {
+            int stkOffs = fastDecodeSigned(table);
+            stkOffs = lastStkOffs - stkOffs;
+            lastStkOffs = stkOffs;
 
-        _ASSERTE(0 == ~OFFSET_MASK % sizeof(void*));
+            _ASSERTE(0 == ~OFFSET_MASK % sizeof(void*));
 
-        lowBits  =   OFFSET_MASK & stkOffs;
-        stkOffs &=  ~OFFSET_MASK;
+            lowBits  =   OFFSET_MASK & stkOffs;
+            stkOffs &=  ~OFFSET_MASK;
 
-        ptrAddr = argBase + stkOffs;
-        if (info.doubleAlign && stkOffs >= int(info.stackSize - sizeof(void*))) {
-            // We encode the arguments as if they were ESP based variables even though they aren't
-            // If this frame would have ben an ESP based frame,   This fake frame is one DWORD
-            // smaller than the real frame because it did not push EBP but the real frame did.
-            // Thus to get the correct EBP relative offset we have to ajust by info.stackSize-sizeof(void*)
-            ptrAddr = EBP + (stkOffs-(info.stackSize - sizeof(void*)));
-        }
+            ptrAddr = argBase + stkOffs;
+            if (info.doubleAlign && stkOffs >= int(info.stackSize - sizeof(void*))) {
+                // We encode the arguments as if they were ESP based variables even though they aren't
+                // If this frame would have ben an ESP based frame,   This fake frame is one DWORD
+                // smaller than the real frame because it did not push EBP but the real frame did.
+                // Thus to get the correct EBP relative offset we have to ajust by info.stackSize-sizeof(void*)
+                ptrAddr = EBP + (stkOffs-(info.stackSize - sizeof(void*)));
+            }
 
 #ifdef  _DEBUG
-        if (dspPtr)
-        {
-            printf("    Untracked %s%s local at [E",
-                        (lowBits & pinned_OFFSET_FLAG) ? "pinned " : "",
-                        (lowBits & byref_OFFSET_FLAG)  ? "byref"   : "");
+            if (dspPtr)
+            {
+                printf("    Untracked %s%s local at [E",
+                            (lowBits & pinned_OFFSET_FLAG) ? "pinned " : "",
+                            (lowBits & byref_OFFSET_FLAG)  ? "byref"   : "");
 
-            int   dspOffs = ptrAddr;
-            char  frameType;
+                int   dspOffs = ptrAddr;
+                char  frameType;
 
-            if (info.ebpFrame) {
-                dspOffs   -= EBP;
-                frameType  = 'B';
+                if (info.ebpFrame) {
+                    dspOffs   -= EBP;
+                    frameType  = 'B';
+                }
+                else {
+                    dspOffs   -= ESP;
+                    frameType  = 'S';
+                }
+
+                if (dspOffs < 0)
+                    printf("%cP-%02XH]: ", frameType, -dspOffs);
+                else
+                    printf("%cP+%02XH]: ", frameType, +dspOffs);
             }
-            else {
-                dspOffs   -= ESP;
-                frameType  = 'S';
-            }
-
-            if (dspOffs < 0)
-                printf("%cP-%02XH]: ", frameType, -dspOffs);
-            else
-                printf("%cP+%02XH]: ", frameType, +dspOffs);
-        }
 #endif
 
-        _ASSERTE((pinned_OFFSET_FLAG == GC_CALL_PINNED) &&
-               (byref_OFFSET_FLAG  == GC_CALL_INTERIOR));
-        pCallBack(hCallBack, (OBJECTREF*)(size_t)ptrAddr, lowBits | CHECK_APP_DOMAIN
-                  DAC_ARG(DacSlotLocation(info.ebpFrame ? REGI_EBP : REGI_ESP,
-                                          info.ebpFrame ? EBP - ptrAddr : ptrAddr - ESP,
-                                          true)));
+            _ASSERTE((pinned_OFFSET_FLAG == GC_CALL_PINNED) &&
+                   (byref_OFFSET_FLAG  == GC_CALL_INTERIOR));
+            pCallBack(hCallBack, (OBJECTREF*)(size_t)ptrAddr, lowBits | CHECK_APP_DOMAIN
+                      DAC_ARG(DacSlotLocation(info.ebpFrame ? REGI_EBP : REGI_ESP,
+                                              info.ebpFrame ? EBP - ptrAddr : ptrAddr - ESP,
+                                              true)));
+        }
+
     }
 
 #if VERIFY_GC_TABLES
@@ -4714,7 +4796,12 @@ bool EECodeManager::EnumGcRefs( PREGDISPLAY     pContext,
                 if (dspPtr) {
                     printf("    Frame %s%s local at [E",
                            (lowBits & byref_OFFSET_FLAG) ? "byref "   : "",
+#ifndef WIN64EXCEPTIONS
                            (lowBits & this_OFFSET_FLAG)  ? "this-ptr" : "");
+#else
+                           (lowBits & pinned_OFFSET_FLAG)  ? "pinned" : "");
+#endif
+
                     
                     int  dspOffs = ptrAddr;
                     char frameType;
@@ -4734,8 +4821,22 @@ bool EECodeManager::EnumGcRefs( PREGDISPLAY     pContext,
                         printf("%cP+%02XH]: ", frameType, +dspOffs);
                 }
 #endif
+
+                unsigned flags = CHECK_APP_DOMAIN;
+#ifndef WIN64EXCEPTIONS
+                // First  Bit : byref
+                // Second Bit : this
+                // The second bit means `this` not `pinned`. So we ignore it.
+                flags |= lowBits & byref_OFFSET_FLAG;
+#else
+                // First  Bit : byref
+                // Second Bit : pinned
+                // Both bits are valid
+                flags |= lowBits;
+#endif
+
                 _ASSERTE(byref_OFFSET_FLAG == GC_CALL_INTERIOR);
-                pCallBack(hCallBack, (OBJECTREF*)(size_t)ptrAddr, (lowBits & byref_OFFSET_FLAG) | CHECK_APP_DOMAIN
+                pCallBack(hCallBack, (OBJECTREF*)(size_t)ptrAddr, flags
                           DAC_ARG(DacSlotLocation(info.ebpFrame ? REGI_EBP : REGI_ESP,
                                           info.ebpFrame ? EBP - ptrAddr : ptrAddr - ESP,
                                           true)));
@@ -4751,6 +4852,18 @@ bool EECodeManager::EnumGcRefs( PREGDISPLAY     pContext,
 #if VERIFY_GC_TABLES
     _ASSERTE(*castto(table, unsigned short *)++ == 0xBABE);
 #endif
+
+#ifdef WIN64EXCEPTIONS   // funclets
+    //
+    // If we're in a funclet, we do not want to report the incoming varargs.  This is
+    // taken care of by the parent method and the funclet should access those arguments
+    // by way of the parent method's stack frame.
+    //
+    if(pCodeInfo->IsFunclet())
+    {
+        return true;
+    }
+#endif // WIN64EXCEPTIONS
 
     /* Are we a varargs function, if so we have to report all args
        except 'this' (note that the GC tables created by the x86 jit
@@ -5216,6 +5329,7 @@ OBJECTREF EECodeManager::GetInstance( PREGDISPLAY    pContext,
     _ASSERTE(*castto(table, unsigned short *)++ == 0xBEEF);
 #endif
 
+#ifndef WIN64EXCEPTIONS
     /* Parse the untracked frame variable table */
 
     /* The 'this' pointer can never be located in the untracked table */
@@ -5261,6 +5375,19 @@ OBJECTREF EECodeManager::GetInstance( PREGDISPLAY    pContext,
 #if VERIFY_GC_TABLES
     _ASSERTE(*castto(table, unsigned short *) == 0xBABE);
 #endif
+
+#else // WIN64EXCEPTIONS
+    if (pCodeInfo->GetMethodDesc()->AcquiresInstMethodTableFromThis()) // Generic Context is "this"
+    {
+        // Untracked table must have at least one entry - this pointer
+        _ASSERTE(info.untrackedCnt > 0);
+
+        // The first entry must be "this" pointer
+        int stkOffs = fastDecodeSigned(table);
+        taArgBase -= stkOffs & ~OFFSET_MASK;
+        return (OBJECTREF)(size_t)(*PTR_DWORD(taArgBase));
+    }
+#endif // WIN64EXCEPTIONS
 
     return NULL;
 #else // !USE_GC_INFO_DECODER

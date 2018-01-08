@@ -1,10 +1,6 @@
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-if(WIN32)
-    add_compile_options(/wd4996)
-endif(WIN32)
-
 set(UTILCODE_COMMON_SOURCES
   clrhost_nodependencies.cpp
   ccomprc.cpp
@@ -40,7 +36,6 @@ set(UTILCODE_COMMON_SOURCES
   outstring.cpp
   ilformatter.cpp
   opinfo.cpp
-  sortversioning.cpp
   corimage.cpp
   format1.cpp
   prettyprintsig.cpp
@@ -85,25 +80,12 @@ if(WIN32)
     )
   endif()
   
-  if(NOT DEFINED FEATURE_IMPLICIT_TLS)
-    list(APPEND UTILCODE_SOURCES 
-      tls.cpp
-    )
-  endif(NOT DEFINED FEATURE_IMPLICIT_TLS)
 endif(WIN32)
   
 set(UTILCODE_SOURCES 
   ${UTILCODE_COMMON_SOURCES}
   perflog.cpp
 )
-
-if(WIN32)
-  if(NOT DEFINED FEATURE_IMPLICIT_TLS)
-    list(APPEND UTILCODE_SOURCES 
-      tls.cpp
-    )
-  endif(NOT DEFINED FEATURE_IMPLICIT_TLS)
-endif()
 
 set(UTILCODE_DAC_SOURCES 
   ${UTILCODE_COMMON_SOURCES}

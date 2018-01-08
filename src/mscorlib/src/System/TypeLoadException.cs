@@ -13,7 +13,6 @@
 
 using System;
 using System.Globalization;
-using System.Runtime.Remoting;
 using System.Runtime.Serialization;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
@@ -24,24 +23,25 @@ using System.Diagnostics.Contracts;
 namespace System
 {
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public class TypeLoadException : SystemException, ISerializable
     {
         public TypeLoadException()
-            : base(Environment.GetResourceString("Arg_TypeLoadException"))
+            : base(SR.Arg_TypeLoadException)
         {
-            SetErrorCode(__HResults.COR_E_TYPELOAD);
+            HResult = HResults.COR_E_TYPELOAD;
         }
 
         public TypeLoadException(String message)
             : base(message)
         {
-            SetErrorCode(__HResults.COR_E_TYPELOAD);
+            HResult = HResults.COR_E_TYPELOAD;
         }
 
         public TypeLoadException(String message, Exception inner)
             : base(message, inner)
         {
-            SetErrorCode(__HResults.COR_E_TYPELOAD);
+            HResult = HResults.COR_E_TYPELOAD;
         }
 
         public override String Message
@@ -59,14 +59,14 @@ namespace System
             {
                 if ((ClassName == null) &&
                     (ResourceId == 0))
-                    _message = Environment.GetResourceString("Arg_TypeLoadException");
+                    _message = SR.Arg_TypeLoadException;
 
                 else
                 {
                     if (AssemblyName == null)
-                        AssemblyName = Environment.GetResourceString("IO_UnknownFileName");
+                        AssemblyName = SR.IO_UnknownFileName;
                     if (ClassName == null)
-                        ClassName = Environment.GetResourceString("IO_UnknownFileName");
+                        ClassName = SR.IO_UnknownFileName;
 
                     String format = null;
                     GetTypeLoadExceptionMessage(ResourceId, JitHelpers.GetStringHandleOnStack(ref format));
@@ -93,7 +93,7 @@ namespace System
                                   int resourceId)
         : base(null)
         {
-            SetErrorCode(__HResults.COR_E_TYPELOAD);
+            HResult = HResults.COR_E_TYPELOAD;
             ClassName = className;
             AssemblyName = assemblyName;
             MessageArg = messageArg;
@@ -106,10 +106,6 @@ namespace System
 
         protected TypeLoadException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
-            if (info == null)
-                throw new ArgumentNullException(nameof(info));
-            Contract.EndContractBlock();
-
             ClassName = info.GetString("TypeLoadClassName");
             AssemblyName = info.GetString("TypeLoadAssemblyName");
             MessageArg = info.GetString("TypeLoadMessageArg");
@@ -117,21 +113,14 @@ namespace System
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void GetTypeLoadExceptionMessage(int resourceId, StringHandleOnStack retString);
 
-        //We can rely on the serialization mechanism on Exception to handle most of our needs, but
-        //we need to add a few fields of our own.
         public override void GetObjectData(SerializationInfo info, StreamingContext context)
         {
-            if (info == null)
-                throw new ArgumentNullException(nameof(info));
-            Contract.EndContractBlock();
-
             base.GetObjectData(info, context);
-            info.AddValue("TypeLoadClassName", ClassName, typeof(String));
-            info.AddValue("TypeLoadAssemblyName", AssemblyName, typeof(String));
-            info.AddValue("TypeLoadMessageArg", MessageArg, typeof(String));
+            info.AddValue("TypeLoadClassName", ClassName, typeof(string));
+            info.AddValue("TypeLoadAssemblyName", AssemblyName, typeof(string));
+            info.AddValue("TypeLoadMessageArg", MessageArg, typeof(string));
             info.AddValue("TypeLoadResourceID", ResourceId);
         }
 

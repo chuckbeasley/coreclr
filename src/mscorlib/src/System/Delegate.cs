@@ -13,9 +13,7 @@ namespace System
     using System.Runtime.CompilerServices;
     using System.Runtime.Versioning;
     using System.Diagnostics;
-    using System.Diagnostics.Contracts;
 
-    [Serializable]
     [ClassInterface(ClassInterfaceType.AutoDual)]
     [System.Runtime.InteropServices.ComVisible(true)]
     public abstract class Delegate : ICloneable, ISerializable
@@ -46,7 +44,6 @@ namespace System
 
             if (method == null)
                 throw new ArgumentNullException(nameof(method));
-            Contract.EndContractBlock();
 
             // This API existed in v1/v1.1 and only expected to create closed
             // instance delegates. Constrain the call to BindToMethodName to
@@ -57,7 +54,7 @@ namespace System
             if (!BindToMethodName(target, (RuntimeType)target.GetType(), method,
                                   DelegateBindingFlags.InstanceMethodOnly |
                                   DelegateBindingFlags.ClosedDelegateOnly))
-                throw new ArgumentException(Environment.GetResourceString("Arg_DlgtTargMeth"));
+                throw new ArgumentException(SR.Arg_DlgtTargMeth);
         }
 
         // This constructor is called from a class to generate a 
@@ -68,16 +65,15 @@ namespace System
             if (target == null)
                 throw new ArgumentNullException(nameof(target));
 
-            if (target.IsGenericType && target.ContainsGenericParameters)
-                throw new ArgumentException(Environment.GetResourceString("Arg_UnboundGenParam"), nameof(target));
+            if (target.ContainsGenericParameters)
+                throw new ArgumentException(SR.Arg_UnboundGenParam, nameof(target));
 
             if (method == null)
                 throw new ArgumentNullException(nameof(method));
-            Contract.EndContractBlock();
 
             RuntimeType rtTarget = target as RuntimeType;
             if (rtTarget == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"), nameof(target));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType, nameof(target));
 
             // This API existed in v1/v1.1 and only expected to create open
             // static delegates. Constrain the call to BindToMethodName to such
@@ -134,9 +130,9 @@ namespace System
             // It may also happen that the method pointer was not jitted when creating one delegate and jitted in the other 
             // if that's the case the delegates may still be equals but we need to make a more complicated check
 
-            if (_methodPtrAux.IsNull())
+            if (_methodPtrAux == IntPtr.Zero)
             {
-                if (!d._methodPtrAux.IsNull())
+                if (d._methodPtrAux != IntPtr.Zero)
                     return false; // different delegate kind
                 // they are both closed over the first arg
                 if (_target != d._target)
@@ -145,7 +141,7 @@ namespace System
             }
             else
             {
-                if (d._methodPtrAux.IsNull())
+                if (d._methodPtrAux == IntPtr.Zero)
                     return false; // different delegate kind
 
                 // Ignore the target as it will be the delegate instance, though it may be a different one
@@ -174,12 +170,15 @@ namespace System
             // in that case the delegate is the same and Equals will return true but GetHashCode returns a
             // different hashcode which is not true.
             /*
-            if (_methodPtrAux.IsNull())
+            if (_methodPtrAux == IntPtr.Zero)
                 return unchecked((int)((long)this._methodPtr));
             else
                 return unchecked((int)((long)this._methodPtrAux));
             */
-            return GetType().GetHashCode();
+            if (_methodPtrAux == IntPtr.Zero)
+                return ( _target != null ? RuntimeHelpers.GetHashCode(_target) * 33 : 0) + GetType().GetHashCode();
+            else
+                return GetType().GetHashCode();
         }
 
         public static Delegate Combine(Delegate a, Delegate b)
@@ -230,7 +229,7 @@ namespace System
                     bool isStatic = (RuntimeMethodHandle.GetAttributes(method) & MethodAttributes.Static) != (MethodAttributes)0;
                     if (!isStatic)
                     {
-                        if (_methodPtrAux == (IntPtr)0)
+                        if (_methodPtrAux == IntPtr.Zero)
                         {
                             // The target may be of a derived type that doesn't have visibility onto the
                             // target method. We don't want to call RuntimeType.GetMethodBase below with that
@@ -258,7 +257,7 @@ namespace System
                             // RCWs don't need to be "strongly-typed" in which case we don't find a base type
                             // that matches the declaring type of the method. This is fine because interop needs
                             // to work with exact methods anyway so declaringType is never shared at this point.
-                            BCLDebug.Assert(currentType != null || _target.GetType().IsCOMObject, "The class hierarchy should declare the method");
+                            Debug.Assert(currentType != null || _target.GetType().IsCOMObject, "The class hierarchy should declare the method");
                         }
                         else
                         {
@@ -291,7 +290,7 @@ namespace System
                 return source;
 
             if (!InternalEqualTypes(source, value))
-                throw new ArgumentException(Environment.GetResourceString("Arg_DlgtTypeMis"));
+                throw new ArgumentException(SR.Arg_DlgtTypeMis);
 
             return source.RemoveImpl(value);
         }
@@ -312,7 +311,7 @@ namespace System
 
         protected virtual Delegate CombineImpl(Delegate d)
         {
-            throw new MulticastNotSupportedException(Environment.GetResourceString("Multicast_Combine"));
+            throw new MulticastNotSupportedException(SR.Multicast_Combine);
         }
 
         protected virtual Delegate RemoveImpl(Delegate d)
@@ -347,13 +346,12 @@ namespace System
                 throw new ArgumentNullException(nameof(target));
             if (method == null)
                 throw new ArgumentNullException(nameof(method));
-            Contract.EndContractBlock();
 
             RuntimeType rtType = type as RuntimeType;
             if (rtType == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"), nameof(type));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType, nameof(type));
             if (!rtType.IsDelegate())
-                throw new ArgumentException(Environment.GetResourceString("Arg_MustBeDelegate"), nameof(type));
+                throw new ArgumentException(SR.Arg_MustBeDelegate, nameof(type));
 
             Delegate d = InternalAlloc(rtType);
             // This API existed in v1/v1.1 and only expected to create closed
@@ -370,7 +368,7 @@ namespace System
                                     (ignoreCase ? DelegateBindingFlags.CaselessMatching : 0)))
             {
                 if (throwOnBindFailure)
-                    throw new ArgumentException(Environment.GetResourceString("Arg_DlgtTargMeth"));
+                    throw new ArgumentException(SR.Arg_DlgtTargMeth);
                 d = null;
             }
 
@@ -396,20 +394,19 @@ namespace System
                 throw new ArgumentNullException(nameof(type));
             if (target == null)
                 throw new ArgumentNullException(nameof(target));
-            if (target.IsGenericType && target.ContainsGenericParameters)
-                throw new ArgumentException(Environment.GetResourceString("Arg_UnboundGenParam"), nameof(target));
+            if (target.ContainsGenericParameters)
+                throw new ArgumentException(SR.Arg_UnboundGenParam, nameof(target));
             if (method == null)
                 throw new ArgumentNullException(nameof(method));
-            Contract.EndContractBlock();
 
             RuntimeType rtType = type as RuntimeType;
             RuntimeType rtTarget = target as RuntimeType;
             if (rtType == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"), nameof(type));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType, nameof(type));
             if (rtTarget == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"), nameof(target));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType, nameof(target));
             if (!rtType.IsDelegate())
-                throw new ArgumentException(Environment.GetResourceString("Arg_MustBeDelegate"), nameof(type));
+                throw new ArgumentException(SR.Arg_MustBeDelegate, nameof(type));
 
             Delegate d = InternalAlloc(rtType);
             // This API existed in v1/v1.1 and only expected to create open
@@ -422,7 +419,7 @@ namespace System
                                     (ignoreCase ? DelegateBindingFlags.CaselessMatching : 0)))
             {
                 if (throwOnBindFailure)
-                    throw new ArgumentException(Environment.GetResourceString("Arg_DlgtTargMeth"));
+                    throw new ArgumentException(SR.Arg_DlgtTargMeth);
                 d = null;
             }
 
@@ -438,18 +435,17 @@ namespace System
                 throw new ArgumentNullException(nameof(type));
             if (method == null)
                 throw new ArgumentNullException(nameof(method));
-            Contract.EndContractBlock();
 
             RuntimeType rtType = type as RuntimeType;
             if (rtType == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"), nameof(type));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType, nameof(type));
 
             RuntimeMethodInfo rmi = method as RuntimeMethodInfo;
             if (rmi == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeMethodInfo"), nameof(method));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeMethodInfo, nameof(method));
 
             if (!rtType.IsDelegate())
-                throw new ArgumentException(Environment.GetResourceString("Arg_MustBeDelegate"), nameof(type));
+                throw new ArgumentException(SR.Arg_MustBeDelegate, nameof(type));
 
             // This API existed in v1/v1.1 and only expected to create closed
             // instance delegates. Constrain the call to BindToMethodInfo to
@@ -468,7 +464,7 @@ namespace System
                 ref stackMark);
 
             if (d == null && throwOnBindFailure)
-                throw new ArgumentException(Environment.GetResourceString("Arg_DlgtTargMeth"));
+                throw new ArgumentException(SR.Arg_DlgtTargMeth);
 
             return d;
         }
@@ -488,18 +484,17 @@ namespace System
                 throw new ArgumentNullException(nameof(type));
             if (method == null)
                 throw new ArgumentNullException(nameof(method));
-            Contract.EndContractBlock();
 
             RuntimeType rtType = type as RuntimeType;
             if (rtType == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"), nameof(type));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType, nameof(type));
 
             RuntimeMethodInfo rmi = method as RuntimeMethodInfo;
             if (rmi == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeMethodInfo"), nameof(method));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeMethodInfo, nameof(method));
 
             if (!rtType.IsDelegate())
-                throw new ArgumentException(Environment.GetResourceString("Arg_MustBeDelegate"), nameof(type));
+                throw new ArgumentException(SR.Arg_MustBeDelegate, nameof(type));
 
             // This API is new in Whidbey and allows the full range of delegate
             // flexability (open or closed delegates binding to static or
@@ -515,7 +510,7 @@ namespace System
                ref stackMark);
 
             if (d == null && throwOnBindFailure)
-                throw new ArgumentException(Environment.GetResourceString("Arg_DlgtTargMeth"));
+                throw new ArgumentException(SR.Arg_DlgtTargMeth);
 
             return d;
         }
@@ -542,8 +537,9 @@ namespace System
 
         public virtual void GetObjectData(SerializationInfo info, StreamingContext context)
         {
-            throw new NotSupportedException();
+            throw new PlatformNotSupportedException();
         }
+
         //
         // internal implementation details (FCALLS and utilities)
         //
@@ -555,17 +551,16 @@ namespace System
             // Validate the parameters.
             if (type == null)
                 throw new ArgumentNullException(nameof(type));
-            Contract.EndContractBlock();
 
             if (method.IsNullHandle())
                 throw new ArgumentNullException(nameof(method));
 
             RuntimeType rtType = type as RuntimeType;
             if (rtType == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeType"), nameof(type));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeType, nameof(type));
 
             if (!rtType.IsDelegate())
-                throw new ArgumentException(Environment.GetResourceString("Arg_MustBeDelegate"), nameof(type));
+                throw new ArgumentException(SR.Arg_MustBeDelegate, nameof(type));
 
             // Initialize the method...
             Delegate d = InternalAlloc(rtType);
@@ -578,7 +573,7 @@ namespace System
                                     method.GetMethodInfo(),
                                     RuntimeMethodHandle.GetDeclaringType(method.GetMethodInfo()),
                                     DelegateBindingFlags.RelaxedSignature | DelegateBindingFlags.SkipSecurityChecks))
-                throw new ArgumentException(Environment.GetResourceString("Arg_DlgtTargMeth"));
+                throw new ArgumentException(SR.Arg_DlgtTargMeth);
             return d;
         }
 
@@ -591,14 +586,13 @@ namespace System
             if (method == null)
                 throw new ArgumentNullException(nameof(method));
 
-            Contract.EndContractBlock();
 
             RuntimeMethodInfo rtMethod = method as RuntimeMethodInfo;
             if (rtMethod == null)
-                throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeMethodInfo"), nameof(method));
+                throw new ArgumentException(SR.Argument_MustBeRuntimeMethodInfo, nameof(method));
 
             if (!type.IsDelegate())
-                throw new ArgumentException(Environment.GetResourceString("Arg_MustBeDelegate"), nameof(type));
+                throw new ArgumentException(SR.Arg_MustBeDelegate, nameof(type));
 
             // This API is used by the formatters when deserializing a delegate.
             // They pass us the specific target method (that was already the
@@ -613,7 +607,7 @@ namespace System
                                               DelegateBindingFlags.RelaxedSignature);
 
             if (d == null)
-                throw new ArgumentException(Environment.GetResourceString("Arg_DlgtTargMeth"));
+                throw new ArgumentException(SR.Arg_DlgtTargMeth);
 
             return d;
         }
@@ -685,7 +679,7 @@ namespace System
 
         internal virtual Object GetTarget()
         {
-            return (_methodPtrAux.IsNull()) ? _target : null;
+            return (_methodPtrAux == IntPtr.Zero) ? _target : null;
         }
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]

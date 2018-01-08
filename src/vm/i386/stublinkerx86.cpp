@@ -21,7 +21,6 @@
 #include "excep.h"
 #include "dllimport.h"
 #include "log.h"
-#include "security.h"
 #include "comdelegate.h"
 #include "array.h"
 #include "jitinterface.h"
@@ -29,7 +28,6 @@
 #include "dbginterface.h"
 #include "eeprofinterfaces.h"
 #include "eeconfig.h"
-#include "securitydeclarative.h"
 #ifdef _TARGET_X86_
 #include "asmconstants.h"
 #endif // _TARGET_X86_
@@ -1251,7 +1249,7 @@ VOID StubLinkerCPU::X86EmitReturn(WORD wArgBytes)
     CONTRACTL
     {
         STANDARD_VM_CHECK;
-#ifdef _TARGET_AMD64_
+#if defined(_TARGET_AMD64_) || defined(UNIX_X86_ABI)
         PRECONDITION(wArgBytes == 0);
 #endif
 
@@ -2322,7 +2320,7 @@ static const X86Reg c_argRegs[] = {
 
 #ifndef CROSSGEN_COMPILE
 
-#if defined(_DEBUG) && (defined(_TARGET_AMD64_) || defined(_TARGET_X86_)) && !defined(FEATURE_PAL)
+#if defined(_DEBUG) && !defined(FEATURE_PAL)
 void StubLinkerCPU::EmitJITHelperLoggingThunk(PCODE pJitHelper, LPVOID helperFuncCount)
 {
     STANDARD_VM_CONTRACT;
@@ -2360,95 +2358,7 @@ void StubLinkerCPU::EmitJITHelperLoggingThunk(PCODE pJitHelper, LPVOID helperFun
 #endif
     X86EmitTailcallWithSinglePop(NewExternalCodeLabel(pJitHelper), kECX);
 }
-#endif // _DEBUG && (_TARGET_AMD64_ || _TARGET_X86_) && !FEATURE_PAL
-
-#ifndef FEATURE_IMPLICIT_TLS
-//---------------------------------------------------------------
-// Emit code to store the current Thread structure in dstreg
-// preservedRegSet is a set of registers to be preserved
-// TRASHES  EAX, EDX, ECX unless they are in preservedRegSet.
-// RESULTS  dstreg = current Thread
-//---------------------------------------------------------------
-VOID StubLinkerCPU::X86EmitTLSFetch(DWORD idx, X86Reg dstreg, unsigned preservedRegSet)
-{
-    CONTRACTL
-    {
-        STANDARD_VM_CHECK;
-
-    // It doesn't make sense to have the destination register be preserved
-        PRECONDITION((preservedRegSet & (1<<dstreg)) == 0);
-        AMD64_ONLY(PRECONDITION(dstreg < 8)); // code below doesn't support high registers
-    }
-    CONTRACTL_END;
-
-    TLSACCESSMODE mode = GetTLSAccessMode(idx);
-
-#ifdef _DEBUG
-    {
-        static BOOL f = TRUE;
-        f = !f;
-        if (f)
-        {
-           mode = TLSACCESS_GENERIC;
-        }
-    }
-#endif
-
-    switch (mode)
-    {
-        case TLSACCESS_WNT: 
-            {
-                unsigned __int32 tlsofs = offsetof(TEB, TlsSlots) + (idx * sizeof(void*));
-#ifdef _TARGET_AMD64_                
-                BYTE code[] = {0x65,0x48,0x8b,0x04,0x25};    // mov dstreg, qword ptr gs:[IMM32]
-                static const int regByteIndex = 3;
-#elif defined(_TARGET_X86_)
-                BYTE code[] = {0x64,0x8b,0x05};              // mov dstreg, dword ptr fs:[IMM32]
-                static const int regByteIndex = 2;
-#endif 
-                code[regByteIndex] |= (dstreg << 3);
-
-                EmitBytes(code, sizeof(code));
-                Emit32(tlsofs);
-            }
-            break;
-
-        case TLSACCESS_GENERIC:
-
-            X86EmitPushRegs(preservedRegSet & ((1<<kEAX)|(1<<kEDX)|(1<<kECX)));
-
-            X86EmitPushImm32(idx);
-#ifdef _TARGET_AMD64_
-            X86EmitPopReg (kECX);       // arg in reg
-#endif
-
-            // call TLSGetValue
-            X86EmitCall(NewExternalCodeLabel((LPVOID) TlsGetValue), sizeof(void*));
-
-            // mov dstreg, eax
-            X86EmitMovRegReg(dstreg, kEAX);
-
-            X86EmitPopRegs(preservedRegSet & ((1<<kEAX)|(1<<kEDX)|(1<<kECX)));
-
-            break;
-
-        default:
-            _ASSERTE(0);
-    }
-
-#ifdef _DEBUG
-    // Trash caller saved regs that we were not told to preserve, and that aren't the dstreg.
-    preservedRegSet |= 1<<dstreg;
-    if (!(preservedRegSet & (1<<kEAX)))
-        X86EmitDebugTrashReg(kEAX);
-    if (!(preservedRegSet & (1<<kEDX)))
-        X86EmitDebugTrashReg(kEDX);
-    if (!(preservedRegSet & (1<<kECX)))
-        X86EmitDebugTrashReg(kECX);
-#endif
-
-}
-#endif // FEATURE_IMPLICIT_TLS
+#endif // _DEBUG && !FEATURE_PAL
 
 VOID StubLinkerCPU::X86EmitCurrentThreadFetch(X86Reg dstreg, unsigned preservedRegSet)
 {
@@ -2456,89 +2366,59 @@ VOID StubLinkerCPU::X86EmitCurrentThreadFetch(X86Reg dstreg, unsigned preservedR
     {
         STANDARD_VM_CHECK;
 
-    // It doesn't make sense to have the destination register be preserved
-        PRECONDITION((preservedRegSet & (1<<dstreg)) == 0);
+        // It doesn't make sense to have the destination register be preserved
+        PRECONDITION((preservedRegSet & (1 << dstreg)) == 0);
         AMD64_ONLY(PRECONDITION(dstreg < 8)); // code below doesn't support high registers
     }
     CONTRACTL_END;
 
-#ifdef FEATURE_IMPLICIT_TLS
+#ifdef FEATURE_PAL
 
-    X86EmitPushRegs(preservedRegSet & ((1<<kEAX)|(1<<kEDX)|(1<<kECX)));
+    X86EmitPushRegs(preservedRegSet & ((1 << kEAX) | (1 << kEDX) | (1 << kECX)));
 
-    //TODO: Inline the instruction instead of a call
     // call GetThread
-    X86EmitCall(NewExternalCodeLabel((LPVOID) GetThread), sizeof(void*));
+    X86EmitCall(NewExternalCodeLabel((LPVOID)GetThread), sizeof(void*));
 
     // mov dstreg, eax
     X86EmitMovRegReg(dstreg, kEAX);
 
-    X86EmitPopRegs(preservedRegSet & ((1<<kEAX)|(1<<kEDX)|(1<<kECX)));
+    X86EmitPopRegs(preservedRegSet & ((1 << kEAX) | (1 << kEDX) | (1 << kECX)));
 
 #ifdef _DEBUG
     // Trash caller saved regs that we were not told to preserve, and that aren't the dstreg.
-    preservedRegSet |= 1<<dstreg;
-    if (!(preservedRegSet & (1<<kEAX)))
+    preservedRegSet |= 1 << dstreg;
+    if (!(preservedRegSet & (1 << kEAX)))
         X86EmitDebugTrashReg(kEAX);
-    if (!(preservedRegSet & (1<<kEDX)))
+    if (!(preservedRegSet & (1 << kEDX)))
         X86EmitDebugTrashReg(kEDX);
-    if (!(preservedRegSet & (1<<kECX)))
+    if (!(preservedRegSet & (1 << kECX)))
         X86EmitDebugTrashReg(kECX);
 #endif // _DEBUG
 
-#else // FEATURE_IMPLICIT_TLS
+#else // FEATURE_PAL
 
-    X86EmitTLSFetch(GetThreadTLSIndex(), dstreg, preservedRegSet);
-    
-#endif // FEATURE_IMPLICIT_TLS
-
-}
-
-VOID StubLinkerCPU::X86EmitCurrentAppDomainFetch(X86Reg dstreg, unsigned preservedRegSet)
-{
-    CONTRACTL
-    {
-        STANDARD_VM_CHECK;
-
-    // It doesn't make sense to have the destination register be preserved
-        PRECONDITION((preservedRegSet & (1<<dstreg)) == 0);
-        AMD64_ONLY(PRECONDITION(dstreg < 8)); // code below doesn't support high registers
-    }
-    CONTRACTL_END;
-
-#ifdef FEATURE_IMPLICIT_TLS
-    X86EmitPushRegs(preservedRegSet & ((1<<kEAX)|(1<<kEDX)|(1<<kECX)));
-
-    //TODO: Inline the instruction instead of a call
-    // call GetThread
-    X86EmitCall(NewExternalCodeLabel((LPVOID) GetAppDomain), sizeof(void*));
-
-    // mov dstreg, eax
-    X86EmitMovRegReg(dstreg, kEAX);
-
-    X86EmitPopRegs(preservedRegSet & ((1<<kEAX)|(1<<kEDX)|(1<<kECX)));
-
-#ifdef _DEBUG
-    // Trash caller saved regs that we were not told to preserve, and that aren't the dstreg.
-    preservedRegSet |= 1<<dstreg;
-    if (!(preservedRegSet & (1<<kEAX)))
-        X86EmitDebugTrashReg(kEAX);
-    if (!(preservedRegSet & (1<<kEDX)))
-        X86EmitDebugTrashReg(kEDX);
-    if (!(preservedRegSet & (1<<kECX)))
-        X86EmitDebugTrashReg(kECX);
+#ifdef _TARGET_AMD64_
+    BYTE code[] = { 0x65,0x48,0x8b,0x04,0x25 };    // mov dstreg, qword ptr gs:[IMM32]
+    static const int regByteIndex = 3;
+#elif defined(_TARGET_X86_)
+    BYTE code[] = { 0x64,0x8b,0x05 };              // mov dstreg, dword ptr fs:[IMM32]
+    static const int regByteIndex = 2;
 #endif
+    code[regByteIndex] |= (dstreg << 3);
 
-#else // FEATURE_IMPLICIT_TLS
+    EmitBytes(code, sizeof(code));
+    Emit32(offsetof(TEB, ThreadLocalStoragePointer));
 
-    X86EmitTLSFetch(GetAppDomainTLSIndex(), dstreg, preservedRegSet);
+    X86EmitIndexRegLoad(dstreg, dstreg, sizeof(void *) * (g_TlsIndex & 0xFFFF));
 
-#endif // FEATURE_IMPLICIT_TLS
+    X86EmitIndexRegLoad(dstreg, dstreg, (g_TlsIndex & 0x7FFF0000) >> 16);
+
+#endif // FEATURE_PAL
 }
 
 #if defined(_TARGET_X86_)
 
-#ifdef PROFILING_SUPPORTED
+#if defined(PROFILING_SUPPORTED) && !defined(FEATURE_STUBS_AS_IL)
 VOID StubLinkerCPU::EmitProfilerComCallProlog(TADDR pFrameVptr, X86Reg regFrame)
 {
     STANDARD_VM_CONTRACT;
@@ -2622,7 +2502,7 @@ VOID StubLinkerCPU::EmitProfilerComCallEpilog(TADDR pFrameVptr, X86Reg regFrame)
         _ASSERTE(!"Unrecognized vtble passed to EmitComMethodStubEpilog with profiling turned on.");
     }
 }
-#endif // PROFILING_SUPPORTED
+#endif // PROFILING_SUPPORTED && !FEATURE_STUBS_AS_IL
 
 
 #ifndef FEATURE_STUBS_AS_IL
@@ -2863,56 +2743,7 @@ VOID StubLinkerCPU::EmitSetup(CodeLabel *pForwardRef)
 {
     STANDARD_VM_CONTRACT;
 
-#ifdef FEATURE_IMPLICIT_TLS
-    DWORD idx = 0;
-    TLSACCESSMODE mode = TLSACCESS_GENERIC;
-#else
-    DWORD idx = GetThreadTLSIndex();
-    TLSACCESSMODE mode = GetTLSAccessMode(idx);
-#endif
-
-#ifdef _DEBUG
-    {
-        static BOOL f = TRUE;
-        f = !f;
-        if (f)
-        {
-           mode = TLSACCESS_GENERIC;
-        }
-    }
-#endif
-
-    switch (mode)
-    {
-        case TLSACCESS_WNT: 
-#ifndef FEATURE_PAL
-            {
-                unsigned __int32 tlsofs = offsetof(TEB, TlsSlots) + (idx * sizeof(void*));
-
-                static const BYTE code[] = {0x64,0x8b,0x1d};              // mov ebx, dword ptr fs:[IMM32]
-                EmitBytes(code, sizeof(code));
-                Emit32(tlsofs);
-            }
-#else  // !FEATURE_PAL
-            _ASSERTE("TLSACCESS_WNT mode is not supported");
-#endif // !FEATURE_PAL
-            break;
-
-        case TLSACCESS_GENERIC:
-#ifdef FEATURE_IMPLICIT_TLS
-            X86EmitCall(NewExternalCodeLabel((LPVOID) GetThread), sizeof(void*));
-#else
-            X86EmitPushImm32(idx);
-
-            // call TLSGetValue
-            X86EmitCall(NewExternalCodeLabel((LPVOID) TlsGetValue), sizeof(void*));
-#endif
-            // mov ebx,eax
-            Emit16(0xc389);
-            break;
-        default:
-            _ASSERTE(0);
-    }
+    X86EmitCurrentThreadFetch(kEBX, 0);
 
     // cmp ebx, 0
     static const BYTE b[] = { 0x83, 0xFB, 0x0};
@@ -3152,7 +2983,6 @@ VOID StubLinkerCPU::EmitMethodStubProlog(TADDR pFrameVptr, int transitionBlockOf
 #endif // _TARGET_X86_
 
     // ebx <-- GetThread()
-    // Trashes X86TLSFetch_TRASHABLE_REGS
     X86EmitCurrentThreadFetch(kEBX, 0);
 
 #if _DEBUG
@@ -3268,7 +3098,7 @@ VOID StubLinkerCPU::EmitMethodStubEpilog(WORD numArgBytes, int transitionBlockOf
     X86EmitPopReg(kR15);
 #endif
 
-#ifdef _TARGET_AMD64_
+#if defined(_TARGET_AMD64_) || defined(UNIX_X86_ABI)
     // Caller deallocates argument space.  (Bypasses ASSERT in
     // X86EmitReturn.)
     numArgBytes = 0;
@@ -4222,6 +4052,10 @@ VOID StubLinkerCPU::EmitShuffleThunk(ShuffleEntry *pShuffleEntryArray)
 
     if (haveMemMemMove)
         X86EmitPopReg(SCRATCH_REGISTER_X86REG);
+
+#ifdef UNIX_X86_ABI
+    _ASSERTE(pWalk->stacksizedelta == 0);
+#endif
 
     if (pWalk->stacksizedelta)
         X86EmitAddEsp(pWalk->stacksizedelta);
@@ -5717,8 +5551,12 @@ COPY_VALUE_CLASS:
     X86EmitPopReg(kFactorReg);
     X86EmitPopReg(kTotalReg);
 
+#ifndef UNIX_X86_ABI
     // ret N
     X86EmitReturn(pArrayOpScript->m_cbretpop);
+#else
+    X86EmitReturn(0);
+#endif
 #endif // !_TARGET_AMD64_
 
     // Exception points must clean up the stack for all those extra args.
@@ -6086,6 +5924,17 @@ static void AppendGCLayout(ULONGARRAY &gcLayout, size_t baseOffset, BOOL fIsType
         MethodTable* pMT = VMClsHnd.GetMethodTable();
         _ASSERTE(pMT);
         _ASSERTE(pMT->IsValueType());
+
+        if (pMT->IsByRefLike())
+        {
+            FindByRefPointerOffsetsInByRefLikeObject(
+                pMT,
+                baseOffset,
+                [&](size_t pointerOffset)
+                {
+                    *gcLayout.AppendThrowing() = (ULONG)(pointerOffset | 1); // "| 1" to mark it as an interior pointer
+                });
+        }
 
         // walk the GC descriptors, reporting the correct offsets
         if (pMT->ContainsPointers())
@@ -6691,15 +6540,12 @@ BOOL FixupPrecode::SetTargetInterlocked(TADDR target, TADDR expected)
     CONTRACTL
     {
         THROWS;         // Creating a JumpStub could throw OutOfMemory
-        GC_TRIGGERS;
+        GC_NOTRIGGER;
     }
     CONTRACTL_END;
 
     INT64 oldValue = *(INT64*)this;
     BYTE* pOldValue = (BYTE*)&oldValue;
-
-    if (pOldValue[OFFSETOF_PRECODE_TYPE_CALL_OR_JMP] != FixupPrecode::TypePrestub)
-        return FALSE;
 
     MethodDesc * pMD = (MethodDesc*)GetMethodDesc();
     g_IBCLogger.LogMethodPrecodeWriteAccess(pMD);
@@ -6707,11 +6553,28 @@ BOOL FixupPrecode::SetTargetInterlocked(TADDR target, TADDR expected)
     INT64 newValue = oldValue;
     BYTE* pNewValue = (BYTE*)&newValue;
 
-    pNewValue[OFFSETOF_PRECODE_TYPE_CALL_OR_JMP] = FixupPrecode::Type;
+    if (pOldValue[OFFSETOF_PRECODE_TYPE_CALL_OR_JMP] == FixupPrecode::TypePrestub)
+    {
+        pNewValue[OFFSETOF_PRECODE_TYPE_CALL_OR_JMP] = FixupPrecode::Type;
 
-    pOldValue[offsetof(FixupPrecode,m_op)] = X86_INSTR_CALL_REL32;
-    pNewValue[offsetof(FixupPrecode,m_op)] = X86_INSTR_JMP_REL32;
-
+        pOldValue[offsetof(FixupPrecode, m_op)] = X86_INSTR_CALL_REL32;
+        pNewValue[offsetof(FixupPrecode, m_op)] = X86_INSTR_JMP_REL32;
+    }
+    else if (pOldValue[OFFSETOF_PRECODE_TYPE_CALL_OR_JMP] == FixupPrecode::Type)
+    {
+#ifdef FEATURE_CODE_VERSIONING
+        // No change needed, jmp is already in place
+#else
+        // Setting the target more than once is unexpected
+        return FALSE;
+#endif
+    }
+    else
+    {
+        // Pre-existing code doesn't conform to the expectations for a FixupPrecode
+        return FALSE;
+    }
+	
     *(INT32*)(&pNewValue[offsetof(FixupPrecode, m_rel32)]) =
 #ifdef FIXUP_PRECODE_PREALLOCATE_DYNAMIC_METHOD_JUMP_STUBS
         pMD->IsLCGMethod() ?

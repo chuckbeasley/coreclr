@@ -752,9 +752,6 @@ End
 Crst PinnedByrefValidation
 End
 
-Crst AssemblyUsageLog
-End
-
 Crst VSDIndirectionCellLock
     AcquiredBefore LoaderHeap
 End
@@ -778,4 +775,11 @@ End
 
 Crst InlineTrackingMap
     AcquiredBefore IbcProfile
+End
+
+Crst EventPipe
+    AcquiredBefore ThreadIdDispenser ThreadStore DomainLocalBlock InstMethodHashTable
+End
+
+Crst NotifyGdb
 End

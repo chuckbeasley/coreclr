@@ -33,6 +33,7 @@ set(SUPERPMI_SHIM_COLLECTOR_SOURCES
     ../superpmi-shared/spmiutil.cpp
     ../superpmi-shared/tocfile.cpp
     ../superpmi-shared/typeutils.cpp
+    ../superpmi-shared/spmidumphelper.cpp
 )
 
 add_precompiled_header(
@@ -47,7 +48,7 @@ if (WIN32)
     list(APPEND SUPERPMI_SHIM_COLLECTOR_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/superpmi-shim-collector.def)
 endif (WIN32)
 
-add_library(superpmi-shim-collector
+_add_library(superpmi-shim-collector
     SHARED
     ${SUPERPMI_SHIM_COLLECTOR_SOURCES}
 )

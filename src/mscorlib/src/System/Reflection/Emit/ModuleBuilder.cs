@@ -21,7 +21,6 @@ namespace System.Reflection.Emit
     using System.Runtime.Versioning;
     using System.Runtime.CompilerServices;
     using System.Diagnostics;
-    using System.Diagnostics.Contracts;
 
     internal sealed class InternalModuleBuilder : RuntimeModule
     {
@@ -87,7 +86,7 @@ namespace System.Reflection.Emit
 
         #endregion
 
-        #region Intenral Data Members
+        #region Internal Data Members
         // m_TypeBuilder contains both TypeBuilder and EnumBuilder objects
         private Dictionary<string, Type> m_TypeBuilderDict;
         private ISymbolWriter m_iSymWriter;
@@ -120,7 +119,7 @@ namespace System.Reflection.Emit
                 object.ReferenceEquals(foundType.DeclaringType, enclosingType))
             {
                 // Cannot have two types with the same name
-                throw new ArgumentException(Environment.GetResourceString("Argument_DuplicateTypeName"));
+                throw new ArgumentException(SR.Argument_DuplicateTypeName);
             }
         }
 
@@ -149,11 +148,9 @@ namespace System.Reflection.Emit
 
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private extern static int GetTypeRef(RuntimeModule module, String strFullName, RuntimeModule refedModule, String strRefedModuleFileName, int tkResolution);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private extern static int GetMemberRef(RuntimeModule module, RuntimeModule refedModule, int tr, int defToken);
 
         private int GetMemberRef(Module refedModule, int tr, int defToken)
@@ -162,7 +159,6 @@ namespace System.Reflection.Emit
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private extern static int GetMemberRefFromSignature(RuntimeModule module, int tr, String methodName, byte[] signature, int length);
 
         private int GetMemberRefFromSignature(int tr, String methodName, byte[] signature, int length)
@@ -171,7 +167,6 @@ namespace System.Reflection.Emit
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private extern static int GetMemberRefOfMethodInfo(RuntimeModule module, int tr, IRuntimeMethodInfo method);
 
         private int GetMemberRefOfMethodInfo(int tr, RuntimeMethodInfo method)
@@ -189,7 +184,6 @@ namespace System.Reflection.Emit
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private extern static int GetMemberRefOfFieldInfo(RuntimeModule module, int tkType, RuntimeTypeHandle declaringType, int tkField);
 
         private int GetMemberRefOfFieldInfo(int tkType, RuntimeTypeHandle declaringType, RuntimeFieldInfo runtimeField)
@@ -200,7 +194,6 @@ namespace System.Reflection.Emit
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private extern static int GetTokenFromTypeSpec(RuntimeModule pModule, byte[] signature, int length);
 
         private int GetTokenFromTypeSpec(byte[] signature, int length)
@@ -209,15 +202,12 @@ namespace System.Reflection.Emit
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private extern static int GetArrayMethodToken(RuntimeModule module, int tkTypeSpec, String methodName, byte[] signature, int sigLength);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private extern static int GetStringConstant(RuntimeModule module, String str, int length);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         internal extern static void SetFieldRVAContent(RuntimeModule module, int fdToken, byte[] data, int length);
 
         #endregion
@@ -269,7 +259,6 @@ namespace System.Reflection.Emit
 
             if (con == null)
                 throw new ArgumentNullException(nameof(con));
-            Contract.EndContractBlock();
 
             int tr;
             int mr = 0;
@@ -308,7 +297,7 @@ namespace System.Reflection.Emit
                 // go through the slower code path, i.e. retrieve parameters and form signature helper.
                 ParameterInfo[] parameters = con.GetParameters();
                 if (parameters == null)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_InvalidConstructorInfo"));
+                    throw new ArgumentException(SR.Argument_InvalidConstructorInfo);
 
                 Type[] parameterTypes = new Type[parameters.Length];
                 Type[][] requiredCustomModifiers = new Type[parameters.Length][];
@@ -317,7 +306,7 @@ namespace System.Reflection.Emit
                 for (int i = 0; i < parameters.Length; i++)
                 {
                     if (parameters[i] == null)
-                        throw new ArgumentException(Environment.GetResourceString("Argument_InvalidConstructorInfo"));
+                        throw new ArgumentException(SR.Argument_InvalidConstructorInfo);
 
                     parameterTypes[i] = parameters[i].ParameterType;
                     requiredCustomModifiers[i] = parameters[i].GetRequiredCustomModifiers();
@@ -368,7 +357,7 @@ namespace System.Reflection.Emit
             }
         }
 
-        internal override ModuleHandle GetModuleHandle()
+        protected override ModuleHandle GetModuleHandleImpl()
         {
             return new ModuleHandle(GetNativeHandle());
         }
@@ -409,7 +398,7 @@ namespace System.Reflection.Emit
                 if ((method.CallingConvention & CallingConventions.VarArgs) == 0)
                 {
                     // Client should not supply optional parameter in default calling convention
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_NotAVarArgCallingConvention"));
+                    throw new InvalidOperationException(SR.InvalidOperation_NotAVarArgCallingConvention);
                 }
             }
 
@@ -716,16 +705,7 @@ namespace System.Reflection.Emit
         {
             get
             {
-                String fullyQualifiedName = m_moduleData.m_strFileName;
-                if (fullyQualifiedName == null)
-                    return null;
-                if (ContainingAssemblyBuilder.m_assemblyData.m_strDir != null)
-                {
-                    fullyQualifiedName = Path.Combine(ContainingAssemblyBuilder.m_assemblyData.m_strDir, fullyQualifiedName);
-                    fullyQualifiedName = Path.GetFullPath(fullyQualifiedName);
-                }
-
-                return fullyQualifiedName;
+                return m_moduleData.m_strFileName;
             }
         }
 
@@ -833,7 +813,6 @@ namespace System.Reflection.Emit
 
         public override Assembly Assembly
         {
-            [Pure]
             get
             {
                 return m_assemblyBuilder;
@@ -847,8 +826,6 @@ namespace System.Reflection.Emit
         #region Define Type
         public TypeBuilder DefineType(String name)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             lock (SyncRoot)
             {
                 return DefineTypeNoLock(name, TypeAttributes.NotPublic, null, null, PackingSize.Unspecified, TypeBuilder.UnspecifiedTypeSize);
@@ -857,8 +834,6 @@ namespace System.Reflection.Emit
 
         public TypeBuilder DefineType(String name, TypeAttributes attr)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             lock (SyncRoot)
             {
                 return DefineTypeNoLock(name, attr, null, null, PackingSize.Unspecified, TypeBuilder.UnspecifiedTypeSize);
@@ -867,8 +842,6 @@ namespace System.Reflection.Emit
 
         public TypeBuilder DefineType(String name, TypeAttributes attr, Type parent)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             lock (SyncRoot)
             {
                 // Why do we only call CheckContext here? Why don't we call it in the other overloads?
@@ -880,8 +853,6 @@ namespace System.Reflection.Emit
 
         public TypeBuilder DefineType(String name, TypeAttributes attr, Type parent, int typesize)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             lock (SyncRoot)
             {
                 return DefineTypeNoLock(name, attr, parent, null, PackingSize.Unspecified, typesize);
@@ -890,8 +861,6 @@ namespace System.Reflection.Emit
 
         public TypeBuilder DefineType(String name, TypeAttributes attr, Type parent, PackingSize packingSize, int typesize)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             lock (SyncRoot)
             {
                 return DefineTypeNoLock(name, attr, parent, null, packingSize, typesize);
@@ -900,8 +869,6 @@ namespace System.Reflection.Emit
 
         public TypeBuilder DefineType(String name, TypeAttributes attr, Type parent, Type[] interfaces)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             lock (SyncRoot)
             {
                 return DefineTypeNoLock(name, attr, parent, interfaces, PackingSize.Unspecified, TypeBuilder.UnspecifiedTypeSize);
@@ -910,15 +877,11 @@ namespace System.Reflection.Emit
 
         private TypeBuilder DefineTypeNoLock(String name, TypeAttributes attr, Type parent, Type[] interfaces, PackingSize packingSize, int typesize)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             return new TypeBuilder(name, attr, parent, interfaces, this, packingSize, typesize, null); ;
         }
 
         public TypeBuilder DefineType(String name, TypeAttributes attr, Type parent, PackingSize packsize)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             lock (SyncRoot)
             {
                 return DefineTypeNoLock(name, attr, parent, packsize);
@@ -927,8 +890,6 @@ namespace System.Reflection.Emit
 
         private TypeBuilder DefineTypeNoLock(String name, TypeAttributes attr, Type parent, PackingSize packsize)
         {
-            Contract.Ensures(Contract.Result<TypeBuilder>() != null);
-
             return new TypeBuilder(name, attr, parent, null, this, packsize, TypeBuilder.UnspecifiedTypeSize, null);
         }
 
@@ -940,8 +901,6 @@ namespace System.Reflection.Emit
         // Nested enum types can be defined manually using ModuleBuilder.DefineType.
         public EnumBuilder DefineEnum(String name, TypeAttributes visibility, Type underlyingType)
         {
-            Contract.Ensures(Contract.Result<EnumBuilder>() != null);
-
             CheckContext(underlyingType);
             lock (SyncRoot)
             {
@@ -966,8 +925,6 @@ namespace System.Reflection.Emit
 
         private EnumBuilder DefineEnumNoLock(String name, TypeAttributes visibility, Type underlyingType)
         {
-            Contract.Ensures(Contract.Result<EnumBuilder>() != null);
-
             return new EnumBuilder(name, underlyingType, visibility, this);
         }
 
@@ -980,16 +937,12 @@ namespace System.Reflection.Emit
         #region Define Global Method
         public MethodBuilder DefineGlobalMethod(String name, MethodAttributes attributes, Type returnType, Type[] parameterTypes)
         {
-            Contract.Ensures(Contract.Result<MethodBuilder>() != null);
-
             return DefineGlobalMethod(name, attributes, CallingConventions.Standard, returnType, parameterTypes);
         }
 
         public MethodBuilder DefineGlobalMethod(String name, MethodAttributes attributes, CallingConventions callingConvention,
             Type returnType, Type[] parameterTypes)
         {
-            Contract.Ensures(Contract.Result<MethodBuilder>() != null);
-
             return DefineGlobalMethod(name, attributes, callingConvention, returnType, null, null, parameterTypes, null, null);
         }
 
@@ -1010,18 +963,16 @@ namespace System.Reflection.Emit
             Type[] parameterTypes, Type[][] requiredParameterTypeCustomModifiers, Type[][] optionalParameterTypeCustomModifiers)
         {
             if (m_moduleData.m_fGlobalBeenCreated == true)
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_GlobalsHaveBeenCreated"));
+                throw new InvalidOperationException(SR.InvalidOperation_GlobalsHaveBeenCreated);
 
             if (name == null)
                 throw new ArgumentNullException(nameof(name));
 
             if (name.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), nameof(name));
+                throw new ArgumentException(SR.Argument_EmptyName, nameof(name));
 
             if ((attributes & MethodAttributes.Static) == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_GlobalFunctionHasToBeStatic"));
-            Contract.Ensures(Contract.Result<MethodBuilder>() != null);
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_GlobalFunctionHasToBeStatic);
 
             CheckContext(returnType);
             CheckContext(requiredReturnTypeCustomModifiers, optionalReturnTypeCustomModifiers, parameterTypes);
@@ -1048,7 +999,7 @@ namespace System.Reflection.Emit
             if (m_moduleData.m_fGlobalBeenCreated)
             {
                 // cannot create globals twice
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_NotADebugModule"));
+                throw new InvalidOperationException(SR.InvalidOperation_NotADebugModule);
             }
             m_moduleData.m_globalTypeBuilder.CreateType();
             m_moduleData.m_fGlobalBeenCreated = true;
@@ -1063,7 +1014,6 @@ namespace System.Reflection.Emit
             // This method will define an initialized Data in .sdata. 
             // We will create a fake TypeDef to represent the data with size. This TypeDef
             // will be the signature for the Field.         
-            Contract.Ensures(Contract.Result<FieldBuilder>() != null);
 
             lock (SyncRoot)
             {
@@ -1078,10 +1028,8 @@ namespace System.Reflection.Emit
             // will be the signature for the Field.
             if (m_moduleData.m_fGlobalBeenCreated == true)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_GlobalsHaveBeenCreated"));
+                throw new InvalidOperationException(SR.InvalidOperation_GlobalsHaveBeenCreated);
             }
-            Contract.Ensures(Contract.Result<FieldBuilder>() != null);
-            Contract.EndContractBlock();
 
             m_moduleData.m_fHasGlobal = true;
             return m_moduleData.m_globalTypeBuilder.DefineInitializedData(name, data, attributes);
@@ -1089,8 +1037,6 @@ namespace System.Reflection.Emit
 
         public FieldBuilder DefineUninitializedData(String name, int size, FieldAttributes attributes)
         {
-            Contract.Ensures(Contract.Result<FieldBuilder>() != null);
-
             lock (SyncRoot)
             {
                 return DefineUninitializedDataNoLock(name, size, attributes);
@@ -1105,10 +1051,8 @@ namespace System.Reflection.Emit
 
             if (m_moduleData.m_fGlobalBeenCreated == true)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_GlobalsHaveBeenCreated"));
+                throw new InvalidOperationException(SR.InvalidOperation_GlobalsHaveBeenCreated);
             }
-            Contract.Ensures(Contract.Result<FieldBuilder>() != null);
-            Contract.EndContractBlock();
 
             m_moduleData.m_fHasGlobal = true;
             return m_moduleData.m_globalTypeBuilder.DefineUninitializedData(name, size, attributes);
@@ -1143,7 +1087,6 @@ namespace System.Reflection.Emit
         {
             if (type == null)
                 throw new ArgumentNullException(nameof(type));
-            Contract.EndContractBlock();
 
             CheckContext(type);
 
@@ -1158,7 +1101,7 @@ namespace System.Reflection.Emit
             // We should also be aware of multiple dynamic modules and multiple implementation of Type!!!
 
             if (type.IsByRef)
-                throw new ArgumentException(Environment.GetResourceString("Argument_CannotGetTypeTokenForByRef"));
+                throw new ArgumentException(SR.Argument_CannotGetTypeTokenForByRef);
 
             if ((type.IsGenericType && (!type.IsGenericTypeDefinition || !getGenericDefinition)) ||
                 type.IsGenericParameter ||
@@ -1260,7 +1203,6 @@ namespace System.Reflection.Emit
             // return the MethodDef token. 
             if (method == null)
                 throw new ArgumentNullException(nameof(method));
-            Contract.EndContractBlock();
 
             int tr;
             int mr = 0;
@@ -1275,7 +1217,7 @@ namespace System.Reflection.Emit
                     return new MethodToken(methodToken);
 
                 if (method.DeclaringType == null)
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CannotImportGlobalFromDifferentModule"));
+                    throw new InvalidOperationException(SR.InvalidOperation_CannotImportGlobalFromDifferentModule);
 
                 // method is defined in a different module
                 tr = getGenericTypeDefinition ? GetTypeToken(method.DeclaringType).Token : GetTypeTokenInternal(method.DeclaringType).Token;
@@ -1299,7 +1241,7 @@ namespace System.Reflection.Emit
 
                 // We need to get the TypeRef tokens
                 if (declaringType == null)
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CannotImportGlobalFromDifferentModule"));
+                    throw new InvalidOperationException(SR.InvalidOperation_CannotImportGlobalFromDifferentModule);
 
                 RuntimeMethodInfo rtMeth = null;
 
@@ -1448,11 +1390,10 @@ namespace System.Reflection.Emit
                 throw new ArgumentNullException(nameof(methodName));
 
             if (methodName.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), nameof(methodName));
+                throw new ArgumentException(SR.Argument_EmptyName, nameof(methodName));
 
             if (arrayClass.IsArray == false)
-                throw new ArgumentException(Environment.GetResourceString("Argument_HasToBeArrayClass"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_HasToBeArrayClass);
 
             CheckContext(returnType, arrayClass);
             CheckContext(parameterTypes);
@@ -1509,7 +1450,6 @@ namespace System.Reflection.Emit
             {
                 throw new ArgumentNullException(nameof(field));
             }
-            Contract.EndContractBlock();
 
             int tr;
             int mr = 0;
@@ -1537,7 +1477,7 @@ namespace System.Reflection.Emit
                     // field is defined in a different module
                     if (field.DeclaringType == null)
                     {
-                        throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CannotImportGlobalFromDifferentModule"));
+                        throw new InvalidOperationException(SR.InvalidOperation_CannotImportGlobalFromDifferentModule);
                     }
                     tr = GetTypeTokenInternal(field.DeclaringType).Token;
                     mr = GetMemberRef(field.ReflectedType.Module, tr, fdBuilder.GetToken().Token);
@@ -1550,7 +1490,7 @@ namespace System.Reflection.Emit
                 // We need to get the TypeRef tokens
                 if (field.DeclaringType == null)
                 {
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CannotImportGlobalFromDifferentModule"));
+                    throw new InvalidOperationException(SR.InvalidOperation_CannotImportGlobalFromDifferentModule);
                 }
 
                 if (field.DeclaringType != null && field.DeclaringType.IsGenericType)
@@ -1598,7 +1538,6 @@ namespace System.Reflection.Emit
             {
                 throw new ArgumentNullException(nameof(str));
             }
-            Contract.EndContractBlock();
 
             // Returns a token representing a String constant.  If the string 
             // value has already been defined, the existing token will be returned.
@@ -1614,7 +1553,6 @@ namespace System.Reflection.Emit
             {
                 throw new ArgumentNullException(nameof(sigHelper));
             }
-            Contract.EndContractBlock();
 
             int sigLength;
             byte[] sigBytes;
@@ -1627,7 +1565,6 @@ namespace System.Reflection.Emit
         {
             if (sigBytes == null)
                 throw new ArgumentNullException(nameof(sigBytes));
-            Contract.EndContractBlock();
 
             byte[] localSigBytes = new byte[sigBytes.Length];
             Buffer.BlockCopy(sigBytes, 0, localSigBytes, 0, sigBytes.Length);
@@ -1645,7 +1582,6 @@ namespace System.Reflection.Emit
                 throw new ArgumentNullException(nameof(con));
             if (binaryAttribute == null)
                 throw new ArgumentNullException(nameof(binaryAttribute));
-            Contract.EndContractBlock();
 
             TypeBuilder.DefineCustomAttribute(
                 this,
@@ -1661,7 +1597,6 @@ namespace System.Reflection.Emit
             {
                 throw new ArgumentNullException(nameof(customBuilder));
             }
-            Contract.EndContractBlock();
 
             customBuilder.CreateCustomAttribute(this, 1);   // This is hard coding the module token to 1
         }
@@ -1705,7 +1640,6 @@ namespace System.Reflection.Emit
             // url cannot be null but can be an empty string 
             if (url == null)
                 throw new ArgumentNullException(nameof(url));
-            Contract.EndContractBlock();
 
             lock (SyncRoot)
             {
@@ -1718,13 +1652,12 @@ namespace System.Reflection.Emit
             if (m_iSymWriter == null)
             {
                 // Cannot DefineDocument when it is not a debug module
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_NotADebugModule"));
+                throw new InvalidOperationException(SR.InvalidOperation_NotADebugModule);
             }
 
             return m_iSymWriter.DefineDocument(url, language, languageVendor, documentType);
         }
 
-        [Pure]
         public bool IsTransient()
         {
             return InternalModule.IsTransientInternal();

@@ -16,7 +16,6 @@ using System;
 
 namespace System.Runtime.InteropServices
 {
-    [Serializable]
     public sealed class ErrorWrapper
     {
         public ErrorWrapper(int errorCode)
@@ -27,7 +26,7 @@ namespace System.Runtime.InteropServices
         public ErrorWrapper(Object errorCode)
         {
             if (!(errorCode is int))
-                throw new ArgumentException(Environment.GetResourceString("Arg_MustBeInt32"), nameof(errorCode));
+                throw new ArgumentException(SR.Arg_MustBeInt32, nameof(errorCode));
             m_ErrorCode = (int)errorCode;
         }
 

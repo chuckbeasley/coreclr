@@ -14,6 +14,7 @@
 
 namespace System
 {
+    using System.Buffers;
     using System.IO;
     using System.Security;
     using System.Resources;
@@ -30,7 +31,6 @@ namespace System
     using System.Threading;
     using System.Runtime.ConstrainedExecution;
     using System.Runtime.Versioning;
-    using System.Diagnostics.Contracts;
 
     public enum EnvironmentVariableTarget
     {
@@ -39,10 +39,10 @@ namespace System
         Machine = 2,
     }
 
-    public static partial class Environment
+    internal static partial class Environment
     {
         // Assume the following constants include the terminating '\0' - use <, not <=
-        private const int MaxEnvVariableValueLength = 32767;  // maximum length for environment variable name and value
+
         // System environment variables are stored in the registry, and have 
         // a size restriction that is separate from both normal environment 
         // variables and registry value name lengths, according to MSDN.
@@ -50,149 +50,17 @@ namespace System
         // that includes the contents of the environment variable.
         private const int MaxSystemEnvVariableLength = 1024;
         private const int MaxUserEnvVariableLength = 255;
-
-        internal sealed class ResourceHelper
-        {
-            internal ResourceHelper(String name)
-            {
-                m_name = name;
-            }
-
-            private String m_name;
-            private ResourceManager SystemResMgr;
-
-            // To avoid infinite loops when calling GetResourceString.  See comments
-            // in GetResourceString for this field.
-            private List<string> currentlyLoading;
-
-            // process-wide state (since this is only used in one domain), 
-            // used to avoid the TypeInitialization infinite recusion
-            // in GetResourceStringCode
-            internal bool resourceManagerInited = false;
-
-            // Is this thread currently doing infinite resource lookups?
-            private int infinitelyRecursingCount;
-
-            internal String GetResourceString(String key)
-            {
-                if (key == null || key.Length == 0)
-                {
-                    Debug.Assert(false, "Environment::GetResourceString with null or empty key.  Bug in caller, or weird recursive loading problem?");
-                    return "[Resource lookup failed - null or empty resource name]";
-                }
-
-                // We have a somewhat common potential for infinite 
-                // loops with mscorlib's ResourceManager.  If "potentially dangerous"
-                // code throws an exception, we will get into an infinite loop
-                // inside the ResourceManager and this "potentially dangerous" code.
-                // Potentially dangerous code includes the IO package, CultureInfo,
-                // parts of the loader, some parts of Reflection, Security (including 
-                // custom user-written permissions that may parse an XML file at
-                // class load time), assembly load event handlers, etc.  Essentially,
-                // this is not a bounded set of code, and we need to fix the problem.
-                // Fortunately, this is limited to mscorlib's error lookups and is NOT
-                // a general problem for all user code using the ResourceManager.
-
-                // The solution is to make sure only one thread at a time can call 
-                // GetResourceString.  Also, since resource lookups can be 
-                // reentrant, if the same thread comes into GetResourceString
-                // twice looking for the exact same resource name before 
-                // returning, we're going into an infinite loop and we should 
-                // return a bogus string.  
-
-                bool lockTaken = false;
-                try
-                {
-                    Monitor.Enter(this, ref lockTaken);
-
-                    // Are we recursively looking up the same resource?  Note - our backout code will set
-                    // the ResourceHelper's currentlyLoading stack to null if an exception occurs.
-                    if (currentlyLoading != null && currentlyLoading.Count > 0 && currentlyLoading.LastIndexOf(key) != -1)
-                    {
-                        // We can start infinitely recursing for one resource lookup,
-                        // then during our failure reporting, start infinitely recursing again.
-                        // avoid that.
-                        if (infinitelyRecursingCount > 0)
-                        {
-                            return "[Resource lookup failed - infinite recursion or critical failure detected.]";
-                        }
-                        infinitelyRecursingCount++;
-
-                        // Note: our infrastructure for reporting this exception will again cause resource lookup.
-                        // This is the most direct way of dealing with that problem.
-                        string message = $"Infinite recursion during resource lookup within {System.CoreLib.Name}.  This may be a bug in {System.CoreLib.Name}, or potentially in certain extensibility points such as assembly resolve events or CultureInfo names.  Resource name: {key}";
-                        Assert.Fail("[Recursive resource lookup bug]", message, Assert.COR_E_FAILFAST, System.Diagnostics.StackTrace.TraceFormat.NoResourceLookup);
-                        Environment.FailFast(message);
-                    }
-                    if (currentlyLoading == null)
-                        currentlyLoading = new List<string>();
-
-                    // Call class constructors preemptively, so that we cannot get into an infinite
-                    // loop constructing a TypeInitializationException.  If this were omitted,
-                    // we could get the Infinite recursion assert above by failing type initialization
-                    // between the Push and Pop calls below.
-                    if (!resourceManagerInited)
-                    {
-                        RuntimeHelpers.RunClassConstructor(typeof(ResourceManager).TypeHandle);
-                        RuntimeHelpers.RunClassConstructor(typeof(ResourceReader).TypeHandle);
-                        RuntimeHelpers.RunClassConstructor(typeof(RuntimeResourceSet).TypeHandle);
-                        RuntimeHelpers.RunClassConstructor(typeof(BinaryReader).TypeHandle);
-                        resourceManagerInited = true;
-                    }
-
-                    currentlyLoading.Add(key); // Push
-
-                    if (SystemResMgr == null)
-                    {
-                        SystemResMgr = new ResourceManager(m_name, typeof(Object).Assembly);
-                    }
-                    string s = SystemResMgr.GetString(key, null);
-                    currentlyLoading.RemoveAt(currentlyLoading.Count - 1); // Pop
-
-                    Debug.Assert(s != null, "Managed resource string lookup failed.  Was your resource name misspelled?  Did you rebuild mscorlib after adding a resource to resources.txt?  Debug this w/ cordbg and bug whoever owns the code that called Environment.GetResourceString.  Resource name was: \"" + key + "\"");
-                    return s;
-                }
-                catch
-                {
-                    if (lockTaken)
-                    {
-                        // Backout code - throw away potentially corrupt state
-                        SystemResMgr = null;
-                        currentlyLoading = null;
-                    }
-                    throw;
-                }
-                finally
-                {
-                    if (lockTaken)
-                    {
-                        Monitor.Exit(this);
-                    }
-                }
-            }
-        }
-
-        private static volatile ResourceHelper m_resHelper;  // Doesn't need to be initialized as they're zero-init.
-
         private const int MaxMachineNameLength = 256;
 
-        // Private object for locking instead of locking on a public type for SQL reliability work.
-        private static Object s_InternalSyncObject;
-        private static Object InternalSyncObject
+        // Looks up the resource string value for key.
+        // 
+        // if you change this method's signature then you must change the code that calls it
+        // in excep.cpp and probably you will have to visit mscorlib.h to add the new signature
+        // as well as metasig.h to create the new signature type
+        internal static String GetResourceStringLocal(String key)
         {
-            get
-            {
-                if (s_InternalSyncObject == null)
-                {
-                    Object o = new Object();
-                    Interlocked.CompareExchange<Object>(ref s_InternalSyncObject, o, null);
-                }
-                return s_InternalSyncObject;
-            }
+            return SR.GetResourceString(key);
         }
-
-
-        private static volatile OperatingSystem m_os;  // Cached OperatingSystem value
 
         /*==================================TickCount===================================
         **Action: Gets the number of ticks since the system was started.
@@ -208,7 +76,6 @@ namespace System
 
         // Terminates this process with the given exit code.
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         internal static extern void _Exit(int exitCode);
 
         public static void Exit(int exitCode)
@@ -248,82 +115,20 @@ namespace System
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         public static extern void FailFast(String message, Exception exception);
 
-        /*===============================CurrentDirectory===============================
-        **Action:  Provides a getter and setter for the current directory.  The original
-        **         current directory is the one from which the process was started.  
-        **Returns: The current directory (from the getter).  Void from the setter.
-        **Arguments: The current directory to which to switch to the setter.
-        **Exceptions: 
-        ==============================================================================*/
-        internal static String CurrentDirectory
-        {
-            get
-            {
-                return Directory.GetCurrentDirectory();
-            }
-
-            set
-            {
-                Directory.SetCurrentDirectory(value);
-            }
-        }
-
-        // Returns the system directory (ie, C:\WinNT\System32).
-        internal static String SystemDirectory
-        {
-            get
-            {
-                StringBuilder sb = new StringBuilder(Path.MaxPath);
-                int r = Win32Native.GetSystemDirectory(sb, Path.MaxPath);
-                Debug.Assert(r < Path.MaxPath, "r < Path.MaxPath");
-                if (r == 0) __Error.WinIOError();
-                String path = sb.ToString();
-
-                return path;
-            }
-        }
-
+#if FEATURE_WIN32_REGISTRY
+        // This is only used by RegistryKey on Windows.
         public static String ExpandEnvironmentVariables(String name)
         {
             if (name == null)
                 throw new ArgumentNullException(nameof(name));
-            Contract.EndContractBlock();
 
             if (name.Length == 0)
             {
                 return name;
             }
 
-            if (AppDomain.IsAppXModel() && !AppDomain.IsAppXDesignMode())
-            {
-                // Environment variable accessors are not approved modern API.
-                // Behave as if no variables are defined in this case.
-                return name;
-            }
-
             int currentSize = 100;
             StringBuilder blob = new StringBuilder(currentSize); // A somewhat reasonable default size
-
-#if PLATFORM_UNIX // Win32Native.ExpandEnvironmentStrings isn't available
-            int lastPos = 0, pos;
-            while (lastPos < name.Length && (pos = name.IndexOf('%', lastPos + 1)) >= 0)
-            {
-                if (name[lastPos] == '%')
-                {
-                    string key = name.Substring(lastPos + 1, pos - lastPos - 1);
-                    string value = Environment.GetEnvironmentVariable(key);
-                    if (value != null)
-                    {
-                        blob.Append(value);
-                        lastPos = pos + 1;
-                        continue;
-                    }
-                }
-                blob.Append(name.Substring(lastPos, pos - lastPos));
-                lastPos = pos;
-            }
-            blob.Append(name.Substring(lastPos));
-#else
 
             int size;
 
@@ -342,34 +147,12 @@ namespace System
                 if (size == 0)
                     Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
             }
-#endif // PLATFORM_UNIX
 
             return blob.ToString();
         }
-
-        public static String MachineName
-        {
-            get
-            {
-                // UWP Debug scenarios
-                if (AppDomain.IsAppXModel() && !AppDomain.IsAppXDesignMode())
-                {
-                    // Getting Computer Name is not a supported scenario on Store apps.
-                    throw new PlatformNotSupportedException();
-                }
-
-                // In future release of operating systems, you might be able to rename a machine without
-                // rebooting.  Therefore, don't cache this machine name.
-                StringBuilder buf = new StringBuilder(MaxMachineNameLength);
-                int len = MaxMachineNameLength;
-                if (Win32Native.GetComputerName(buf, ref len) == 0)
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ComputerName"));
-                return buf.ToString();
-            }
-        }
+#endif // FEATURE_WIN32_REGISTRY
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern Int32 GetProcessorCount();
 
         public static int ProcessorCount
@@ -421,44 +204,38 @@ namespace System
         {
             char[] block = null;
 
-            // Make sure pStrings is not leaked with async exceptions
             RuntimeHelpers.PrepareConstrainedRegions();
+
+            char* pStrings = null;
+
             try
             {
+                pStrings = Win32Native.GetEnvironmentStrings();
+                if (pStrings == null)
+                {
+                    throw new OutOfMemoryException();
+                }
+
+                // Format for GetEnvironmentStrings is:
+                // [=HiddenVar=value\0]* [Variable=value\0]* \0
+                // See the description of Environment Blocks in MSDN's
+                // CreateProcess page (null-terminated array of null-terminated strings).
+
+                // Search for terminating \0\0 (two unicode \0's).
+                char* p = pStrings;
+                while (!(*p == '\0' && *(p + 1) == '\0'))
+                    p++;
+
+                int len = (int)(p - pStrings + 1);
+                block = new char[len];
+
+                fixed (char* pBlock = block)
+                    string.wstrcpy(pBlock, pStrings, len);
             }
             finally
             {
-                char* pStrings = null;
-
-                try
-                {
-                    pStrings = Win32Native.GetEnvironmentStrings();
-                    if (pStrings == null)
-                    {
-                        throw new OutOfMemoryException();
-                    }
-
-                    // Format for GetEnvironmentStrings is:
-                    // [=HiddenVar=value\0]* [Variable=value\0]* \0
-                    // See the description of Environment Blocks in MSDN's
-                    // CreateProcess page (null-terminated array of null-terminated strings).
-
-                    // Search for terminating \0\0 (two unicode \0's).
-                    char* p = pStrings;
-                    while (!(*p == '\0' && *(p + 1) == '\0'))
-                        p++;
-
-                    int len = (int)(p - pStrings + 1);
-                    block = new char[len];
-
-                    fixed (char* pBlock = block)
-                        string.wstrcpy(pBlock, pStrings, len);
-                }
-                finally
-                {
-                    if (pStrings != null)
-                        Win32Native.FreeEnvironmentStrings(pStrings);
-                }
+                if (pStrings != null)
+                    Win32Native.FreeEnvironmentStrings(pStrings);
             }
 
             return block;
@@ -475,12 +252,11 @@ namespace System
         {
             get
             {
-                Contract.Ensures(Contract.Result<String>() != null);
-#if !PLATFORM_UNIX
+#if PLATFORM_WINDOWS
                 return "\r\n";
 #else
                 return "\n";
-#endif // !PLATFORM_UNIX
+#endif // PLATFORM_WINDOWS
             }
         }
 
@@ -503,69 +279,37 @@ namespace System
             }
         }
 
-        /*==================================OSVersion===================================
-        **Action:
-        **Returns:
-        **Arguments:
-        **Exceptions:
-        ==============================================================================*/
-        internal static OperatingSystem OSVersion
+#if !FEATURE_PAL
+        private static Lazy<bool> s_IsWindows8OrAbove = new Lazy<bool>(() => 
         {
-            get
-            {
-                Contract.Ensures(Contract.Result<OperatingSystem>() != null);
+            ulong conditionMask = Win32Native.VerSetConditionMask(0, Win32Native.VER_MAJORVERSION, Win32Native.VER_GREATER_EQUAL);
+            conditionMask = Win32Native.VerSetConditionMask(conditionMask, Win32Native.VER_MINORVERSION, Win32Native.VER_GREATER_EQUAL);
+            conditionMask = Win32Native.VerSetConditionMask(conditionMask, Win32Native.VER_SERVICEPACKMAJOR, Win32Native.VER_GREATER_EQUAL);
+            conditionMask = Win32Native.VerSetConditionMask(conditionMask, Win32Native.VER_SERVICEPACKMINOR, Win32Native.VER_GREATER_EQUAL);
 
-                if (m_os == null)
-                { // We avoid the lock since we don't care if two threads will set this at the same time.
-                    Microsoft.Win32.Win32Native.OSVERSIONINFO osvi = new Microsoft.Win32.Win32Native.OSVERSIONINFO();
-                    if (!GetVersion(osvi))
-                    {
-                        throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_GetVersion"));
-                    }
-
-                    Microsoft.Win32.Win32Native.OSVERSIONINFOEX osviEx = new Microsoft.Win32.Win32Native.OSVERSIONINFOEX();
-                    if (!GetVersionEx(osviEx))
-                        throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_GetVersion"));
-
-#if PLATFORM_UNIX
-                    PlatformID id = PlatformID.Unix;
-#else
-                    PlatformID id = PlatformID.Win32NT;
-#endif // PLATFORM_UNIX
-
-                    Version v = new Version(osvi.MajorVersion, osvi.MinorVersion, osvi.BuildNumber, (osviEx.ServicePackMajor << 16) | osviEx.ServicePackMinor);
-                    m_os = new OperatingSystem(id, v, osvi.CSDVersion);
-                }
-                Debug.Assert(m_os != null, "m_os != null");
-                return m_os;
-            }
-        }
-
-
-        internal static bool IsWindows8OrAbove
-        {
-            get
-            {
-                return true;
-            }
-        }
-
+            // Windows 8 version is 6.2
+            var version = new Win32Native.OSVERSIONINFOEX { MajorVersion = 6, MinorVersion = 2, ServicePackMajor = 0, ServicePackMinor = 0 };
+                
+            return Win32Native.VerifyVersionInfoW(version, 
+                       Win32Native.VER_MAJORVERSION | Win32Native.VER_MINORVERSION | Win32Native.VER_SERVICEPACKMAJOR | Win32Native.VER_SERVICEPACKMINOR,
+                       conditionMask);
+        });
+        internal static bool IsWindows8OrAbove => s_IsWindows8OrAbove.Value;
+#endif
+        
 #if FEATURE_COMINTEROP
-        internal static bool IsWinRTSupported
+        // Does the current version of Windows have Windows Runtime suppport?
+        private static Lazy<bool> s_IsWinRTSupported = new Lazy<bool>(() =>
         {
-            get
-            {
-                return true;
-            }
-        }
+            return WinRTSupported();
+        });
+
+        internal static bool IsWinRTSupported => s_IsWinRTSupported.Value;
+
+        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool WinRTSupported();
 #endif // FEATURE_COMINTEROP
-
-
-        [MethodImplAttribute(MethodImplOptions.InternalCall)]
-        internal static extern bool GetVersion(Microsoft.Win32.Win32Native.OSVERSIONINFO osVer);
-
-        [MethodImplAttribute(MethodImplOptions.InternalCall)]
-        internal static extern bool GetVersionEx(Microsoft.Win32.Win32Native.OSVERSIONINFOEX osVer);
 
 
         /*==================================StackTrace==================================
@@ -579,8 +323,7 @@ namespace System
             [MethodImpl(MethodImplOptions.NoInlining)] // Prevent inlining from affecting where the stacktrace starts
             get
             {
-                Contract.Ensures(Contract.Result<String>() != null);
-                return global::Internal.Runtime.Augments.EnvironmentAugments.StackTrace;
+                return Internal.Runtime.Augments.EnvironmentAugments.StackTrace;
             }
         }
 
@@ -598,94 +341,6 @@ namespace System
 
             // Do no include a trailing newline for backwards compatibility
             return st.ToString(System.Diagnostics.StackTrace.TraceFormat.Normal);
-        }
-
-        private static void InitResourceHelper()
-        {
-            // Only the default AppDomain should have a ResourceHelper.  All calls to 
-            // GetResourceString from any AppDomain delegate to GetResourceStringLocal 
-            // in the default AppDomain via the fcall GetResourceFromDefault.
-
-            bool tookLock = false;
-            RuntimeHelpers.PrepareConstrainedRegions();
-            try
-            {
-                Monitor.Enter(Environment.InternalSyncObject, ref tookLock);
-
-                if (m_resHelper == null)
-                {
-                    ResourceHelper rh = new ResourceHelper(System.CoreLib.Name);
-
-                    System.Threading.Thread.MemoryBarrier();
-                    m_resHelper = rh;
-                }
-            }
-            finally
-            {
-                if (tookLock)
-                    Monitor.Exit(Environment.InternalSyncObject);
-            }
-        }
-
-        // Looks up the resource string value for key.
-        // 
-        // if you change this method's signature then you must change the code that calls it
-        // in excep.cpp and probably you will have to visit mscorlib.h to add the new signature
-        // as well as metasig.h to create the new signature type
-        internal static String GetResourceStringLocal(String key)
-        {
-            if (m_resHelper == null)
-                InitResourceHelper();
-
-            return m_resHelper.GetResourceString(key);
-        }
-
-        internal static String GetResourceString(String key)
-        {
-            return GetResourceStringLocal(key);
-        }
-
-        // The reason the following overloads exist are to reduce code bloat.
-        // Since GetResourceString is basically only called when exceptions are
-        // thrown, we want the code size to be as small as possible.
-        // Using the params object[] overload works against this since the
-        // initialization of the array is done inline in the caller at the IL
-        // level. So we have overloads that simply wrap the params one.
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static string GetResourceString(string key, object val0)
-        {
-            return GetResourceStringFormatted(key, new object[] { val0 });
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static string GetResourceString(string key, object val0, object val1)
-        {
-            return GetResourceStringFormatted(key, new object[] { val0, val1 });
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static string GetResourceString(string key, object val0, object val1, object val2)
-        {
-            return GetResourceStringFormatted(key, new object[] { val0, val1, val2 });
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static string GetResourceString(string key, object val0, object val1, object val2, object val3)
-        {
-            return GetResourceStringFormatted(key, new object[] { val0, val1, val2, val3 });
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static String GetResourceString(string key, params object[] values)
-        {
-            return GetResourceStringFormatted(key, values);
-        }
-
-        private static String GetResourceStringFormatted(string key, params object[] values)
-        {
-            string rs = GetResourceString(key);
-            return String.Format(CultureInfo.CurrentCulture, rs, values);
         }
 
         public static extern bool HasShutdownStarted
@@ -781,19 +436,6 @@ namespace System
             return GetEnvironmentVariableCore(variable, target);
         }
 
-        public static IDictionary GetEnvironmentVariables()
-        {
-            // separated from the EnvironmentVariableTarget overload to help with tree shaking in common case
-            return GetEnvironmentVariablesCore();
-        }
-
-        internal static IDictionary GetEnvironmentVariables(EnvironmentVariableTarget target)
-        {
-            ValidateTarget(target);
-
-            return GetEnvironmentVariablesCore(target);
-        }
-
         public static void SetEnvironmentVariable(string variable, string value)
         {
             ValidateVariableAndValue(variable, ref value);
@@ -812,37 +454,27 @@ namespace System
 
         private static void ValidateVariableAndValue(string variable, ref string value)
         {
-            const int MaxEnvVariableValueLength = 32767;
-
             if (variable == null)
             {
                 throw new ArgumentNullException(nameof(variable));
             }
             if (variable.Length == 0)
             {
-                throw new ArgumentException(GetResourceString("Argument_StringZeroLength"), nameof(variable));
+                throw new ArgumentException(SR.Argument_StringZeroLength, nameof(variable));
             }
             if (variable[0] == '\0')
             {
-                throw new ArgumentException(GetResourceString("Argument_StringFirstCharIsZero"), nameof(variable));
-            }
-            if (variable.Length >= MaxEnvVariableValueLength)
-            {
-                throw new ArgumentException(GetResourceString("Argument_LongEnvVarValue"), nameof(variable));
+                throw new ArgumentException(SR.Argument_StringFirstCharIsZero, nameof(variable));
             }
             if (variable.IndexOf('=') != -1)
             {
-                throw new ArgumentException(GetResourceString("Argument_IllegalEnvVarName"), nameof(variable));
+                throw new ArgumentException(SR.Argument_IllegalEnvVarName, nameof(variable));
             }
 
             if (string.IsNullOrEmpty(value) || value[0] == '\0')
             {
                 // Explicitly null out value if it's empty
                 value = null;
-            }
-            else if (value.Length >= MaxEnvVariableValueLength)
-            {
-                throw new ArgumentException(GetResourceString("Argument_LongEnvVarValue"), nameof(value));
             }
         }
 
@@ -852,11 +484,79 @@ namespace System
                 target != EnvironmentVariableTarget.Machine &&
                 target != EnvironmentVariableTarget.User)
             {
-                throw new ArgumentOutOfRangeException(nameof(target), target, SR.Format(GetResourceString("Arg_EnumIllegalVal"), target));
+                throw new ArgumentOutOfRangeException(nameof(target), target, SR.Format(SR.Arg_EnumIllegalVal, target));
             }
         }
 
-        private static Dictionary<string, string> GetRawEnvironmentVariables()
+        private static string GetEnvironmentVariableCore(string variable)
+        {
+            Span<char> buffer = stackalloc char[128]; // A somewhat reasonable default size
+            return GetEnvironmentVariableCoreHelper(variable, buffer);
+        }
+
+        private static string GetEnvironmentVariableCoreHelper(string variable, Span<char> buffer)
+        {
+            int requiredSize = Win32Native.GetEnvironmentVariable(variable, buffer);
+
+            if (requiredSize == 0 && Marshal.GetLastWin32Error() == Win32Native.ERROR_ENVVAR_NOT_FOUND)
+            {
+                return null;
+            }
+
+            if (requiredSize > buffer.Length)
+            {
+                char[] chars = ArrayPool<char>.Shared.Rent(requiredSize);
+                try
+                {
+                    return GetEnvironmentVariableCoreHelper(variable, chars);
+                }
+                finally
+                {
+                    ArrayPool<char>.Shared.Return(chars);
+                }
+            }
+
+            return new string(buffer.Slice(0, requiredSize));
+        }
+
+        private static string GetEnvironmentVariableCore(string variable, EnvironmentVariableTarget target)
+        {
+            if (target == EnvironmentVariableTarget.Process)
+                return GetEnvironmentVariableCore(variable);
+
+#if FEATURE_WIN32_REGISTRY
+            if (AppDomain.IsAppXModel())
+#endif
+            {
+                return null;
+            }
+#if FEATURE_WIN32_REGISTRY
+            RegistryKey baseKey;
+            string keyName;
+
+            if (target == EnvironmentVariableTarget.Machine)
+            {
+                baseKey = Registry.LocalMachine;
+                keyName = @"System\CurrentControlSet\Control\Session Manager\Environment";
+            }
+            else if (target == EnvironmentVariableTarget.User)
+            {
+                baseKey = Registry.CurrentUser;
+                keyName = "Environment";
+            }
+            else
+            {
+                throw new ArgumentException(SR.Format(SR.Arg_EnumIllegalVal, (int)target));
+            }
+
+            using (RegistryKey environmentKey = baseKey.OpenSubKey(keyName, writable: false))
+            {
+                return environmentKey?.GetValue(variable) as string;
+            }
+#endif
+        }
+
+        internal static IEnumerable<KeyValuePair<string, string>> EnumerateEnvironmentVariables()
         {
             // Format for GetEnvironmentStrings is:
             // (=HiddenVar=value\0 | Variable=value\0)* \0
@@ -871,7 +571,6 @@ namespace System
             // environment block (as =C:=pwd) and the program's exit code is 
             // as well (=ExitCode=00000000).
 
-            var results = new Dictionary<string, string>();
             char[] block = GetEnvironmentCharArray();
             for (int i = 0; i < block.Length; i++)
             {
@@ -879,13 +578,16 @@ namespace System
 
                 // Skip to key. On some old OS, the environment block can be corrupted.
                 // Some will not have '=', so we need to check for '\0'. 
-                while (block[i] != '=' && block[i] != '\0') i++;
-                if (block[i] == '\0') continue;
+                while (block[i] != '=' && block[i] != '\0')
+                    i++;
+                if (block[i] == '\0')
+                    continue;
 
                 // Skip over environment variables starting with '='
                 if (i - startKey == 0)
                 {
-                    while (block[i] != 0) i++;
+                    while (block[i] != 0)
+                        i++;
                     continue;
                 }
 
@@ -893,97 +595,32 @@ namespace System
                 i++;  // skip over '='
 
                 int startValue = i;
-                while (block[i] != 0) i++; // Read to end of this entry 
+                while (block[i] != 0)
+                    i++; // Read to end of this entry 
                 string value = new string(block, startValue, i - startValue); // skip over 0 handled by for loop's i++
 
-                results[key] = value;
+                yield return new KeyValuePair<string, string>(key, value);
             }
-            return results;
         }
 
-        private static string GetEnvironmentVariableCore(string variable)
-        {
-            if (AppDomain.IsAppXModel() && !AppDomain.IsAppXDesignMode())
-            {
-                // Environment variable accessors are not approved modern API.
-                // Behave as if the variable was not found in this case.
-                return null;
-            }
-
-            StringBuilder sb = StringBuilderCache.Acquire(128); // A somewhat reasonable default size
-            int requiredSize = Win32Native.GetEnvironmentVariable(variable, sb, sb.Capacity);
-
-            if (requiredSize == 0 && Marshal.GetLastWin32Error() == Win32Native.ERROR_ENVVAR_NOT_FOUND)
-            {
-                StringBuilderCache.Release(sb);
-                return null;
-            }
-
-            while (requiredSize > sb.Capacity)
-            {
-                sb.Capacity = requiredSize;
-                sb.Length = 0;
-                requiredSize = Win32Native.GetEnvironmentVariable(variable, sb, sb.Capacity);
-            }
-
-            return StringBuilderCache.GetStringAndRelease(sb);
-        }
-
-        private static string GetEnvironmentVariableCore(string variable, EnvironmentVariableTarget target)
+        internal static IEnumerable<KeyValuePair<string, string>> EnumerateEnvironmentVariables(EnvironmentVariableTarget target)
         {
             if (target == EnvironmentVariableTarget.Process)
-                return GetEnvironmentVariableCore(variable);
+                return EnumerateEnvironmentVariables();
+            return EnumerateEnvironmentVariablesFromRegistry(target);
+        }
 
-#if !FEATURE_WIN32_REGISTRY
-            return null;
-#else
-            RegistryKey baseKey;
-            string keyName;
-
-            if (target == EnvironmentVariableTarget.Machine)
-            {
-                baseKey = Registry.LocalMachine;
-                keyName = @"System\CurrentControlSet\Control\Session Manager\Environment";
-            }
-            else if (target == EnvironmentVariableTarget.User)
-            {
-                Debug.Assert(target == EnvironmentVariableTarget.User);
-                baseKey = Registry.CurrentUser;
-                keyName = "Environment";
-            }
-            else
-            {
-                throw new ArgumentException(GetResourceString("Arg_EnumIllegalVal", (int)target));
-            }
-
-            using (RegistryKey environmentKey = baseKey.OpenSubKey(keyName, writable: false))
-            {
-                return environmentKey?.GetValue(variable) as string;
-            }
+        internal static IEnumerable<KeyValuePair<string, string>> EnumerateEnvironmentVariablesFromRegistry(EnvironmentVariableTarget target)
+        {
+#if FEATURE_WIN32_REGISTRY
+            if (AppDomain.IsAppXModel())
 #endif
-        }
-
-        private static IDictionary GetEnvironmentVariablesCore()
-        {
-            if (AppDomain.IsAppXModel() && !AppDomain.IsAppXDesignMode())
             {
-                // Environment variable accessors are not approved modern API.
-                // Behave as if no environment variables are defined in this case.
-                return new Dictionary<string, string>(0);
+                // Without registry support we have nothing to return
+                ValidateTarget(target);
+                yield break;
             }
-
-            return GetRawEnvironmentVariables();
-        }
-
-        private static IDictionary GetEnvironmentVariablesCore(EnvironmentVariableTarget target)
-        {
-            if (target == EnvironmentVariableTarget.Process)
-                return GetEnvironmentVariablesCore();
-
-#if !FEATURE_WIN32_REGISTRY
-            // Without registry support we have nothing to return
-            return new Dictionary<string, string>(0);
-#else
+#if FEATURE_WIN32_REGISTRY
             RegistryKey baseKey;
             string keyName;
             if (target == EnvironmentVariableTarget.Machine)
@@ -993,26 +630,24 @@ namespace System
             }
             else if (target == EnvironmentVariableTarget.User)
             {
-                Debug.Assert(target == EnvironmentVariableTarget.User);
                 baseKey = Registry.CurrentUser;
                 keyName = @"Environment";
             }
             else
             {
-                throw new ArgumentException(GetResourceString("Arg_EnumIllegalVal", (int)target));
+                throw new ArgumentOutOfRangeException(nameof(target), target, SR.Format(SR.Arg_EnumIllegalVal, target));
             }
 
             using (RegistryKey environmentKey = baseKey.OpenSubKey(keyName, writable: false))
             {
-                var table = new Dictionary<string, string>();
                 if (environmentKey != null)
                 {
                     foreach (string name in environmentKey.GetValueNames())
                     {
-                        table.Add(name, environmentKey.GetValue(name, "").ToString());
+                        string value = environmentKey.GetValue(name, "").ToString();
+                        yield return new KeyValuePair<string, string>(name, value);
                     }
                 }
-                return table;
             }
 #endif // FEATURE_WIN32_REGISTRY
         }
@@ -1022,13 +657,6 @@ namespace System
             // explicitly null out value if is the empty string.
             if (string.IsNullOrEmpty(value) || value[0] == '\0')
                 value = null;
-
-            if (AppDomain.IsAppXModel() && !AppDomain.IsAppXDesignMode())
-            {
-                // Environment variable accessors are not approved modern API.
-                // so we throw PlatformNotSupportedException.
-                throw new PlatformNotSupportedException();
-            }
 
             if (!Win32Native.SetEnvironmentVariable(variable, value))
             {
@@ -1042,9 +670,12 @@ namespace System
                     case Win32Native.ERROR_FILENAME_EXCED_RANGE:
                         // The error message from Win32 is "The filename or extension is too long",
                         // which is not accurate.
-                        throw new ArgumentException(GetResourceString("Argument_LongEnvVarValue"));
+                        throw new ArgumentException(SR.Format(SR.Argument_LongEnvVarValue));
+                    case Win32Native.ERROR_NOT_ENOUGH_MEMORY:
+                    case Win32Native.ERROR_NO_SYSTEM_RESOURCES:
+                        throw new OutOfMemoryException(Interop.Kernel32.GetMessage(errorCode));
                     default:
-                        throw new ArgumentException(Win32Native.GetMessage(errorCode));
+                        throw new ArgumentException(Interop.Kernel32.GetMessage(errorCode));
                 }
             }
         }
@@ -1057,10 +688,14 @@ namespace System
                 return;
             }
 
-#if !FEATURE_WIN32_REGISTRY
-            // other targets ignored
-            return;
-#else
+#if FEATURE_WIN32_REGISTRY
+            if (AppDomain.IsAppXModel())
+#endif
+            {
+                // other targets ignored
+                return;
+            }
+#if FEATURE_WIN32_REGISTRY
             // explicitly null out value if is the empty string.
             if (string.IsNullOrEmpty(value) || value[0] == '\0')
                 value = null;
@@ -1075,13 +710,11 @@ namespace System
             }
             else if (target == EnvironmentVariableTarget.User)
             {
-                Debug.Assert(target == EnvironmentVariableTarget.User);
-
                 // User-wide environment variables stored in the registry are limited to 255 chars for the environment variable name.
                 const int MaxUserEnvVariableLength = 255;
                 if (variable.Length >= MaxUserEnvVariableLength)
                 {
-                    throw new ArgumentException(GetResourceString("Argument_LongEnvVarValue"), nameof(variable));
+                    throw new ArgumentException(SR.Argument_LongEnvVarValue, nameof(variable));
                 }
 
                 baseKey = Registry.CurrentUser;
@@ -1089,7 +722,7 @@ namespace System
             }
             else
             {
-                throw new ArgumentException(GetResourceString("Arg_EnumIllegalVal", (int)target));
+                throw new ArgumentException(SR.Format(SR.Arg_EnumIllegalVal, (int)target));
             }
 
             using (RegistryKey environmentKey = baseKey.OpenSubKey(keyName, writable: true))
@@ -1108,10 +741,10 @@ namespace System
             }
 
             // send a WM_SETTINGCHANGE message to all windows
-            IntPtr r = Win32Native.SendMessageTimeout(new IntPtr(Win32Native.HWND_BROADCAST),
-                Win32Native.WM_SETTINGCHANGE, IntPtr.Zero, "Environment", 0, 1000, IntPtr.Zero);
+            IntPtr r = Interop.User32.SendMessageTimeout(new IntPtr(Interop.User32.HWND_BROADCAST),
+                Interop.User32.WM_SETTINGCHANGE, IntPtr.Zero, "Environment", 0, 1000, IntPtr.Zero);
 
-            if (r == IntPtr.Zero) Debug.Assert(false, "SetEnvironmentVariable failed: " + Marshal.GetLastWin32Error());
+            Debug.Assert(r != IntPtr.Zero, "SetEnvironmentVariable failed: " + Marshal.GetLastWin32Error());
 #endif // FEATURE_WIN32_REGISTRY
         }
     }

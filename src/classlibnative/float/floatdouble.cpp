@@ -9,8 +9,6 @@
 
 #include "floatdouble.h"
 
-#define IS_DBL_INFINITY(x)         (((*((INT64*)((void*)&x))) & I64(0x7FFFFFFFFFFFFFFF)) == I64(0x7FF0000000000000))
-
 // The default compilation mode is /fp:precise, which disables floating-point intrinsics. This
 // default compilation mode has previously caused performance regressions in floating-point code.
 // We enable /fp:fast semantics for the majority of the math functions, as it will speed up performance
@@ -62,6 +60,15 @@ FCIMPL1_V(double, COMDouble::Acos, double x)
     return (double)acos(x);
 FCIMPLEND
 
+/*=====================================Acosh====================================
+**
+==============================================================================*/
+FCIMPL1_V(double, COMDouble::Acosh, double x)
+    FCALL_CONTRACT;
+
+    return (double)acosh(x);
+FCIMPLEND
+
 /*=====================================Asin=====================================
 **
 ==============================================================================*/
@@ -69,6 +76,15 @@ FCIMPL1_V(double, COMDouble::Asin, double x)
     FCALL_CONTRACT;
 
     return (double)asin(x);
+FCIMPLEND
+
+/*=====================================Asinh====================================
+**
+==============================================================================*/
+FCIMPL1_V(double, COMDouble::Asinh, double x)
+    FCALL_CONTRACT;
+
+    return (double)asinh(x);
 FCIMPLEND
 
 /*=====================================Atan=====================================
@@ -80,20 +96,31 @@ FCIMPL1_V(double, COMDouble::Atan, double x)
     return (double)atan(x);
 FCIMPLEND
 
+/*=====================================Atanh====================================
+**
+==============================================================================*/
+FCIMPL1_V(double, COMDouble::Atanh, double x)
+    FCALL_CONTRACT;
+
+    return (double)atanh(x);
+FCIMPLEND
+
 /*=====================================Atan2====================================
 **
 ==============================================================================*/
 FCIMPL2_VV(double, COMDouble::Atan2, double y, double x)
     FCALL_CONTRACT;
 
-    // atan2(+/-INFINITY, +/-INFINITY) produces +/-0.78539816339744828 (x is +INFINITY) and
-    // +/-2.3561944901923448 (x is -INFINITY) instead of the expected value of NaN. We handle
-    // that case here ourselves.
-    if (IS_DBL_INFINITY(y) && IS_DBL_INFINITY(x)) {
-        return (double)(y / x);
-    }
-
     return (double)atan2(y, x);
+FCIMPLEND
+
+/*====================================Cbrt======================================
+**
+==============================================================================*/
+FCIMPL1_V(double, COMDouble::Cbrt, double x)
+    FCALL_CONTRACT;
+
+    return (double)cbrt(x);
 FCIMPLEND
 
 /*====================================Ceil======================================
@@ -141,6 +168,15 @@ FCIMPL1_V(double, COMDouble::Floor, double x)
     return (double)floor(x);
 FCIMPLEND
 
+/*=====================================FMod=====================================
+**
+==============================================================================*/
+FCIMPL2_VV(double, COMDouble::FMod, double x, double y)
+    FCALL_CONTRACT;
+
+    return (double)fmod(x, y);
+FCIMPLEND
+
 /*=====================================Log======================================
 **
 ==============================================================================*/
@@ -162,10 +198,10 @@ FCIMPLEND
 /*=====================================ModF=====================================
 **
 ==============================================================================*/
-FCIMPL1(double, COMDouble::ModF, double* iptr)
+FCIMPL2_VI(double, COMDouble::ModF, double x, double* intptr)
     FCALL_CONTRACT;
 
-    return (double)modf(*iptr, iptr);
+    return (double)modf(x, intptr);
 FCIMPLEND
 
 /*=====================================Pow======================================
@@ -174,50 +210,7 @@ FCIMPLEND
 FCIMPL2_VV(double, COMDouble::Pow, double x, double y)
     FCALL_CONTRACT;
 
-    // The CRT version of pow preserves the NaN payload of x over the NaN payload of y.
-
-    if(_isnan(y)) {
-        return y; // IEEE 754-2008: NaN payload must be preserved
-    }
-
-    if(_isnan(x)) {
-        return x; // IEEE 754-2008: NaN payload must be preserved
-    }
-
-    // The CRT version of pow does not return NaN for pow(-1.0, +/-INFINITY) and
-    // instead returns +1.0.
-
-    if(IS_DBL_INFINITY(y) && (x == -1.0)) {
-        INT64 result = CLR_NAN_64;
-        return (*((double*)((INT64*)&result)));
-    }
-
     return (double)pow(x, y);
-FCIMPLEND
-
-/*====================================Round=====================================
-**
-==============================================================================*/
-FCIMPL1_V(double, COMDouble::Round, double x)
-    FCALL_CONTRACT;
-
-    // If the number has no fractional part do nothing
-    // This shortcut is necessary to workaround precision loss in borderline cases on some platforms
-    if (x == (double)((INT64)x)) {
-        return x;
-    }
-
-    // We had a number that was equally close to 2 integers.
-    // We need to return the even one.
-
-    double tempVal = (x + 0.5);
-    double flrTempVal = floor(tempVal);
-
-    if ((flrTempVal == tempVal) && (fmod(tempVal, 2.0) != 0)) {
-        flrTempVal -= 1.0;
-    }
-
-    return _copysign(flrTempVal, x);
 FCIMPLEND
 
 /*=====================================Sin======================================

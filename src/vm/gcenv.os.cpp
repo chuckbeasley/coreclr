@@ -22,9 +22,14 @@
 #undef Sleep
 #endif // Sleep
 
-#include "env/gcenv.os.h"
+#include "../gc/env/gcenv.os.h"
 
 #define MAX_PTR ((uint8_t*)(~(ptrdiff_t)0))
+
+#ifdef FEATURE_PAL
+uint32_t g_pageSizeUnixInl = 0;
+#endif
+
 
 // Initialize the interface implementation
 // Return:
@@ -32,6 +37,11 @@
 bool GCToOSInterface::Initialize()
 {
     LIMITED_METHOD_CONTRACT;
+
+#ifdef FEATURE_PAL
+    g_pageSizeUnixInl = GetOsPageSize();
+#endif
+
     return true;
 }
 
@@ -73,7 +83,7 @@ bool GCToOSInterface::SetCurrentThreadIdealAffinity(GCThreadAffinity* affinity)
 
 #if !defined(FEATURE_CORESYSTEM)
     SetThreadIdealProcessor(GetCurrentThread(), (DWORD)affinity->Processor);
-#elif !defined(FEATURE_PAL)
+#else
     PROCESSOR_NUMBER proc;
 
     if (affinity->Group != -1)
@@ -84,6 +94,7 @@ bool GCToOSInterface::SetCurrentThreadIdealAffinity(GCThreadAffinity* affinity)
         
         success = !!SetThreadIdealProcessorEx(GetCurrentThread(), &proc, NULL);
     }
+#if !defined(FEATURE_PAL)
     else
     {
         if (GetThreadIdealProcessorEx(GetCurrentThread(), &proc))
@@ -92,6 +103,7 @@ bool GCToOSInterface::SetCurrentThreadIdealAffinity(GCThreadAffinity* affinity)
             success = !!SetThreadIdealProcessorEx(GetCurrentThread(), &proc, &proc);
         }        
     }
+#endif // !defined(FEATURE_PAL)
 #endif
 
     return success;
@@ -171,13 +183,18 @@ void* GCToOSInterface::VirtualReserve(size_t size, size_t alignment, uint32_t fl
     LIMITED_METHOD_CONTRACT;
 
     DWORD memFlags = (flags & VirtualReserveFlags::WriteWatch) ? (MEM_RESERVE | MEM_WRITE_WATCH) : MEM_RESERVE;
+
+    // This is not strictly necessary for a correctness standpoint. Windows already guarantees
+    // allocation granularity alignment when using MEM_RESERVE, so aligning the size here has no effect.
+    // However, ClrVirtualAlloc does expect the size to be aligned to the allocation granularity.
+    size_t aligned_size = (size + g_SystemInfo.dwAllocationGranularity - 1) & ~static_cast<size_t>(g_SystemInfo.dwAllocationGranularity - 1);
     if (alignment == 0)
     {
-        return ::ClrVirtualAlloc(0, size, memFlags, PAGE_READWRITE);
+        return ::ClrVirtualAlloc(0, aligned_size, memFlags, PAGE_READWRITE);
     }
     else
     {
-        return ::ClrVirtualAllocAligned(0, size, memFlags, PAGE_READWRITE, alignment);
+        return ::ClrVirtualAllocAligned(0, aligned_size, memFlags, PAGE_READWRITE, alignment);
     }
 }
 
@@ -294,7 +311,7 @@ bool GCToOSInterface::GetWriteWatch(bool resetState, void* address, size_t size,
     ULONG granularity;
 
     bool success = ::GetWriteWatch(flags, address, size, pageAddresses, (ULONG_PTR*)pageAddressesCount, &granularity) == 0;
-    _ASSERTE (granularity == OS_PAGE_SIZE);
+    _ASSERTE (granularity == GetOsPageSize());
 
     return success;
 }
@@ -310,6 +327,50 @@ size_t GCToOSInterface::GetLargestOnDieCacheSize(bool trueSize)
     LIMITED_METHOD_CONTRACT;
 
     return ::GetLargestOnDieCacheSize(trueSize);
+}
+
+// Sets the calling thread's affinity to only run on the processor specified
+// in the GCThreadAffinity structure.
+// Parameters:
+//  affinity - The requested affinity for the calling thread. At most one processor
+//             can be provided.
+// Return:
+//  true if setting the affinity was successful, false otherwise.
+bool GCToOSInterface::SetThreadAffinity(GCThreadAffinity* affinity)
+{
+    LIMITED_METHOD_CONTRACT;
+
+    assert(affinity != nullptr);
+    if (affinity->Group != GCThreadAffinity::None)
+    {
+        assert(affinity->Processor != GCThreadAffinity::None);
+        
+        GROUP_AFFINITY ga;
+        ga.Group = (WORD)affinity->Group;
+        ga.Reserved[0] = 0; // reserve must be filled with zero
+        ga.Reserved[1] = 0; // otherwise call may fail
+        ga.Reserved[2] = 0;
+        ga.Mask = (size_t)1 << affinity->Processor;
+        return !!SetThreadGroupAffinity(GetCurrentThread(), &ga, nullptr);
+    }
+    else if (affinity->Processor != GCThreadAffinity::None)
+    {
+        return !!SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1 << affinity->Processor);
+    }
+
+    // Given affinity must specify at least one processor to use.
+    return false;
+}
+
+// Boosts the calling thread's thread priority to a level higher than the default
+// for new threads.
+// Parameters:
+//  None.
+// Return:
+//  true if the priority boost was successful, false otherwise.
+bool GCToOSInterface::BoostThreadPriority()
+{
+    return !!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 }
 
 // Get affinity mask of the current process
@@ -329,11 +390,7 @@ bool GCToOSInterface::GetCurrentProcessAffinityMask(uintptr_t* processMask, uint
 {
     LIMITED_METHOD_CONTRACT;
 
-#ifndef FEATURE_PAL
     return !!::GetProcessAffinityMask(GetCurrentProcess(), (PDWORD_PTR)processMask, (PDWORD_PTR)systemMask);
-#else
-    return false;
-#endif
 }
 
 // Get number of processors assigned to the current process
@@ -360,12 +417,12 @@ size_t GCToOSInterface::GetVirtualMemoryLimit()
 }
 
 
+static size_t g_RestrictedPhysicalMemoryLimit = (size_t)MAX_PTR;
+
 #ifndef FEATURE_PAL
 
 typedef BOOL (WINAPI *PGET_PROCESS_MEMORY_INFO)(HANDLE handle, PROCESS_MEMORY_COUNTERS* memCounters, uint32_t cb);
 static PGET_PROCESS_MEMORY_INFO GCGetProcessMemoryInfo = 0;
-
-static size_t g_RestrictedPhysicalMemoryLimit = (size_t)MAX_PTR;
 
 typedef BOOL (WINAPI *PIS_PROCESS_IN_JOB)(HANDLE processHandle, HANDLE jobHandle, BOOL* result);
 typedef BOOL (WINAPI *PQUERY_INFORMATION_JOB_OBJECT)(HANDLE jobHandle, JOBOBJECTINFOCLASS jobObjectInfoClass, void* lpJobObjectInfo, DWORD cbJobObjectInfoLength, LPDWORD lpReturnLength);
@@ -455,6 +512,21 @@ exit:
     return g_RestrictedPhysicalMemoryLimit;
 }
 
+#else
+
+static size_t GetRestrictedPhysicalMemoryLimit()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    // The limit was cached already
+    if (g_RestrictedPhysicalMemoryLimit != (size_t)MAX_PTR)
+        return g_RestrictedPhysicalMemoryLimit;
+
+    size_t memory_limit = PAL_GetRestrictedPhysicalMemoryLimit();
+    
+    VolatileStore(&g_RestrictedPhysicalMemoryLimit, memory_limit);
+    return g_RestrictedPhysicalMemoryLimit;
+}
 #endif // FEATURE_PAL
 
 
@@ -465,11 +537,9 @@ uint64_t GCToOSInterface::GetPhysicalMemoryLimit()
 {
     LIMITED_METHOD_CONTRACT;
 
-#ifndef FEATURE_PAL
     size_t restricted_limit = GetRestrictedPhysicalMemoryLimit();
     if (restricted_limit != 0)
         return restricted_limit;
-#endif
 
     MEMORYSTATUSEX memStatus;
     ::GetProcessMemoryLoad(&memStatus);
@@ -489,17 +559,29 @@ void GCToOSInterface::GetMemoryStatus(uint32_t* memory_load, uint64_t* available
 {
     LIMITED_METHOD_CONTRACT;
 
-#ifndef FEATURE_PAL
     uint64_t restricted_limit = GetRestrictedPhysicalMemoryLimit();
     if (restricted_limit != 0)
     {
+        size_t workingSetSize;
+        BOOL status = FALSE;
+#ifndef FEATURE_PAL
         PROCESS_MEMORY_COUNTERS pmc;
-        if (GCGetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        status = GCGetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
+        workingSetSize = pmc.WorkingSetSize;
+#else
+        status = PAL_GetWorkingSetSize(&workingSetSize);
+#endif
+        if(status)
         {
             if (memory_load)
-                *memory_load = (uint32_t)((float)pmc.WorkingSetSize * 100.0 / (float)restricted_limit);
+                *memory_load = (uint32_t)((float)workingSetSize * 100.0 / (float)restricted_limit);
             if (available_physical)
-                *available_physical = restricted_limit - pmc.WorkingSetSize;
+            {
+                if(workingSetSize > restricted_limit)
+                    *available_physical = 0;
+                else
+                    *available_physical = restricted_limit - workingSetSize;
+            }
             // Available page file doesn't mean much when physical memory is restricted since
             // we don't know how much of it is available to this process so we are not going to 
             // bother to make another OS call for it.
@@ -509,7 +591,6 @@ void GCToOSInterface::GetMemoryStatus(uint32_t* memory_load, uint64_t* available
             return;
         }
     }
-#endif
 
     MEMORYSTATUSEX ms;
     ::GetProcessMemoryLoad(&ms);
@@ -568,85 +649,11 @@ uint32_t GCToOSInterface::GetLowPrecisionTimeStamp()
     return ::GetTickCount();
 }
 
-// Parameters of the GC thread stub
-struct GCThreadStubParam
-{
-    GCThreadFunction GCThreadFunction;
-    void* GCThreadParam;
-};
-
-// GC thread stub to convert GC thread function to an OS specific thread function
-static DWORD WINAPI GCThreadStub(void* param)
-{
-    WRAPPER_NO_CONTRACT;
-
-    GCThreadStubParam *stubParam = (GCThreadStubParam*)param;
-    GCThreadFunction function = stubParam->GCThreadFunction;
-    void* threadParam = stubParam->GCThreadParam;
-
-    delete stubParam;
-
-    function(threadParam);
-
-    return 0;
-}
-
-// Create a new thread
-// Parameters:
-//  function - the function to be executed by the thread
-//  param    - parameters of the thread
-//  affinity - processor affinity of the thread
-// Return:
-//  true if it has succeeded, false if it has failed
-bool GCToOSInterface::CreateThread(GCThreadFunction function, void* param, GCThreadAffinity* affinity)
+uint32_t GCToOSInterface::GetTotalProcessorCount()
 {
     LIMITED_METHOD_CONTRACT;
 
-    uint32_t thread_id;
-
-    NewHolder<GCThreadStubParam> stubParam = new (nothrow) GCThreadStubParam();
-    if (stubParam == NULL)
-    {
-        return false;
-    }
-
-    stubParam->GCThreadFunction = function;
-    stubParam->GCThreadParam = param;
-
-    HANDLE gc_thread = Thread::CreateUtilityThread(Thread::StackSize_Medium, GCThreadStub, stubParam, CREATE_SUSPENDED, (DWORD*)&thread_id);
-
-    if (!gc_thread)
-    {
-        return false;
-    }
-
-    stubParam.SuppressRelease();
-
-    SetThreadPriority(gc_thread, /* THREAD_PRIORITY_ABOVE_NORMAL );*/ THREAD_PRIORITY_HIGHEST );
-
-#ifndef FEATURE_PAL
-    if (affinity->Group != GCThreadAffinity::None)
-    {
-        _ASSERTE(affinity->Processor != GCThreadAffinity::None);
-        GROUP_AFFINITY ga;
-        ga.Group = (WORD)affinity->Group;
-        ga.Reserved[0] = 0; // reserve must be filled with zero
-        ga.Reserved[1] = 0; // otherwise call may fail
-        ga.Reserved[2] = 0;
-        ga.Mask = (size_t)1 << affinity->Processor;
-
-        CPUGroupInfo::SetThreadGroupAffinity(gc_thread, &ga, NULL);
-    }
-    else if (affinity->Processor != GCThreadAffinity::None)
-    {
-        SetThreadAffinityMask(gc_thread, (DWORD_PTR)1 << affinity->Processor);
-    }
-#endif // !FEATURE_PAL
-
-    ResumeThread(gc_thread);
-    CloseHandle(gc_thread);
-
-    return true;
+    return g_SystemInfo.dwNumberOfProcessors;
 }
 
 // Initialize the critical section
@@ -676,3 +683,208 @@ void CLRCriticalSection::Leave()
     WRAPPER_NO_CONTRACT;
     UnsafeLeaveCriticalSection(&m_cs);
 }
+
+// An implementatino of GCEvent that delegates to
+// a CLREvent, which in turn delegates to the PAL. This event
+// is also host-aware.
+class GCEvent::Impl
+{
+private:
+    CLREvent m_event;
+
+public:
+    Impl() = default;
+
+    bool IsValid()
+    {
+        WRAPPER_NO_CONTRACT;
+
+        return !!m_event.IsValid();
+    }
+
+    void CloseEvent()
+    {
+        WRAPPER_NO_CONTRACT;
+
+        assert(m_event.IsValid());
+        m_event.CloseEvent();
+    }
+
+    void Set()
+    {
+        WRAPPER_NO_CONTRACT;
+
+        assert(m_event.IsValid());
+        m_event.Set();
+    }
+
+    void Reset()
+    {
+        WRAPPER_NO_CONTRACT;
+
+        assert(m_event.IsValid());
+        m_event.Reset();
+    }
+
+    uint32_t Wait(uint32_t timeout, bool alertable)
+    {
+        WRAPPER_NO_CONTRACT;
+
+        assert(m_event.IsValid());
+        return m_event.Wait(timeout, alertable);
+    }
+
+    bool CreateAutoEvent(bool initialState)
+    {
+        CONTRACTL {
+            NOTHROW;
+            GC_NOTRIGGER;
+        } CONTRACTL_END;
+
+        return !!m_event.CreateAutoEventNoThrow(initialState);
+    }
+
+    bool CreateManualEvent(bool initialState)
+    {
+        CONTRACTL {
+            NOTHROW;
+            GC_NOTRIGGER;
+        } CONTRACTL_END;
+
+        return !!m_event.CreateManualEventNoThrow(initialState);
+    }
+
+    bool CreateOSAutoEvent(bool initialState)
+    {
+        CONTRACTL {
+            NOTHROW;
+            GC_NOTRIGGER;
+        } CONTRACTL_END;
+
+        return !!m_event.CreateOSAutoEventNoThrow(initialState);
+    }
+
+    bool CreateOSManualEvent(bool initialState)
+    {
+        CONTRACTL {
+            NOTHROW;
+            GC_NOTRIGGER;
+        } CONTRACTL_END;
+
+        return !!m_event.CreateOSManualEventNoThrow(initialState);
+    }
+};
+
+GCEvent::GCEvent()
+  : m_impl(nullptr)
+{
+}
+
+void GCEvent::CloseEvent()
+{
+    WRAPPER_NO_CONTRACT;
+
+    assert(m_impl != nullptr);
+    m_impl->CloseEvent();
+}
+
+void GCEvent::Set()
+{
+    WRAPPER_NO_CONTRACT;
+
+    assert(m_impl != nullptr);
+    m_impl->Set();
+}
+
+void GCEvent::Reset()
+{
+    WRAPPER_NO_CONTRACT;
+
+    assert(m_impl != nullptr);
+    m_impl->Reset();
+}
+
+uint32_t GCEvent::Wait(uint32_t timeout, bool alertable)
+{
+    WRAPPER_NO_CONTRACT;
+
+    assert(m_impl != nullptr);
+    return m_impl->Wait(timeout, alertable);
+}
+
+bool GCEvent::CreateManualEventNoThrow(bool initialState)
+{
+    CONTRACTL {
+      NOTHROW;
+      GC_NOTRIGGER;
+    } CONTRACTL_END;
+
+    assert(m_impl == nullptr);
+    NewHolder<GCEvent::Impl> event = new (nothrow) GCEvent::Impl();
+    if (!event)
+    {
+        return false;
+    }
+
+    event->CreateManualEvent(initialState);
+    m_impl = event.Extract();
+    return true;
+}
+
+bool GCEvent::CreateAutoEventNoThrow(bool initialState)
+{
+    CONTRACTL {
+      NOTHROW;
+      GC_NOTRIGGER;
+    } CONTRACTL_END;
+
+    assert(m_impl == nullptr);
+    NewHolder<GCEvent::Impl> event = new (nothrow) GCEvent::Impl();
+    if (!event)
+    {
+        return false;
+    }
+
+    event->CreateAutoEvent(initialState);
+    m_impl = event.Extract();
+    return IsValid();
+}
+
+bool GCEvent::CreateOSAutoEventNoThrow(bool initialState)
+{
+    CONTRACTL {
+      NOTHROW;
+      GC_NOTRIGGER;
+    } CONTRACTL_END;
+
+    assert(m_impl == nullptr);
+    NewHolder<GCEvent::Impl> event = new (nothrow) GCEvent::Impl();
+    if (!event)
+    {
+        return false;
+    }
+
+    event->CreateOSAutoEvent(initialState);
+    m_impl = event.Extract();
+    return IsValid();
+}
+
+bool GCEvent::CreateOSManualEventNoThrow(bool initialState)
+{
+    CONTRACTL {
+      NOTHROW;
+      GC_NOTRIGGER;
+    } CONTRACTL_END;
+
+    assert(m_impl == nullptr);
+    NewHolder<GCEvent::Impl> event = new (nothrow) GCEvent::Impl();
+    if (!event)
+    {
+        return false;
+    }
+
+    event->CreateOSManualEvent(initialState);
+    m_impl = event.Extract();
+    return IsValid();
+}
+

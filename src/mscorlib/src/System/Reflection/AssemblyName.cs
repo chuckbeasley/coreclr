@@ -24,10 +24,8 @@ namespace System.Reflection
     using System.Runtime.Serialization;
     using System.Runtime.InteropServices;
     using System.Runtime.Versioning;
-    using System.Diagnostics.Contracts;
     using System.Text;
 
-    [Serializable]
     public sealed class AssemblyName : ICloneable, ISerializable, IDeserializationCallback
     {
         //
@@ -193,7 +191,6 @@ namespace System.Reflection
         {
             if (assemblyFile == null)
                 throw new ArgumentNullException(nameof(assemblyFile));
-            Contract.EndContractBlock();
 
             // Assembly.GetNameInternal() will not demand path discovery 
             //  permission, so do that first.
@@ -279,7 +276,11 @@ namespace System.Reflection
         {
             get
             {
-                return nToString();
+                if (this.Name == null)
+                    return string.Empty;
+                // Do not call GetPublicKeyToken() here - that latches the result into AssemblyName which isn't a side effect we want.
+                byte[] pkt = _PublicKeyToken ?? nGetPublicKeyToken();
+                return AssemblyNameFormatter.ComputeDisplayName(Name, Version, CultureName, pkt, Flags, ContentType);
             }
         }
 
@@ -295,111 +296,54 @@ namespace System.Reflection
 
         public void GetObjectData(SerializationInfo info, StreamingContext context)
         {
-            if (info == null)
-                throw new ArgumentNullException(nameof(info));
-            Contract.EndContractBlock();
-
-            //Allocate the serialization info and serialize our static data.
-            info.AddValue("_Name", _Name);
-            info.AddValue("_PublicKey", _PublicKey, typeof(byte[]));
-            info.AddValue("_PublicKeyToken", _PublicKeyToken, typeof(byte[]));
-#if FEATURE_USE_LCID
-            info.AddValue("_CultureInfo", (_CultureInfo == null) ? -1 : _CultureInfo.LCID);
-#endif
-            info.AddValue("_CodeBase", _CodeBase);
-            info.AddValue("_Version", _Version);
-            info.AddValue("_HashAlgorithm", _HashAlgorithm, typeof(AssemblyHashAlgorithm));
-            info.AddValue("_HashAlgorithmForControl", _HashAlgorithmForControl, typeof(AssemblyHashAlgorithm));
-            info.AddValue("_StrongNameKeyPair", _StrongNameKeyPair, typeof(StrongNameKeyPair));
-            info.AddValue("_VersionCompatibility", _VersionCompatibility, typeof(AssemblyVersionCompatibility));
-            info.AddValue("_Flags", _Flags, typeof(AssemblyNameFlags));
-            info.AddValue("_HashForControl", _HashForControl, typeof(byte[]));
+            throw new PlatformNotSupportedException();
         }
 
         public void OnDeserialization(Object sender)
         {
-            // Deserialization has already been performed
-            if (m_siInfo == null)
-                return;
-
-            _Name = m_siInfo.GetString("_Name");
-            _PublicKey = (byte[])m_siInfo.GetValue("_PublicKey", typeof(byte[]));
-            _PublicKeyToken = (byte[])m_siInfo.GetValue("_PublicKeyToken", typeof(byte[]));
-#if FEATURE_USE_LCID
-            int lcid = (int)m_siInfo.GetInt32("_CultureInfo");
-            if (lcid != -1)
-                _CultureInfo = new CultureInfo(lcid);
-#endif
-
-            _CodeBase = m_siInfo.GetString("_CodeBase");
-            _Version = (Version)m_siInfo.GetValue("_Version", typeof(Version));
-            _HashAlgorithm = (AssemblyHashAlgorithm)m_siInfo.GetValue("_HashAlgorithm", typeof(AssemblyHashAlgorithm));
-            _StrongNameKeyPair = (StrongNameKeyPair)m_siInfo.GetValue("_StrongNameKeyPair", typeof(StrongNameKeyPair));
-            _VersionCompatibility = (AssemblyVersionCompatibility)m_siInfo.GetValue("_VersionCompatibility", typeof(AssemblyVersionCompatibility));
-            _Flags = (AssemblyNameFlags)m_siInfo.GetValue("_Flags", typeof(AssemblyNameFlags));
-
-            try
-            {
-                _HashAlgorithmForControl = (AssemblyHashAlgorithm)m_siInfo.GetValue("_HashAlgorithmForControl", typeof(AssemblyHashAlgorithm));
-                _HashForControl = (byte[])m_siInfo.GetValue("_HashForControl", typeof(byte[]));
-            }
-            catch (SerializationException)
-            { // RTM did not have these defined
-                _HashAlgorithmForControl = AssemblyHashAlgorithm.None;
-                _HashForControl = null;
-            }
-
-            m_siInfo = null;
-        }
-
-        // Constructs a new AssemblyName during deserialization.
-        internal AssemblyName(SerializationInfo info, StreamingContext context)
-        {
-            //The graph is not valid until OnDeserialization() has been called.
-            m_siInfo = info;
+            throw new PlatformNotSupportedException();
         }
 
         public AssemblyName(String assemblyName)
         {
             if (assemblyName == null)
                 throw new ArgumentNullException(nameof(assemblyName));
-            Contract.EndContractBlock();
             if ((assemblyName.Length == 0) ||
                 (assemblyName[0] == '\0'))
-                throw new ArgumentException(Environment.GetResourceString("Format_StringZeroLength"));
+                throw new ArgumentException(SR.Format_StringZeroLength);
 
             _Name = assemblyName;
             nInit();
         }
 
-        static public bool ReferenceMatchesDefinition(AssemblyName reference,
-                                                             AssemblyName definition)
+        /// <summary>
+        /// Compares the simple names disregarding Version, Culture and PKT. While this clearly does not
+        /// match the intent of this api, this api has been broken this way since its debut and we cannot
+        /// change its behavior now.
+        /// </summary>
+        public static bool ReferenceMatchesDefinition(AssemblyName reference, AssemblyName definition)
         {
-            // Optimization for common use case
-            if (Object.ReferenceEquals(reference, definition))
-            {
+            if (object.ReferenceEquals(reference, definition))
                 return true;
-            }
-            return ReferenceMatchesDefinitionInternal(reference, definition, true);
+
+            if (reference == null)
+                throw new ArgumentNullException(nameof(reference));
+
+            if (definition == null)
+                throw new ArgumentNullException(nameof(definition));
+
+            string refName = reference.Name ?? string.Empty;
+            string defName = definition.Name ?? string.Empty;
+            return refName.Equals(defName, StringComparison.OrdinalIgnoreCase);
         }
 
-
-        /// "parse" tells us to parse the simple name of the assembly as if it was the full name
-        /// almost never the right thing to do, but needed for compat
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
-        static internal extern bool ReferenceMatchesDefinitionInternal(AssemblyName reference,
-                                                                     AssemblyName definition,
-                                                                     bool parse);
-
-
-
-        [MethodImplAttribute(MethodImplOptions.InternalCall)]
-        internal extern void nInit(out RuntimeAssembly assembly, bool forIntrospection, bool raiseResolveEvent);
+        internal extern void nInit(out RuntimeAssembly assembly, bool raiseResolveEvent);
 
         internal void nInit()
         {
             RuntimeAssembly dummy = null;
-            nInit(out dummy, false, false);
+            nInit(out dummy, false);
         }
 
         internal void SetProcArchIndex(PortableExecutableKinds pek, ImageFileMachine ifm)
@@ -545,7 +489,7 @@ namespace System.Reflection
                         {
                             // Should be a rare case where the app tries to feed an invalid Unicode surrogates pair
                             if (count == 1 || count == end - i)
-                                throw new FormatException(Environment.GetResourceString("Arg_FormatException"));
+                                throw new FormatException(SR.Arg_FormatException);
                             // need to grab one more char as a Surrogate except when it's a bogus input
                             ++count;
                         }
@@ -561,7 +505,7 @@ namespace System.Reflection
                         // This is the only exception that built in UriParser can throw after a Uri ctor.
                         // Should not happen unless the app tries to feed an invalid Unicode String
                         if (numberOfBytes == 0)
-                            throw new FormatException(Environment.GetResourceString("Arg_FormatException"));
+                            throw new FormatException(SR.Arg_FormatException);
 
                         i += (count - 1);
 

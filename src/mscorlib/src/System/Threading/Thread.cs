@@ -28,7 +28,6 @@ namespace System.Threading
     using System.Security;
     using System.Runtime.Versioning;
     using System.Diagnostics;
-    using System.Diagnostics.Contracts;
 
     internal delegate Object InternalCrossContextDelegate(Object[] args);
 
@@ -100,7 +99,7 @@ namespace System.Threading
         }
     }
 
-    public sealed class Thread : RuntimeThread
+    internal sealed class Thread : RuntimeThread
     {
         /*=========================================================================
         ** Data accessed from managed code that needs to be defined in
@@ -128,7 +127,12 @@ namespace System.Threading
 
         private IntPtr DONT_USE_InternalThread;        // Pointer
         private int m_Priority;                     // INT32
-        private int m_ManagedThreadId;              // INT32
+
+        // The following field is required for interop with the VS Debugger
+        // Prior to making any changes to this field, please reach out to the VS Debugger 
+        // team to make sure that your changes are not going to prevent the debugger
+        // from working.
+        private int _managedThreadId;              // INT32
 
 #pragma warning restore 414
 #pragma warning restore 169
@@ -161,7 +165,6 @@ namespace System.Threading
             {
                 throw new ArgumentNullException(nameof(start));
             }
-            Contract.EndContractBlock();
             SetStartHelper((Delegate)start, 0);  //0 will setup Thread with default stackSize
         }
 
@@ -172,8 +175,7 @@ namespace System.Threading
                 throw new ArgumentNullException(nameof(start));
             }
             if (0 > maxStackSize)
-                throw new ArgumentOutOfRangeException(nameof(maxStackSize), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
-            Contract.EndContractBlock();
+                throw new ArgumentOutOfRangeException(nameof(maxStackSize), SR.ArgumentOutOfRange_NeedNonNegNum);
             SetStartHelper((Delegate)start, maxStackSize);
         }
         public Thread(ParameterizedThreadStart start)
@@ -182,7 +184,6 @@ namespace System.Threading
             {
                 throw new ArgumentNullException(nameof(start));
             }
-            Contract.EndContractBlock();
             SetStartHelper((Delegate)start, 0);
         }
 
@@ -193,14 +194,13 @@ namespace System.Threading
                 throw new ArgumentNullException(nameof(start));
             }
             if (0 > maxStackSize)
-                throw new ArgumentOutOfRangeException(nameof(maxStackSize), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
-            Contract.EndContractBlock();
+                throw new ArgumentOutOfRangeException(nameof(maxStackSize), SR.ArgumentOutOfRange_NeedNonNegNum);
             SetStartHelper((Delegate)start, maxStackSize);
         }
 
         public override int GetHashCode()
         {
-            return m_ManagedThreadId;
+            return _managedThreadId;
         }
 
         extern public new int ManagedThreadId
@@ -217,8 +217,8 @@ namespace System.Threading
             // This should never happen under normal circumstances. m_assembly is always assigned before it is handed out to the user.
             // There are ways how to create an unitialized objects through remoting, etc. Avoid AVing in the EE by throwing a nice
             // exception here.
-            if (thread.IsNull())
-                throw new ArgumentException(null, Environment.GetResourceString("Argument_InvalidHandle"));
+            if (thread == IntPtr.Zero)
+                throw new ArgumentException(null, SR.Argument_InvalidHandle);
 
             return new ThreadHandle(thread);
         }
@@ -248,7 +248,7 @@ namespace System.Threading
                 //We expect the thread to be setup with a ParameterizedThreadStart
                 //    if this constructor is called.
                 //If we got here then that wasn't the case
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ThreadWrongThreadStart"));
+                throw new InvalidOperationException(SR.InvalidOperation_ThreadWrongThreadStart);
             }
             m_ThreadStartArg = parameter;
             StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
@@ -313,16 +313,13 @@ namespace System.Threading
         public static new void Sleep(int millisecondsTimeout)
         {
             SleepInternal(millisecondsTimeout);
-            // Ensure we don't return to app code when the pause is underway
-            if (AppDomainPauseManager.IsPaused)
-                AppDomainPauseManager.ResumeEvent.WaitOneWithoutFAS();
         }
 
         public static void Sleep(TimeSpan timeout)
         {
             long tm = (long)timeout.TotalMilliseconds;
             if (tm < -1 || tm > (long)Int32.MaxValue)
-                throw new ArgumentOutOfRangeException(nameof(timeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(timeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             Sleep((int)tm);
         }
 
@@ -340,7 +337,6 @@ namespace System.Threading
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern bool YieldInternal();
 
         internal static new bool Yield()
@@ -352,7 +348,6 @@ namespace System.Threading
         {
             get
             {
-                Contract.Ensures(Contract.Result<Thread>() != null);
                 return GetCurrentThreadNative();
             }
         }
@@ -437,7 +432,6 @@ namespace System.Threading
         {
             get
             {
-                Contract.Ensures(Contract.Result<CultureInfo>() != null);
                 return CultureInfo.CurrentUICulture;
             }
 
@@ -471,14 +465,11 @@ namespace System.Threading
         {
             get
             {
-                Contract.Ensures(Contract.Result<CultureInfo>() != null);
                 return CultureInfo.CurrentCulture;
             }
 
             set
             {
-                Contract.EndContractBlock();
-
                 // If you add more pre-conditions to this method, check to see if you also need to 
                 // add them to CultureInfo.DefaultThreadCurrentCulture.set.
 
@@ -490,7 +481,6 @@ namespace System.Threading
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void nativeInitCultureAccessors();
 
         /*======================================================================
@@ -504,8 +494,6 @@ namespace System.Threading
 
         internal static AppDomain GetDomain()
         {
-            Contract.Ensures(Contract.Result<AppDomain>() != null);
-
 
             AppDomain ad;
             ad = GetFastDomainInternal();
@@ -538,7 +526,7 @@ namespace System.Threading
                 lock (this)
                 {
                     if (m_Name != null)
-                        throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_WriteOnce"));
+                        throw new InvalidOperationException(SR.InvalidOperation_WriteOnce);
                     m_Name = value;
 
                     InformThreadNameChange(GetNativeHandle(), value, (value != null) ? value.Length : 0);
@@ -547,17 +535,13 @@ namespace System.Threading
         }
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void InformThreadNameChange(ThreadHandle t, String name, int len);
 
-        [MethodImplAttribute(MethodImplOptions.InternalCall)]
-        public static extern void MemoryBarrier();
     } // End of class Thread
 
     // declaring a local var of this enum type and passing it by ref into a function that needs to do a
     // stack crawl will both prevent inlining of the calle and pass an ESP point to stack crawl to
     // Declaring these in EH clauses is illegal; they must declared in the main method body
-    [Serializable]
     internal enum StackCrawlMark
     {
         LookForMe = 0,

@@ -5,12 +5,6 @@
 
 #include "common.h"
 
-
-#ifndef FEATURE_MERGE_JIT_AND_ENGINE
-#include "metahost.h"
-#endif
-
-
 #include "coregen.h"
 
 #include "clr/fs/dir.h"
@@ -105,7 +99,7 @@ STDAPI NGenWorker(LPCWSTR pwzFilename, DWORD dwFlags, LPCWSTR pwzPlatformAssembl
         ngo.fDebug = false;
         ngo.fDebugOpt = false;
         ngo.fProf = false;
-        ngo.fSilent = false;
+        ngo.fSilent = (dwFlags & NGENWORKER_FLAGS_SILENT) != 0;
         ngo.lpszExecutableFileName = pwzFilename;
 
         // V2 (Whidbey)
@@ -125,7 +119,7 @@ STDAPI NGenWorker(LPCWSTR pwzFilename, DWORD dwFlags, LPCWSTR pwzPlatformAssembl
         ngo.fEmitFixups = false;
         ngo.fFatHeaders = false;
 
-        ngo.fVerbose = false;
+        ngo.fVerbose = (dwFlags & NGENWORKER_FLAGS_VERBOSE) != 0;
         ngo.uStats = false;
 
         ngo.fNgenLastRetry = false;
@@ -278,8 +272,7 @@ ZapperOptions::ZapperOptions() :
   m_legacyMode(false)
   ,m_fNoMetaData(s_fNGenNoMetaData)
 {
-    m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_RELOC);
-    m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_PREJIT);
+    SetCompilerFlags();
 
     m_zapSet = CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_ZapSet);
     if (m_zapSet != NULL && wcslen(m_zapSet) > 3)
@@ -317,6 +310,18 @@ ZapperOptions::~ZapperOptions()
 
     if (m_repositoryDir != NULL)
         delete [] m_repositoryDir;
+}
+
+void ZapperOptions::SetCompilerFlags(void)
+{
+    m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_RELOC);
+    m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_PREJIT);
+
+#if defined(_TARGET_ARM_)
+# if defined(PLATFORM_UNIX)
+    m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_RELATIVE_CODE_RELOCS);
+# endif // defined(PLATFORM_UNIX)
+#endif // defined(_TARGET_ARM_)
 }
 
 /* --------------------------------------------------------------------------- *
@@ -370,8 +375,7 @@ Zapper::Zapper(NGenOptions *pOptions, bool fromDllHost)
     pOptions = &currentVersionOptions;
 
     zo->m_compilerFlags.Reset();
-    zo->m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_RELOC);
-    zo->m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_PREJIT);
+    zo->SetCompilerFlags();
     zo->m_autodebug = true;
 
     if (pOptions->fDebug)
@@ -433,15 +437,6 @@ Zapper::Zapper(ZapperOptions *pOptions)
 {
     Init(pOptions);
 }
-
-#ifndef FEATURE_MERGE_JIT_AND_ENGINE
-
-//
-// Pointer to the activated CLR interface provided by the shim.
-//
-extern ICLRRuntimeInfo *g_pCLRRuntime;
-
-#endif // FEATURE_MERGE_JIT_AND_ENGINE
 
 void Zapper::Init(ZapperOptions *pOptions, bool fFreeZapperOptions)
 {
@@ -1367,6 +1362,13 @@ void Zapper::InitializeCompilerFlags(CORCOMPILE_VERSION_INFO * pVersionInfo)
     if (pVersionInfo->wCodegenFlags & CORCOMPILE_CODEGEN_PROF_INSTRUMENTING)
         m_pOpt->m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_BBINSTR);
 
+    // Set CORJIT_FLAG_MIN_OPT only if COMPlus_JitMinOpts == 1
+    static ConfigDWORD g_jitMinOpts;
+    if (g_jitMinOpts.val_DontUse_(CLRConfig::UNSUPPORTED_JITMinOpts, 0) == 1)
+    {
+        m_pOpt->m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_MIN_OPT);
+    }
+
 #if defined(_TARGET_X86_)
 
     // @TODO: This is a copy of SetCpuInfo() in vm\codeman.cpp. Unify the implementaion
@@ -1391,6 +1393,14 @@ void Zapper::InitializeCompilerFlags(CORCOMPILE_VERSION_INFO * pVersionInfo)
     m_pOpt->m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSE2);
 
 #endif // _TARGET_X86_
+
+#if defined(_TARGET_ARM64_)
+    static ConfigDWORD fFeatureSIMD;
+    if (fFeatureSIMD.val(CLRConfig::EXTERNAL_FeatureSIMD) != 0)
+    {
+        m_pOpt->m_compilerFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_FEATURE_SIMD);
+    }
+#endif
 
     if (   m_pOpt->m_compilerFlags.IsSet(CORJIT_FLAGS::CORJIT_FLAG_DEBUG_INFO)
         && m_pOpt->m_compilerFlags.IsSet(CORJIT_FLAGS::CORJIT_FLAG_DEBUG_CODE)

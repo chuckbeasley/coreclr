@@ -28,6 +28,7 @@
 #include "ilstubcache.h"
 #include "testhookmgr.h"
 #include "gcheaputilities.h"
+#include "gchandleutilities.h"
 #include "../binder/inc/applicationcontext.hpp"
 #include "rejit.h"
 
@@ -43,6 +44,13 @@
 
 #include "appxutil.h"
 
+#ifdef FEATURE_TIERED_COMPILATION
+#include "tieredcompilation.h"
+#include "callcounter.h"
+#endif
+
+#include "codeversion.h"
+
 class BaseDomain;
 class SystemDomain;
 class SharedDomain;
@@ -54,7 +62,6 @@ class EEMarshalingData;
 class Context;
 class GlobalStringLiteralMap;
 class StringLiteralMap;
-struct SecurityContext;
 class MngStdInterfacesInfo;
 class DomainModule;
 class DomainAssembly;
@@ -62,10 +69,7 @@ struct InteropMethodTableData;
 class LoadLevelLimiter;
 class UMEntryThunkCache;
 class TypeEquivalenceHashTable;
-class IApplicationSecurityDescriptor;
 class StringArrayList;
-
-typedef VPTR(IApplicationSecurityDescriptor) PTR_IApplicationSecurityDescriptor;
 
 extern INT64 g_PauseTime;  // Total time in millisecond the CLR has been paused
 
@@ -806,14 +810,14 @@ private:
 // set) and being able to specify specific versions.
 //
 
-#define LOW_FREQUENCY_HEAP_RESERVE_SIZE        (3 * PAGE_SIZE)
-#define LOW_FREQUENCY_HEAP_COMMIT_SIZE         (1 * PAGE_SIZE)
+#define LOW_FREQUENCY_HEAP_RESERVE_SIZE        (3 * GetOsPageSize())
+#define LOW_FREQUENCY_HEAP_COMMIT_SIZE         (1 * GetOsPageSize())
 
-#define HIGH_FREQUENCY_HEAP_RESERVE_SIZE       (10 * PAGE_SIZE)
-#define HIGH_FREQUENCY_HEAP_COMMIT_SIZE        (1 * PAGE_SIZE)
+#define HIGH_FREQUENCY_HEAP_RESERVE_SIZE       (10 * GetOsPageSize())
+#define HIGH_FREQUENCY_HEAP_COMMIT_SIZE        (1 * GetOsPageSize())
 
-#define STUB_HEAP_RESERVE_SIZE                 (3 * PAGE_SIZE)
-#define STUB_HEAP_COMMIT_SIZE                  (1 * PAGE_SIZE)
+#define STUB_HEAP_RESERVE_SIZE                 (3 * GetOsPageSize())
+#define STUB_HEAP_COMMIT_SIZE                  (1 * GetOsPageSize())
 
 // --------------------------------------------------------------------------------
 // PE File List lock - for creating list locks on PE files
@@ -837,7 +841,7 @@ public:
              pEntry != NULL;
              pEntry = pEntry->m_pNext)
         {
-            if (((PEFile *)pEntry->m_pData)->Equals(pFile))
+            if (((PEFile *)pEntry->m_data)->Equals(pFile))
             {
                 return pEntry;
             }
@@ -946,6 +950,9 @@ typedef FileLoadLock::Holder FileLoadLockHolder;
 #ifndef DACCESS_COMPILE
     typedef ReleaseHolder<FileLoadLock> FileLoadLockRefHolder;
 #endif // DACCESS_COMPILE
+
+    typedef ListLockBase<NativeCodeVersion> JitListLock;
+    typedef ListLockEntryBase<NativeCodeVersion> JitListLockEntry;
 
 
 #ifdef _MSC_VER
@@ -1202,7 +1209,7 @@ public:
         return &m_ClassInitLock;
     }
 
-    ListLock* GetJitLock()
+    JitListLock* GetJitLock()
     {
         LIMITED_METHOD_CONTRACT;
         return &m_JITLock;
@@ -1234,61 +1241,75 @@ public:
     //****************************************************************************************
     // Handles
 
-#if !defined(DACCESS_COMPILE) && !defined(CROSSGEN_COMPILE) // needs GetCurrentThreadHomeHeapNumber
-    OBJECTHANDLE CreateTypedHandle(OBJECTREF object, int type)
+#if !defined(DACCESS_COMPILE) && !defined(CROSSGEN_COMPILE)
+    OBJECTHANDLE CreateTypedHandle(OBJECTREF object, HandleType type)
     {
         WRAPPER_NO_CONTRACT;
-        return ::CreateTypedHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object, type);
+
+        OBJECTHANDLE hnd = m_handleStore->CreateHandleOfType(OBJECTREFToObject(object), type);
+        if (!hnd)
+        {
+            COMPlusThrowOM();
+        }
+
+        return hnd;
     }
 
     OBJECTHANDLE CreateHandle(OBJECTREF object)
     {
         WRAPPER_NO_CONTRACT;
         CONDITIONAL_CONTRACT_VIOLATION(ModeViolation, object == NULL)
-        return ::CreateHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object);
+        return ::CreateHandle(m_handleStore, object);
     }
 
     OBJECTHANDLE CreateWeakHandle(OBJECTREF object)
     {
         WRAPPER_NO_CONTRACT;
-        return ::CreateWeakHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object);
+        return ::CreateWeakHandle(m_handleStore, object);
     }
 
     OBJECTHANDLE CreateShortWeakHandle(OBJECTREF object)
     {
         WRAPPER_NO_CONTRACT;
-        return ::CreateShortWeakHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object);
+        return ::CreateShortWeakHandle(m_handleStore, object);
     }
 
     OBJECTHANDLE CreateLongWeakHandle(OBJECTREF object)
     {
         WRAPPER_NO_CONTRACT;
         CONDITIONAL_CONTRACT_VIOLATION(ModeViolation, object == NULL)
-        return ::CreateLongWeakHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object);
+        return ::CreateLongWeakHandle(m_handleStore, object);
     }
 
     OBJECTHANDLE CreateStrongHandle(OBJECTREF object)
     {
         WRAPPER_NO_CONTRACT;
-        return ::CreateStrongHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object);
+        return ::CreateStrongHandle(m_handleStore, object);
     }
 
     OBJECTHANDLE CreatePinningHandle(OBJECTREF object)
     {
         WRAPPER_NO_CONTRACT;
-#if CHECK_APP_DOMAIN_LEAKS     
+#if CHECK_APP_DOMAIN_LEAKS
         if(IsAppDomain())
             object->TryAssignAppDomain((AppDomain*)this,TRUE);
 #endif
-        return ::CreatePinningHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object);
+        return ::CreatePinningHandle(m_handleStore, object);
     }
 
     OBJECTHANDLE CreateSizedRefHandle(OBJECTREF object)
     {
         WRAPPER_NO_CONTRACT;
-        OBJECTHANDLE h = ::CreateSizedRefHandle(
-            m_hHandleTableBucket->pTable[GCHeapUtilities::IsServerHeap() ? (m_dwSizedRefHandles % m_iNumberOfProcessors) : GetCurrentThreadHomeHeapNumber()], 
-            object);
+        OBJECTHANDLE h;
+        if (GCHeapUtilities::IsServerHeap())
+        {
+            h = ::CreateSizedRefHandle(m_handleStore, object, m_dwSizedRefHandles % m_iNumberOfProcessors);
+        }
+        else
+        {
+            h = ::CreateSizedRefHandle(m_handleStore, object);
+        }
+
         InterlockedIncrement((LONG*)&m_dwSizedRefHandles);
         return h;
     }
@@ -1297,37 +1318,48 @@ public:
     OBJECTHANDLE CreateRefcountedHandle(OBJECTREF object)
     {
         WRAPPER_NO_CONTRACT;
-        return ::CreateRefcountedHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object);
+        return ::CreateRefcountedHandle(m_handleStore, object);
     }
 
     OBJECTHANDLE CreateWinRTWeakHandle(OBJECTREF object, IWeakReference* pWinRTWeakReference)
     {
         CONTRACTL
         {
-            THROWS;
+            NOTHROW;
             GC_NOTRIGGER;
             MODE_COOPERATIVE;
         }
         CONTRACTL_END;
 
-        return ::CreateWinRTWeakHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object, pWinRTWeakReference);
+        return ::CreateWinRTWeakHandle(m_handleStore, object, pWinRTWeakReference);
     }
 #endif // FEATURE_COMINTEROP
 
     OBJECTHANDLE CreateVariableHandle(OBJECTREF object, UINT type)
     {
         WRAPPER_NO_CONTRACT;
-        return ::CreateVariableHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], object, type);
+        return ::CreateVariableHandle(m_handleStore, object, type);
     }
 
     OBJECTHANDLE CreateDependentHandle(OBJECTREF primary, OBJECTREF secondary)
     {
-        WRAPPER_NO_CONTRACT;
-        return ::CreateDependentHandle(m_hHandleTableBucket->pTable[GetCurrentThreadHomeHeapNumber()], primary, secondary);
+        CONTRACTL
+        {
+            NOTHROW;
+            GC_NOTRIGGER;
+            MODE_COOPERATIVE;
+        }
+        CONTRACTL_END;
+
+        OBJECTHANDLE hnd = m_handleStore->CreateDependentHandle(OBJECTREFToObject(primary), OBJECTREFToObject(secondary));
+        if (!hnd)
+        {
+            COMPlusThrowOM();
+        }
+
+        return hnd;
     }
 #endif // DACCESS_COMPILE && !CROSSGEN_COMPILE
-
-    BOOL ContainsOBJECTHANDLE(OBJECTHANDLE handle);
 
     IUnknown *GetFusionContext() {LIMITED_METHOD_CONTRACT;  return m_pFusionContext; }
     
@@ -1371,7 +1403,7 @@ protected:
     CrstExplicitInit m_crstAssemblyList;
     BOOL             m_fDisableInterfaceCache;  // RCW COM interface cache
     ListLock         m_ClassInitLock;
-    ListLock         m_JITLock;
+    JitListLock      m_JITLock;
     ListLock         m_ILStubGenLock;
 
     // Fusion context, used for adding assemblies to the is domain. It defines
@@ -1381,8 +1413,7 @@ protected:
 
     CLRPrivBinderCoreCLR *m_pTPABinderContext; // Reference to the binding context that holds TPA list details
 
-
-    HandleTableBucket *m_hHandleTableBucket;
+    IGCHandleStore* m_handleStore;
 
     // The large heap handle table.
     LargeHeapHandleTable        *m_pLargeHeapHandleTable;
@@ -1521,12 +1552,21 @@ public:
         return m_dwSizedRefHandles;
     }
 
-    // Profiler rejit
+#ifdef FEATURE_CODE_VERSIONING
 private:
-    ReJitManager m_reJitMgr;
+    CodeVersionManager m_codeVersionManager;
 
 public:
-    ReJitManager * GetReJitManager() { return &m_reJitMgr; }
+    CodeVersionManager* GetCodeVersionManager() { return &m_codeVersionManager; }
+#endif //FEATURE_CODE_VERSIONING
+
+#ifdef FEATURE_TIERED_COMPILATION
+private:
+    CallCounter m_callCounter;
+
+public:
+    CallCounter* GetCallCounter() { return &m_callCounter; }
+#endif
 
 #ifdef DACCESS_COMPILE
 public:
@@ -1953,11 +1993,6 @@ public:
 
     // creates only unamaged part
     static void CreateUnmanagedObject(AppDomainCreationHolder<AppDomain>& result);
-    inline void SetAppDomainManagerInfo(LPCWSTR szAssemblyName, LPCWSTR szTypeName, EInitializeNewDomainFlags dwInitializeDomainFlags);
-    inline BOOL HasAppDomainManagerInfo();
-    inline LPCWSTR GetAppDomainManagerAsm();
-    inline LPCWSTR GetAppDomainManagerType();
-    inline EInitializeNewDomainFlags GetAppDomainManagerInitializeNewDomainFlags();
 
 
 #if defined(FEATURE_COMINTEROP)
@@ -2337,8 +2372,7 @@ public:
 
     Assembly *LoadAssembly(AssemblySpec* pIdentity,
                            PEAssembly *pFile,
-                           FileLoadLevel targetLevel,
-                           AssemblyLoadSecurity *pLoadSecurity = NULL);
+                           FileLoadLevel targetLevel);
 
     // this function does not provide caching, you must use LoadDomainAssembly
     // unless the call is guaranteed to succeed or you don't need the caching 
@@ -2348,13 +2382,11 @@ public:
     //which is violating our internal assumptions
     DomainAssembly *LoadDomainAssemblyInternal( AssemblySpec* pIdentity,
                                                 PEAssembly *pFile,
-                                                FileLoadLevel targetLevel,
-                                                AssemblyLoadSecurity *pLoadSecurity = NULL);
+                                                FileLoadLevel targetLevel);
 
     DomainAssembly *LoadDomainAssembly( AssemblySpec* pIdentity,
                                         PEAssembly *pFile,
-                                        FileLoadLevel targetLevel,
-                                        AssemblyLoadSecurity *pLoadSecurity = NULL);
+                                        FileLoadLevel targetLevel);
 
 
     CHECK CheckValidModule(Module *pModule);
@@ -2421,25 +2453,8 @@ public:
         SHARE_POLICY_DEFAULT = SHARE_POLICY_NEVER,
     };
 
-    void SetSharePolicy(SharePolicy policy);
     SharePolicy GetSharePolicy();
-    BOOL ReduceSharePolicyFromAlways();
-
-    //****************************************************************************************
-    // Determines if the image is to be loaded into the shared assembly or an individual
-    // appdomains.
 #endif // FEATURE_LOADER_OPTIMIZATION
-
-    BOOL HasSetSecurityPolicy();
-
-    FORCEINLINE IApplicationSecurityDescriptor* GetSecurityDescriptor()
-    {
-        LIMITED_METHOD_CONTRACT;
-        STATIC_CONTRACT_SO_TOLERANT;
-        return static_cast<IApplicationSecurityDescriptor*>(m_pSecDesc);
-    }
-
-    void CreateSecurityDescriptor();
 
     //****************************************************************************************
     //
@@ -2469,7 +2484,6 @@ public:
         BOOL fThrowOnFileNotFound,
         BOOL fRaisePrebindEvents,
         StackCrawlMark *pCallerStackMark = NULL,
-        AssemblyLoadSecurity *pLoadSecurity = NULL,
         BOOL fUseHostBinderIfAvailable = TRUE) DAC_EMPTY_RET(NULL);
 
     HRESULT BindAssemblySpecForHostedBinder(
@@ -3335,8 +3349,6 @@ private:
 
     void InitializeDefaultDomainManager ();
 
-
-    void InitializeDefaultDomainSecurity();
 public:
 
 protected:
@@ -3559,8 +3571,6 @@ private:
     // by one. For it to hit zero an explicit close must have happened.
     LONG        m_cRef;                    // Ref count.
 
-    PTR_IApplicationSecurityDescriptor m_pSecDesc;  // Application Security Descriptor
-
     OBJECTHANDLE    m_ExposedObject;
 
 #ifdef FEATURE_LOADER_OPTIMIZATION
@@ -3644,10 +3654,6 @@ private:
 
     // The default context for this domain
     Context *m_pDefaultContext;
-
-    SString         m_applicationBase;
-    SString         m_privateBinPaths;
-    SString         m_configFile;
 
     ArrayList        m_failedAssemblies;
 
@@ -3748,16 +3754,9 @@ public:
         DISABLE_TRANSPARENCY_ENFORCEMENT= 0x800000, // Disable enforcement of security transparency rules
     };
 
-    SecurityContext *m_pSecContext;
-
     AssemblySpecBindingCache  m_AssemblyCache;
     DomainAssemblyCache       m_UnmanagedCache;
     size_t                    m_MemoryPressure;
-
-    SString m_AppDomainManagerAssembly;
-    SString m_AppDomainManagerType;
-    BOOL    m_fAppDomainManagerSetInConfig;
-    EInitializeNewDomainFlags m_dwAppDomainManagerInitializeDomainFlags;
 
     ArrayList m_NativeDllSearchDirectories;
     BOOL m_ReversePInvokeCanEnter;
@@ -3788,7 +3787,6 @@ public:
     }
 
     BOOL IsImageFromTrustedPath(PEImage* pImage);
-    BOOL IsImageFullyTrusted(PEImage* pImage);
 
 #ifdef FEATURE_TYPEEQUIVALENCE
 private:
@@ -3820,6 +3818,20 @@ public:
 
         return m_MulticoreJitManager;
     }
+
+#endif
+
+#if defined(FEATURE_TIERED_COMPILATION)
+
+public:
+    TieredCompilationManager * GetTieredCompilationManager()
+    {
+        LIMITED_METHOD_CONTRACT;
+        return &m_tieredCompilationManager;
+    }
+
+private:
+    TieredCompilationManager m_tieredCompilationManager;
 
 #endif
 
@@ -4255,7 +4267,7 @@ public:
 
 #if defined(FEATURE_COMINTEROP_APARTMENT_SUPPORT) && !defined(CROSSGEN_COMPILE)
     static Thread::ApartmentState GetEntryPointThreadAptState(IMDInternalImport* pScope, mdMethodDef mdMethod);
-    static void SetThreadAptState(IMDInternalImport* pScope, Thread::ApartmentState state);
+    static void SetThreadAptState(Thread::ApartmentState state);
 #endif
     static BOOL SetGlobalSharePolicyUsingAttribute(IMDInternalImport* pScope, mdMethodDef mdMethod);
 
@@ -5155,5 +5167,8 @@ public:
     }
 };
 #endif // !DACCESS_COMPILE && !CROSSGEN_COMPILE
+
+#define INVALID_APPDOMAIN_ID ((DWORD)-1)
+#define CURRENT_APPDOMAIN_ID ((ADID)(DWORD)0)
 
 #endif

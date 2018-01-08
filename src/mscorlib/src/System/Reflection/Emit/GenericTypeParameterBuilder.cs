@@ -9,7 +9,6 @@ using System.Reflection;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Diagnostics.Contracts;
 
 namespace System.Reflection.Emit
 {
@@ -21,7 +20,7 @@ namespace System.Reflection.Emit
             return IsAssignableFrom(typeInfo.AsType());
         }
 
-        #region Private Data Mebers
+        #region Private Data Members
         internal TypeBuilder m_type;
         #endregion
 
@@ -82,7 +81,6 @@ namespace System.Reflection.Emit
         {
             if (rank <= 0)
                 throw new IndexOutOfRangeException();
-            Contract.EndContractBlock();
 
             string szrank = "";
             if (rank == 1)
@@ -154,6 +152,8 @@ namespace System.Reflection.Emit
 
         protected override TypeAttributes GetAttributeFlagsImpl() { return TypeAttributes.Public; }
 
+        public override bool IsTypeDefinition => false;
+
         public override bool IsSZArray => false;
 
         protected override bool IsArrayImpl() { return false; }
@@ -192,13 +192,12 @@ namespace System.Reflection.Emit
 
         public override Type GetGenericTypeDefinition() { throw new InvalidOperationException(); }
 
-        public override Type MakeGenericType(params Type[] typeArguments) { throw new InvalidOperationException(Environment.GetResourceString("Arg_NotGenericTypeDefinition")); }
+        public override Type MakeGenericType(params Type[] typeArguments) { throw new InvalidOperationException(SR.Arg_NotGenericTypeDefinition); }
 
         protected override bool IsValueTypeImpl() { return false; }
 
         public override bool IsAssignableFrom(Type c) { throw new NotSupportedException(); }
 
-        [Pure]
         public override bool IsSubclassOf(Type c) { throw new NotSupportedException(); }
         #endregion
 

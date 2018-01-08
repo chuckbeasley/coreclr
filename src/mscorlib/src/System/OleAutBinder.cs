@@ -15,7 +15,6 @@ namespace System
     using CultureInfo = System.Globalization.CultureInfo;
 
     // Made serializable in anticipation of this class eventually having state.
-    [Serializable]
     internal class OleAutBinder : DefaultBinder
     {
         // ChangeType
@@ -85,7 +84,7 @@ namespace System
                 Console.Write("Exception thrown: ");
                 Console.WriteLine(e);
 #endif      
-                throw new COMException(Environment.GetResourceString("Interop.COM_TypeMismatch"), unchecked((int)0x80020005));
+                throw new COMException(SR.Interop_COM_TypeMismatch, unchecked((int)0x80020005));
             }
         }
     }

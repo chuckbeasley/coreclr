@@ -12,6 +12,7 @@ namespace System
     ///       disposed.</para>
     /// </devdoc>
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public class ObjectDisposedException : InvalidOperationException
     {
         private String _objectName;
@@ -29,14 +30,14 @@ namespace System
 
         public ObjectDisposedException(String objectName, String message) : base(message)
         {
-            HResult = __HResults.COR_E_OBJECTDISPOSED;
+            HResult = HResults.COR_E_OBJECTDISPOSED;
             _objectName = objectName;
         }
 
         public ObjectDisposedException(String message, Exception innerException)
             : base(message, innerException)
         {
-            HResult = __HResults.COR_E_OBJECTDISPOSED;
+            HResult = HResults.COR_E_OBJECTDISPOSED;
         }
 
         protected ObjectDisposedException(SerializationInfo info, StreamingContext context)
@@ -48,7 +49,7 @@ namespace System
         public override void GetObjectData(SerializationInfo info, StreamingContext context)
         {
             base.GetObjectData(info, context);
-            info.AddValue("ObjectName", ObjectName, typeof(String));
+            info.AddValue("ObjectName", ObjectName, typeof(string));
         }
 
         /// <devdoc>
@@ -71,7 +72,7 @@ namespace System
         {
             get
             {
-                if ((_objectName == null)) // && !CompatibilitySwitches.IsAppEarlierThanWindowsPhone8)
+                if (_objectName == null)
                 {
                     return String.Empty;
                 }

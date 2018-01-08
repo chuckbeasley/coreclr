@@ -57,7 +57,7 @@
 // Windows uses 64kB as the null-reference area
 #define NULL_AREA_SIZE   (64 * 1024)
 #else // !FEATURE_PAL
-#define NULL_AREA_SIZE   OS_PAGE_SIZE
+#define NULL_AREA_SIZE   GetOsPageSize()
 #endif // !FEATURE_PAL
 
 #ifndef CROSSGEN_COMPILE
@@ -3462,8 +3462,7 @@ DWORD MapWin32FaultToCOMPlusException(EXCEPTION_RECORD *pExceptionRecord)
             {
                 // We have a config key, InsecurelyTreatAVsAsNullReference, that ensures we always translate to
                 // NullReferenceException instead of doing the new AV translation logic.
-                if ((g_pConfig != NULL) && !g_pConfig->LegacyNullReferenceExceptionPolicy() &&
-                    !GetCompatibilityFlag(compatNullReferenceExceptionOnAV) )
+                if ((g_pConfig != NULL) && !g_pConfig->LegacyNullReferenceExceptionPolicy())
                 {
 #if defined(FEATURE_HIJACK) && !defined(PLATFORM_UNIX)
                     // If we got the exception on a redirect function it means the original exception happened in managed code:
@@ -7899,7 +7898,8 @@ VEH_ACTION WINAPI CLRVectoredExceptionHandlerPhase3(PEXCEPTION_POINTERS pExcepti
             // on second pass and this subjects us to false positives.
             if ((!fAVisOk) && !(pExceptionRecord->ExceptionFlags & EXCEPTION_UNWINDING))
             {
-                if (IsIPInModule(g_pMSCorEE, (PCODE)GetIP(pContext)))
+                PCODE ip = (PCODE)GetIP(pContext);
+                if (IsIPInModule(g_pMSCorEE, ip) || IsIPInModule(GCHeapUtilities::GetGCModule(), ip))
                 {
                     CONTRACT_VIOLATION(ThrowsViolation|FaultViolation|SOToleranceViolation);
 
@@ -11451,38 +11451,24 @@ BOOL CEHelper::CanMethodHandleCE(PTR_MethodDesc pMethodDesc, CorruptionSeverity 
         return TRUE;
     }
 
-    // Only SecurityCritical code can handle CE since only they can generate it.
-    // Even in full trusted assembly, transparent code cannot generate CE and thus,
-    // will not know how to handle it properly.
-    //
-    // Check if the method in question is SecurityCritical or not.
-    MethodSecurityDescriptor mdSec(pMethodDesc);
-    fCanMethodHandleSeverity = mdSec.IsCritical();
-
-    if (fCanMethodHandleSeverity)
+    // Since the method is Security Critical, now check if it is
+    // attributed to handle the CE or not.
+    IMDInternalImport *pImport = pMethodDesc->GetMDImport();
+    if (pImport != NULL)
     {
-        // Reset the flag to FALSE
-        fCanMethodHandleSeverity = FALSE;
-
-        // Since the method is Security Critical, now check if it is
-        // attributed to handle the CE or not.
-        IMDInternalImport *pImport = pMethodDesc->GetMDImport();
-        if (pImport != NULL)
+        mdMethodDef methodDef = pMethodDesc->GetMemberDef();
+        switch(severity)
         {
-            mdMethodDef methodDef = pMethodDesc->GetMemberDef();
-            switch(severity)
-            {
-                case ProcessCorrupting:
-                     fCanMethodHandleSeverity = (S_OK == pImport->GetCustomAttributeByName(
-                                                    methodDef,
-                                                    HANDLE_PROCESS_CORRUPTED_STATE_EXCEPTION_ATTRIBUTE,
-                                                    NULL,
-                                                    NULL));
-                    break;
-                default:
-                    _ASSERTE(!"Unknown Exception Corruption Severity!");
-                    break;
-            }
+            case ProcessCorrupting:
+                    fCanMethodHandleSeverity = (S_OK == pImport->GetCustomAttributeByName(
+                                                methodDef,
+                                                HANDLE_PROCESS_CORRUPTED_STATE_EXCEPTION_ATTRIBUTE,
+                                                NULL,
+                                                NULL));
+                break;
+            default:
+                _ASSERTE(!"Unknown Exception Corruption Severity!");
+                break;
         }
     }
 #endif // !DACCESS_COMPILE

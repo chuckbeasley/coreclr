@@ -2,6 +2,8 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System.Diagnostics;
+
 #if ENABLE_WINRT
 using Internal.Runtime.Augments;
 #endif
@@ -44,6 +46,9 @@ namespace System.Globalization
 
         internal static CultureInfo GetUserDefaultCulture()
         {
+            if (GlobalizationMode.Invariant)
+                return CultureInfo.InvariantCulture;
+            
             const uint LOCALE_SNAME = 0x0000005c;
             const string LOCALE_NAME_USER_DEFAULT = null;
             const string LOCALE_NAME_SYSTEM_DEFAULT = "!x-sys-default-locale";
@@ -69,6 +74,9 @@ namespace System.Globalization
 
         private static CultureInfo GetUserDefaultUILanguage()
         {
+            if (GlobalizationMode.Invariant)
+                return CultureInfo.InvariantCulture;
+
             const uint MUI_LANGUAGE_NAME = 0x8;    // Use ISO language (culture) name convention
             uint langCount = 0;
             uint bufLen = 0;
@@ -226,8 +234,7 @@ namespace System.Globalization
         {
             // If a call to GetCultureInfoForUserPreferredLanguageInAppX() generated a recursive
             // call to itself, return null, since we don't want to stack overflow.  For example, 
-            // this can happen if some code in this method ends up calling CultureInfo.CurrentCulture
-            // (which is common on check'd build because of BCLDebug logging which calls Int32.ToString()).  
+            // this can happen if some code in this method ends up calling CultureInfo.CurrentCulture.
             // In this case, returning null will mean CultureInfo.CurrentCulture gets the default Win32 
             // value, which should be fine. 
             if (ts_IsDoingAppXCultureInfoLookup)

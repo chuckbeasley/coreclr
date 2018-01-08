@@ -1,15 +1,15 @@
-Performance Tracing on Linux
+﻿Performance Tracing on Linux
 ============================
 
 When a performance problem is encountered on Linux, these instructions can be used to gather detailed information about what was happening on the machine at the time of the performance problem.
 
-#Required Tools#
+# Required Tools #
 - **perfcollect**: Bash script that automates data collection.
 	- Available at <http://aka.ms/perfcollect>.
 - **PerfView**: Windows-based performance tool that can also analyze trace files collected with Perfcollect.
 	- Available at <http://aka.ms/perfview>.
 
-#Preparing Your Machine#
+# Preparing Your Machine #
 Follow these steps to prepare your machine to collect a performance trace.
 
 1. Download Perfcollect.
@@ -30,7 +30,7 @@ Follow these steps to prepare your machine to collect a performance trace.
 	> sudo ./perfcollect install
 	> ```
 
-#Collecting a Trace#
+# Collecting a Trace #
 1. Have two shell windows available - one for controlling tracing, referred to as **[Trace]**, and one for running the application, referred to as **[App]**.
 2. **[App]** Setup the application shell - this enables tracing configuration inside of CoreCLR.
 
@@ -81,7 +81,27 @@ Follow these steps to prepare your machine to collect a performance trace.
 
 	The compressed trace file is now stored in the current working directory.
 
-#Collecting in a Docker Container#
+# Resolving Framework Symbols #
+Framework symbols need to be manually generated at the time the trace is collected.  They are different than app-level symbols because the framework is pre-compiled while apps are just-in-time-compiled.
+
+The easiest way to generate framework symbols is to have perfcollect do it for you automatically when the trace is collected.  To do this, crossgen must be present on the collection machine and located next to libcoreclr.so.  This can be done manually using the following steps:
+
+1. Download the CoreCLR nuget package.  A simple way to do this is to create a self-contained version of your application using the dotnet CLI:
+	> ```bash
+	> dotnet publish --self-contained -r linux-x64
+	> ```	
+
+	This will create a bin/*/netcoreapp2.0/Linux-x64/publish directory which contains all of the files required to run your app including the .NET runtime and framework.  As a side-effect, the dotnet CLI downloads and extracts the CoreCLR nuget package.  You should be able to find crossgen at:
+
+	> ```bash
+	> ~/packages/runtime.linux-x64.microsoft.netcore.app/2.0.0/tools/crossgen
+	> ``` 
+
+2. Copy crossgen next to libcoreclr.so.  If you run your application out of the publish directory, you can copy it into the directory that you just created during step # 1.  If you run your application using the dotnet CLI, then you likely need to copy it to /usr/share/dotnet/shared/Microsoft.NETCore.App/<Version> where <Version> is the version number of CoreCLR.  This should match the version number in the path to crossgen from step # 1.
+
+Now, traces containing apps that were run on the updated runtime should contain framework-level symbols.  To view the trace with framework-level symbols, you will need to use PerfView.  Details on using PerfView to view a trace are available below in this document.
+
+# Collecting in a Docker Container #
 Perfcollect can be used to collect data for an application running inside a Docker container.  The main thing to know is that collecting a trace requires elevated privileges because the [default seccomp profile](https://docs.docker.com/engine/security/seccomp/) blocks a required syscall - perf_events_open.
 
 In order to use the instructions in this document to collect a trace, spawn a new shell inside the container that is privileged.
@@ -94,20 +114,20 @@ Even though the application hosted in the container isn't privileged, this new s
 
 If you want to try tracing in a container, we've written a [demo Dockerfile](https://raw.githubusercontent.com/dotnet/corefx-tools/master/src/performance/perfcollect/docker-demo/Dockerfile) that installs all of the performance tracing pre-requisites, sets the environment up for tracing, and starts a sample CPU-bound app.
 
-#Filtering#
+# Filtering #
 Filtering is implemented on Windows through the latest mechanisms provided with the [EventSource](https://msdn.microsoft.com/en-us/library/system.diagnostics.tracing.eventsource(v=vs.110).aspx) class. 
 
 On Linux those mechanisms are not available yet. Instead, there are two environment variables that exist just on linux to do some basic filtering. 
 
-* COMPLUS_EventSourceFilter – filter event sources by name
-* COMPLUS_EventNameFilter – filter events by name
+* COMPlus_EventSourceFilter – filter event sources by name
+* COMPLus_EventNameFilter – filter events by name
 
 Setting one or both of these variables will only enable collecting events that contain the name you specify as a substring. Strings are treated as case insensitive. 
 
-#Viewing a Trace#
+# Viewing a Trace #
 Traces are best viewed using PerfView on Windows.  Note that we're currently looking into porting the analysis pieces of PerfView to Linux so that the entire investigation can occur on Linux.
 
-##Open the Trace File##
+## Open the Trace File ##
 1. Copy the trace.zip file from Linux to a Windows machine.
 2. Download PerfView from <http://aka.ms/perfview>.
 3. Run PerfView.exe
@@ -116,7 +136,7 @@ Traces are best viewed using PerfView on Windows.  Note that we're currently loo
 	> PerfView.exe <path to trace.zip file>
 	> ```
 
-##Select a View##
+## Select a View ##
 PerfView will display the list of views that are supported based on the data contained in the trace file.
 
 - For CPU investigations, choose **CPU stacks**.
@@ -126,10 +146,10 @@ PerfView will display the list of views that are supported based on the data con
 
 For more details on how to interpret views in PerfView, see help links in the view itself, or from the main window in PerfView choose **Help->Users Guide**.
 
-#Extra Information#
+# Extra Information #
 This information is not strictly required to collect and analyze traces, but is provided for those who are interested.
 
-##Prerequisites##
+## Prerequisites ##
 Perfcollect will alert users to any prerequisites that are not installed and offer to install them.  Prerequisites can be installed automatically by running:
 
 >```bash

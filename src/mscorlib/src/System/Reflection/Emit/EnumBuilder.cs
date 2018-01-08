@@ -17,7 +17,6 @@ namespace System.Reflection.Emit
 {
     using System;
     using System.Diagnostics.CodeAnalysis;
-    using System.Diagnostics.Contracts;
     using System.Reflection;
     using System.Runtime.InteropServices;
     using CultureInfo = System.Globalization.CultureInfo;
@@ -34,8 +33,6 @@ namespace System.Reflection.Emit
 
         public FieldBuilder DefineLiteral(String literalName, Object literalValue)
         {
-            BCLDebug.Log("DYNIL", "## DYNIL LOGGING: EnumBuilder.DefineLiteral( " + literalName + " )");
-
             // Define the underlying field for the enum. It will be a non-static, private field with special name bit set. 
             FieldBuilder fieldBuilder = m_typeBuilder.DefineField(
                 literalName,
@@ -47,14 +44,12 @@ namespace System.Reflection.Emit
 
         public TypeInfo CreateTypeInfo()
         {
-            BCLDebug.Log("DYNIL", "## DYNIL LOGGING: EnumBuilder.CreateType() ");
             return m_typeBuilder.CreateTypeInfo();
         }
 
         // CreateType cause EnumBuilder to be baked.
         public Type CreateType()
         {
-            BCLDebug.Log("DYNIL", "## DYNIL LOGGING: EnumBuilder.CreateType() ");
             return m_typeBuilder.CreateType();
         }
 
@@ -199,7 +194,7 @@ namespace System.Reflection.Emit
         protected override PropertyInfo GetPropertyImpl(String name, BindingFlags bindingAttr, Binder binder,
                 Type returnType, Type[] types, ParameterModifier[] modifiers)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override PropertyInfo[] GetProperties(BindingFlags bindingAttr)
@@ -241,6 +236,8 @@ namespace System.Reflection.Emit
         {
             return m_typeBuilder.Attributes;
         }
+
+        public override bool IsTypeDefinition => true;
 
         public override bool IsSZArray => false;
 
@@ -291,9 +288,6 @@ namespace System.Reflection.Emit
             return m_typeBuilder.HasElementType;
         }
 
-        // About the SuppressMessageAttribute here - CCRewrite wants us to repeat the base type's precondition
-        // here, but it will always be true.  Rather than adding dead code, I'll silence the warning. 
-        [SuppressMessage("Microsoft.Contracts", "CC1055")]
         // Legacy: JScript needs it.
         public override Type GetEnumUnderlyingType()
         {
@@ -410,7 +404,7 @@ namespace System.Reflection.Emit
         {
             // Client should not set any bits other than the visibility bits.
             if ((visibility & ~TypeAttributes.VisibilityMask) != 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_ShouldOnlySetVisibilityFlags"), nameof(name));
+                throw new ArgumentException(SR.Argument_ShouldOnlySetVisibilityFlags, nameof(name));
             m_typeBuilder = new TypeBuilder(name, visibility | TypeAttributes.Sealed, typeof(System.Enum), null, module, PackingSize.Unspecified, TypeBuilder.UnspecifiedTypeSize, null);
 
             // Define the underlying field for the enum. It will be a non-static, private field with special name bit set. 

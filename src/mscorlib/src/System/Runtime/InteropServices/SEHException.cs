@@ -18,26 +18,26 @@ using System.Runtime.Serialization;
 namespace System.Runtime.InteropServices
 {
     // Exception for Structured Exception Handler exceptions.
-    // 
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public class SEHException : ExternalException
     {
         public SEHException()
             : base()
         {
-            SetErrorCode(__HResults.E_FAIL);
+            HResult = HResults.E_FAIL;
         }
 
         public SEHException(String message)
             : base(message)
         {
-            SetErrorCode(__HResults.E_FAIL);
+            HResult = HResults.E_FAIL;
         }
 
         public SEHException(String message, Exception inner)
             : base(message, inner)
         {
-            SetErrorCode(__HResults.E_FAIL);
+            HResult = HResults.E_FAIL;
         }
 
         protected SEHException(SerializationInfo info, StreamingContext context) : base(info, context)

@@ -9,9 +9,8 @@ function print_usage {
     echo 'coreclr/tests/runtest.sh'
     echo '    --testRootDir="temp/Windows_NT.x64.Debug"'
     echo '    --testNativeBinDir="coreclr/bin/obj/Linux.x64.Debug/tests"'
-    echo '    --coreClrBinDir="coreclr/bin/Product/Linux.x64.Debug"'
-    echo '    --mscorlibDir="windows/coreclr/bin/Product/Linux.x64.Debug"'
-    echo '    --coreFxBinDir="corefx/bin/runtime/netcoreapp-Linux-Debug-x64'
+    echo '    --coreOverlayDir="coreclr/bin/tests/Linux.x64.Debug/Tests/Core_Root"'
+    echo '    --copyNativeTestBin'
     echo ''
     echo 'Required arguments:'
     echo '  --testRootDir=<path>             : Root directory of the test build (e.g. coreclr/bin/tests/Windows_NT.x64.Debug).'
@@ -32,6 +31,7 @@ function print_usage {
     echo '                                     specified by --testRootDir. Multiple of this switch may be specified.'
     echo '  --testDirFile=<path>             : Run tests only in the directories specified by the file at <path>. Paths are listed'
     echo '                                     one line, relative to the directory specified by --testRootDir.'
+    echo '  --build-overlay-only             : Build coreoverlay only, and skip running tests.'
     echo '  --runFailingTestsOnly            : Run only the tests that are disabled on this platform due to unexpected failures.'
     echo '                                     Failing tests are listed in coreclr/tests/failingTestsOutsideWindows.txt, one per'
     echo '                                     line, as paths to .sh files relative to the directory specified by --testRootDir.'
@@ -43,21 +43,26 @@ function print_usage {
     echo '  -h|--help                        : Show usage information.'
     echo '  --useServerGC                    : Enable server GC for this test run'
     echo '  --test-env                       : Script to set environment variables for tests'
+    echo '  --copyNativeTestBin              : Explicitly copy native test components into the test dir'
+    echo '  --crossgen                       : Precompiles the framework managed assemblies'
     echo '  --runcrossgentests               : Runs the ready to run tests' 
     echo '  --jitstress=<n>                  : Runs the tests with COMPlus_JitStress=n'
     echo '  --jitstressregs=<n>              : Runs the tests with COMPlus_JitStressRegs=n'
     echo '  --jitminopts                     : Runs the tests with COMPlus_JITMinOpts=1'
     echo '  --jitforcerelocs                 : Runs the tests with COMPlus_ForceRelocs=1'
     echo '  --jitdisasm                      : Runs jit-dasm on the tests'
-    echo '  --gcstresslevel n                : Runs the tests with COMPlus_GCStress=n'
+    echo '  --gcstresslevel=<n>              : Runs the tests with COMPlus_GCStress=n'
+    echo '  --gcname=<n>                     : Runs the tests with COMPlus_GCName=n'
+    echo '  --ilasmroundtrip                 : Runs ilasm round trip on the tests'
     echo '    0: None                                1: GC on all allocs and '"'easy'"' places'
     echo '    2: GC on transitions to preemptive GC  4: GC on every allowable JITed instr'
     echo '    8: GC on every allowable NGEN instr   16: GC only on a unique stack trace'
     echo '  --long-gc                        : Runs the long GC tests'
     echo '  --gcsimulator                    : Runs the GCSimulator tests'
+    echo '  --tieredcompilation              : Runs the tests with COMPlus_EXPERIMENTAL_TieredCompilation=1'
+    echo '  --link <ILlink>                  : Runs the tests after linking via ILlink'
     echo '  --show-time                      : Print execution sequence and running time for each test'
     echo '  --no-lf-conversion               : Do not execute LF conversion before running test script'
-    echo '  --build-overlay-only             : Exit after overlay directory is populated'
     echo '  --limitedDumpGeneration          : Enables the generation of a limited number of core dumps if test(s) crash, even if ulimit'
     echo '                                     is zero when launching this script. This option is intended for use in CI.'
     echo '  --xunitOutputPath=<path>         : Create xUnit XML report at the specifed path (default: <test root>/coreclrtests.xml)'
@@ -119,7 +124,12 @@ case $OSName in
 esac
 
 function xunit_output_begin {
-    xunitOutputPath=$testRootDir/coreclrtests.xml
+    if [ -z "$xunitOutputPath" ]; then
+        xunitOutputPath=$testRootDir/coreclrtests.xml
+    fi
+    if ! [ -e $(basename "$xunitOutputPath") ]; then
+        xunitOutputPath=$testRootDir/coreclrtests.xml
+    fi
     xunitTestOutputPath=${xunitOutputPath}.test
     if [ -e "$xunitOutputPath" ]; then
         rm -f -r "$xunitOutputPath"
@@ -139,6 +149,7 @@ function xunit_output_add_test {
     local outputFilePath=$2
     local testResult=$3 # Pass, Fail, or Skip
     local testScriptExitCode=$4
+    local testRunningTime=$5
 
     local testPath=${scriptFilePath%.sh} # Remove trailing ".sh"
     local testDir=$(dirname "$testPath")
@@ -156,6 +167,9 @@ function xunit_output_add_test {
     line="${line} type=\"${testDir}\""
     line="${line} method=\"${testName}\""
     line="${line} result=\"${testResult}\""
+    if [ -n "$testRunningTime" ] && [ "$testResult" != "Skip" ]; then
+        line="${line} time=\"${testRunningTime}\""
+    fi
 
     if [ "$testResult" == "Pass" ]; then
         line="${line}/>"
@@ -324,6 +338,11 @@ function create_core_overlay {
 
     if [ -n "$coreOverlayDir" ]; then
         export CORE_ROOT="$coreOverlayDir"
+
+        if [ -n "$copyNativeTestBin" ]; then
+            copy_test_native_bin_to_test_root $coreOverlayDir
+        fi
+
         return
     fi
 
@@ -339,9 +358,6 @@ function create_core_overlay {
     if [ ! -d "$coreClrBinDir" ]; then
         exit_with_error "$errorSource" "Directory specified by --coreClrBinDir does not exist: $coreClrBinDir"
     fi
-    if [ ! -f "$mscorlibDir/mscorlib.dll" ]; then
-        exit_with_error "$errorSource" "mscorlib.dll was not found in: $mscorlibDir"
-    fi
     if [ -z "$coreFxBinDir" ]; then
         exit_with_error "$errorSource" "One of --coreOverlayDir or --coreFxBinDir must be specified." "$printUsage"
     fi
@@ -355,8 +371,7 @@ function create_core_overlay {
     mkdir "$coreOverlayDir"
 
     cp -f -v "$coreFxBinDir/"* "$coreOverlayDir/" 2>/dev/null
-    cp -f -v "$coreClrBinDir/"* "$coreOverlayDir/" 2>/dev/null
-    cp -f -v "$mscorlibDir/mscorlib.dll" "$coreOverlayDir/" 2>/dev/null
+    cp -f -p -v "$coreClrBinDir/"* "$coreOverlayDir/" 2>/dev/null
     if [ -d "$mscorlibDir/bin" ]; then
         cp -f -v "$mscorlibDir/bin/"* "$coreOverlayDir/" 2>/dev/null
     fi
@@ -370,15 +385,27 @@ function create_core_overlay {
         # Test dependencies come from a Windows build, and System.Private.CoreLib.ni.dll would be the one from Windows
         rm -f "$coreOverlayDir/System.Private.CoreLib.ni.dll"
     fi
-    copy_test_native_bin_to_test_root
+    copy_test_native_bin_to_test_root $coreOverlayDir
+}
+
+declare -a skipCrossGenFiles
+
+function is_skip_crossgen_test {
+    for skip in "${skipCrossGenFiles[@]}"; do
+        if [ "$1" == "$skip" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 function precompile_overlay_assemblies {
+    skipCrossGenFiles=($(read_array "$(dirname "$0")/skipCrossGenFiles.$ARCH.txt"))
 
     if [ $doCrossgen == 1 ]; then
         local overlayDir=$CORE_ROOT
 
-        filesToPrecompile=$(ls -trh $overlayDir/*.dll)
+        filesToPrecompile=$(find -L $overlayDir -iname \*.dll -not -iname \*.ni.dll -not -iname \*-ms-win-\* -type f )
         for fileToPrecompile in ${filesToPrecompile}
         do
             local filename=${fileToPrecompile}
@@ -389,20 +416,23 @@ function precompile_overlay_assemblies {
                     echo Unable to generate dasm for $filename
                 fi
             else
-                # Precompile any assembly except mscorlib since we already have its NI image available.
-                if [[ "$filename" != *"mscorlib.dll"* ]]; then
-                    if [[ "$filename" != *"mscorlib.ni.dll"* ]]; then
-                        echo Precompiling $filename
-                        $overlayDir/crossgen /Platform_Assemblies_Paths $overlayDir $filename 2>/dev/null
-                        local exitCode=$?
-                        if [ $exitCode == -2146230517 ]; then
-                            echo $filename is not a managed assembly.
-                        elif [ $exitCode != 0 ]; then
-                            echo Unable to precompile $filename.
-                        else
-                            echo Successfully precompiled $filename
-                        fi
+                if is_skip_crossgen_test "$(basename $filename)"; then
+                    continue
+                fi
+                echo Precompiling $filename
+                $overlayDir/crossgen /Platform_Assemblies_Paths $overlayDir $filename 1> $filename.stdout 2>$filename.stderr
+                local exitCode=$?
+                if [[ $exitCode != 0 ]]; then
+                    if grep -q -e '0x80131018' $filename.stderr; then
+                        printf "\n\t$filename is not a managed assembly.\n\n"
+                    else
+                        echo Unable to precompile $filename.
+                        cat $filename.stdout
+                        cat $filename.stderr
+                        exit $exitCode
                     fi
+                else
+                    rm $filename.{stdout,stderr}
                 fi
             fi
         done
@@ -413,6 +443,7 @@ function precompile_overlay_assemblies {
 
 function copy_test_native_bin_to_test_root {
     local errorSource='copy_test_native_bin_to_test_root'
+    local coreRootDir=$1
 
     if [ -z "$testNativeBinDir" ]; then
         exit_with_error "$errorSource" "--testNativeBinDir is required."
@@ -423,14 +454,10 @@ function copy_test_native_bin_to_test_root {
     fi
 
     # Copy native test components from the native test build into the respective test directory in the test root directory
-    find "$testNativeBinDir" -type f -iname '*.$libExtension' |
+    find "$testNativeBinDir" -type f -iname "*.$libExtension" |
         while IFS='' read -r filePath || [ -n "$filePath" ]; do
             local dirPath=$(dirname "$filePath")
-            local destinationDirPath=${testRootDir}${dirPath:${#testNativeBinDir}}
-            if [ ! -d "$destinationDirPath" ]; then
-                exit_with_error "$errorSource" "Cannot copy native test bin '$filePath' to '$destinationDirPath/', as the destination directory does not exist."
-            fi
-            cp -f "$filePath" "$destinationDirPath/"
+            cp -f "$filePath" "$coreRootDir"
         done
 }
 
@@ -463,6 +490,10 @@ function load_unsupported_tests {
 function load_failing_tests {
     # Load the list of tests that fail on this platform. These tests are disabled (skipped) temporarily, pending investigation.
     failingTests=($(read_array "$(dirname "$0")/testsFailingOutsideWindows.txt"))
+   
+    if [ "$ARCH" == "arm64" ]; then
+        failingTests+=($(read_array "$(dirname "$0")/testsFailingOnArm64.txt"))
+    fi
 }
 
 function load_playlist_tests {
@@ -557,6 +588,14 @@ function set_up_core_dump_generation {
 }
 
 function print_info_from_core_file {
+
+    #### temporary
+    if [ "$ARCH" == "arm64" ]; then
+        echo "Not inspecting core dumps on arm64 at the moment."
+        return
+    fi
+    ####
+
     local core_file_name=$1
     local executable_name=$2
 
@@ -701,25 +740,68 @@ function run_test {
 # Variables for running tests in the background
 if [ `uname` = "NetBSD" ]; then
     NumProc=$(getconf NPROCESSORS_ONLN)
-else
+elif [ `uname` = "Darwin" ]; then
     NumProc=$(getconf _NPROCESSORS_ONLN)
+else
+    if [ -x "$(command -v nproc)" ]; then
+        NumProc=$(nproc --all)
+    elif [ -x "$(command -v getconf)" ]; then
+        NumProc=$(getconf _NPROCESSORS_ONLN)
+    else
+        NumProc=1
+    fi
 fi
 ((maxProcesses = $NumProc * 3 / 2)) # long tests delay process creation, use a few more processors
 
-((nextProcessIndex = 0))
 ((processCount = 0))
 declare -a scriptFilePaths
 declare -a outputFilePaths
 declare -a processIds
 declare -a testStartTimes
+waitProcessIndex=
+pidNone=0
+
+function waitany {
+    local pid
+    local exitcode
+    while true; do
+        for (( i=0; i<$maxProcesses; i++ )); do
+            pid=${processIds[$i]}
+            if [ -z "$pid" ] || [ "$pid" == "$pidNone" ]; then
+                continue
+            fi
+            if ! kill -0 $pid 2>/dev/null; then
+                wait $pid
+                exitcode=$?
+                waitProcessIndex=$i
+                processIds[$i]=$pidNone
+                return $exitcode
+            fi
+        done
+        sleep 0.1
+    done
+}
+
+function get_available_process_index {
+    local pid
+    local i=0
+    for (( i=0; i<$maxProcesses; i++ )); do
+        pid=${processIds[$i]}
+        if [ -z "$pid" ] || [ "$pid" == "$pidNone" ]; then
+            break
+        fi
+    done
+    echo $i
+}
 
 function finish_test {
-    wait ${processIds[$nextProcessIndex]}
+    waitany
     local testScriptExitCode=$?
+    local finishedProcessIndex=$waitProcessIndex
     ((--processCount))
 
-    local scriptFilePath=${scriptFilePaths[$nextProcessIndex]}
-    local outputFilePath=${outputFilePaths[$nextProcessIndex]}
+    local scriptFilePath=${scriptFilePaths[$finishedProcessIndex]}
+    local outputFilePath=${outputFilePaths[$finishedProcessIndex]}
     local scriptFileName=$(basename "$scriptFilePath")
 
     local testEndTime=
@@ -732,7 +814,7 @@ function finish_test {
 
     if [ "$showTime" == "ON" ]; then
         testEndTime=$(date +%s)
-        testRunningTime=$(( $testEndTime - ${testStartTimes[$nextProcessIndex]} ))
+        testRunningTime=$(( $testEndTime - ${testStartTimes[$finishedProcessIndex]} ))
         header=$header$(printf "[%4ds]" $testRunningTime)
     fi
 
@@ -766,19 +848,14 @@ function finish_test {
         done <"$outputFilePath"
     fi
 
-    xunit_output_add_test "$scriptFilePath" "$outputFilePath" "$xunitTestResult" "$testScriptExitCode"
+    xunit_output_add_test "$scriptFilePath" "$outputFilePath" "$xunitTestResult" "$testScriptExitCode" "$testRunningTime"
 }
 
 function finish_remaining_tests {
     # Finish the remaining tests in the order in which they were started
-    if ((nextProcessIndex >= processCount)); then
-        ((nextProcessIndex = 0))
-    fi
     while ((processCount > 0)); do
         finish_test
-        ((nextProcessIndex = (nextProcessIndex + 1) % maxProcesses))
     done
-    ((nextProcessIndex = 0))
 }
 
 function prep_test {
@@ -801,6 +878,7 @@ function prep_test {
 }
 
 function start_test {
+    local nextProcessIndex=$(get_available_process_index)
     local scriptFilePath=$1
     if ((runFailingTestsOnly == 1)) && ! is_failing_test "$scriptFilePath"; then
         return
@@ -812,8 +890,9 @@ function start_test {
         return
     fi
 
-    if ((nextProcessIndex < processCount)); then
+    if ((nextProcessIndex == maxProcesses)); then
         finish_test
+        nextProcessIndex=$(get_available_process_index)
     fi
 
     scriptFilePaths[$nextProcessIndex]=$scriptFilePath
@@ -835,7 +914,6 @@ function start_test {
     fi
     processIds[$nextProcessIndex]=$!
 
-    ((nextProcessIndex = (nextProcessIndex + 1) % maxProcesses))
     ((++processCount))
 }
 
@@ -954,7 +1032,7 @@ buildOverlayOnly=
 gcsimulator=
 longgc=
 limitedCoreDumps=
-
+illinker=
 ((disableEventLogging = 0))
 ((serverGC = 0))
 
@@ -962,6 +1040,7 @@ limitedCoreDumps=
 verbose=0
 doCrossgen=0
 jitdisasm=0
+ilasmroundtrip=
 
 for i in "$@"
 do
@@ -985,11 +1064,24 @@ do
         --jitminopts)
             export COMPlus_JITMinOpts=1
             ;;
+        --copyNativeTestBin)
+            export copyNativeTestBin=1
+            ;;
         --jitforcerelocs)
             export COMPlus_ForceRelocs=1
             ;;
+        --link=*)
+            export ILLINK=${i#*=}
+            export DoLink=true
+            ;;
+        --tieredcompilation)
+            export COMPlus_EXPERIMENTAL_TieredCompilation=1
+            ;;
         --jitdisasm)
             jitdisasm=1
+            ;;
+        --ilasmroundtrip)
+            ((ilasmroundtrip = 1))
             ;;
         --testRootDir=*)
             testRootDir=${i#*=}
@@ -1057,6 +1149,9 @@ do
         --gcstresslevel=*)
             export COMPlus_GCStress=${i#*=}
             ;;            
+        --gcname=*)
+            export COMPlus_GCName=${i#*=}
+            ;;
         --show-time)
             showTime=ON
             ;;
@@ -1122,6 +1217,11 @@ if [[ ! "$jitdisasm" -eq 0 ]]; then
     export RunningJitDisasm=1
 fi
 
+if [ ! -z "$ilasmroundtrip" ]; then
+    echo "Running Ilasm round trip"
+    export RunningIlasmRoundTrip=1
+fi
+
 # If this is a coverage run, make sure the appropriate args have been passed
 if [ "$CoreClrCoverage" == "ON" ]
 then
@@ -1161,7 +1261,7 @@ precompile_overlay_assemblies
 
 if [ "$buildOverlayOnly" == "ON" ];
 then
-    echo "Build overlay directory \'$coreOverlayDir\' complete."
+    echo "Build overlay directory '$coreOverlayDir' complete."
     exit 0
 fi
 
@@ -1179,7 +1279,7 @@ fi
 if [ "$ARCH" == "x64" ]
 then
     scriptPath=$(dirname $0)
-    ${scriptPath}/setup-runtime-dependencies.sh --outputDir=$coreOverlayDir
+    ${scriptPath}/setup-stress-dependencies.sh --outputDir=$coreOverlayDir
 else
     if [ "$ARCH" != "arm64" ]
     then

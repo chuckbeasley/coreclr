@@ -7,7 +7,7 @@
 /* link this file in with the server and any clients */
 
 
- /* File created by MIDL compiler version 8.00.0603 */
+ /* File created by MIDL compiler version 8.01.0622 */
 /* @@MIDL_FILE_HEADING(  ) */
 
 #pragma warning( disable: 4049 )  /* more than 64k source lines */
@@ -55,9 +55,9 @@ typedef IID CLSID;
 #endif // CLSID_DEFINED
 
 #define MIDL_DEFINE_GUID(type,name,l,w1,w2,b1,b2,b3,b4,b5,b6,b7,b8) \
-        const type name = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
+        EXTERN_C __declspec(selectany) const type name = {l,w1,w2,{b1,b2,b3,b4,b5,b6,b7,b8}}
 
-#endif !_MIDL_USE_GUIDDEF_
+#endif // !_MIDL_USE_GUIDDEF_
 
 MIDL_DEFINE_GUID(IID, IID_ICorProfilerCallback,0x176FBED1,0xA55C,0x4796,0x98,0xCA,0xA9,0xDA,0x0E,0xF8,0x83,0xE7);
 
@@ -81,6 +81,9 @@ MIDL_DEFINE_GUID(IID, IID_ICorProfilerCallback7,0xF76A2DBA,0x1D52,0x4539,0x86,0x
 
 
 MIDL_DEFINE_GUID(IID, IID_ICorProfilerCallback8,0x5BED9B15,0xC079,0x4D47,0xBF,0xE2,0x21,0x5A,0x14,0x0C,0x07,0xE0);
+
+
+MIDL_DEFINE_GUID(IID, IID_ICorProfilerCallback9,0x27583EC3,0xC8F5,0x482F,0x80,0x52,0x19,0x4B,0x8C,0xE4,0x70,0x5A);
 
 
 MIDL_DEFINE_GUID(IID, IID_ICorProfilerInfo,0x28B5557D,0x3F3F,0x48b4,0x90,0xB2,0x5F,0x9E,0xEA,0x2F,0x6C,0x48);
@@ -120,6 +123,9 @@ MIDL_DEFINE_GUID(IID, IID_ICorProfilerInfo7,0x9AEECC0D,0x63E0,0x4187,0x8C,0x00,0
 
 
 MIDL_DEFINE_GUID(IID, IID_ICorProfilerInfo8,0xC5AC80A6,0x782E,0x4716,0x80,0x44,0x39,0x59,0x8C,0x60,0xCF,0xBF);
+
+
+MIDL_DEFINE_GUID(IID, IID_ICorProfilerInfo9,0X008170DB,0XF8CC,0X4796,0X9A,0X51,0XDC,0X8A,0XA0,0XB4,0X70,0x12);
 
 
 MIDL_DEFINE_GUID(IID, IID_ICorProfilerMethodEnum,0xFCCEE788,0x0088,0x454B,0xA8,0x11,0xC9,0x9F,0x29,0x8D,0x19,0x42);

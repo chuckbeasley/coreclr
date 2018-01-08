@@ -19,7 +19,6 @@
 #include "dllimport.h"
 #include "comdelegate.h"
 #include "log.h"
-#include "security.h"
 #include "comdelegate.h"
 #include "array.h"
 #include "jitinterface.h"
@@ -331,7 +330,6 @@ void TransitionFrame::UpdateRegDisplayHelper(const PREGDISPLAY pRD, UINT cbStack
 
     pRD->pCurrentContext->Eip = *PTR_PCODE(pRD->PCTAddr);;
     pRD->pCurrentContext->Esp = CallerSP;
-    pRD->pCurrentContext->ResumeEsp = CallerSP + cbStackPop;
 
     UpdateRegDisplayFromCalleeSavedRegisters(pRD, regs);
     ClearRegDisplayArgumentAndScratchRegisters(pRD);
@@ -380,11 +378,34 @@ void HelperMethodFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     pRD->IsCallerSPValid      = FALSE;        // Don't add usage of this field.  This is only temporary.
 
 #ifdef DACCESS_COMPILE
-    PORTABILITY_ASSERT("HelperMethodFrame::UpdateRegDisplay");
+    // For DAC, we may get here when the HMF is still uninitialized.
+    // So we may need to unwind here.
+    if (!m_MachState.isValid())
+    {
+        // This allocation throws on OOM.
+        MachState* pUnwoundState = (MachState*)DacAllocHostOnlyInstance(sizeof(*pUnwoundState), true);
+
+        InsureInit(false, pUnwoundState);
+
+        pRD->pCurrentContext->Eip = pRD->ControlPC = pUnwoundState->GetRetAddr();
+        pRD->pCurrentContext->Esp = pRD->SP        = pUnwoundState->esp();
+
+#define CALLEE_SAVED_REGISTER(regname) pRD->pCurrentContext->regname = *((DWORD*) pUnwoundState->p##regname());
+        ENUM_CALLEE_SAVED_REGISTERS();
+#undef CALLEE_SAVED_REGISTER
+
+#define CALLEE_SAVED_REGISTER(regname) pRD->pCurrentContextPointers->regname = (DWORD*) pUnwoundState->p##regname();
+        ENUM_CALLEE_SAVED_REGISTERS();
+#undef CALLEE_SAVED_REGISTER
+
+        ClearRegDisplayArgumentAndScratchRegisters(pRD);
+
+        return;
+    }
 #endif // DACCESS_COMPILE
 
     pRD->pCurrentContext->Eip = pRD->ControlPC = m_MachState.GetRetAddr();
-    pRD->pCurrentContext->Esp = pRD->pCurrentContext->ResumeEsp = pRD->SP = (DWORD) m_MachState.esp();
+    pRD->pCurrentContext->Esp = pRD->SP = (DWORD) m_MachState.esp();
 
 #define CALLEE_SAVED_REGISTER(regname) pRD->pCurrentContext->regname = *((DWORD*) m_MachState.p##regname());
     ENUM_CALLEE_SAVED_REGISTERS();
@@ -523,6 +544,8 @@ void ExternalMethodFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
     UpdateRegDisplayHelper(pRD, CbStackPopUsingGCRefMap(GetGCRefMap()));
 
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    ExternalMethodFrane::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
+
     RETURN;
 }
 
@@ -560,6 +583,8 @@ void StubDispatchFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
         // code:VSD_ResolveWorker or code:StubDispatchFixupWorker
         pRD->ControlPC = GetAdjustedCallAddress(pRD->ControlPC);
     }
+
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    StubDispatchFrame::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
 
     RETURN;
 }
@@ -685,7 +710,6 @@ void InlinedCallFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
     pRD->pCurrentContext->Eip = *PTR_PCODE(pRD->PCTAddr);
     pRD->pCurrentContext->Esp = (DWORD) dac_cast<TADDR>(m_pCallSiteSP);
-    pRD->pCurrentContext->ResumeEsp = (DWORD) dac_cast<TADDR>(m_pCallSiteSP) + stackArgSize;
     pRD->pCurrentContext->Ebp = (DWORD) m_pCalleeSavedFP;
 
     ClearRegDisplayArgumentAndScratchRegisters(pRD);
@@ -742,7 +766,7 @@ void ResumableFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
 #ifdef WIN64EXCEPTIONS
 
-    memcpy(pRD->pCurrentContext, &m_Regs, sizeof(CONTEXT));
+    CopyMemory(pRD->pCurrentContext, m_Regs, sizeof(T_CONTEXT));
 
     pRD->SP = m_Regs->Esp;
     pRD->ControlPC = m_Regs->Eip;
@@ -800,6 +824,8 @@ void ResumableFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
 #endif // !WIN64EXCEPTIONS
 
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    ResumableFrame::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
+
     RETURN;
 }
 
@@ -823,7 +849,7 @@ void HijackFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     pRD->IsCallerSPValid      = FALSE;        // Don't add usage of this field.  This is only temporary.
 
     pRD->pCurrentContext->Eip = *PTR_PCODE(pRD->PCTAddr);
-    pRD->pCurrentContext->Esp = pRD->pCurrentContext->ResumeEsp = (DWORD)(pRD->PCTAddr + sizeof(TADDR));
+    pRD->pCurrentContext->Esp = (DWORD)(pRD->PCTAddr + sizeof(TADDR));
 
 #define RESTORE_REG(reg) { pRD->pCurrentContext->reg = m_Args->reg; pRD->pCurrentContextPointers->reg = &m_Args->reg; }
 #define CALLEE_SAVED_REGISTER(reg) RESTORE_REG(reg)
@@ -856,6 +882,8 @@ void HijackFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     pRD->SP  = (DWORD)(pRD->PCTAddr + sizeof(TADDR));
 
 #endif // WIN64EXCEPTIONS
+
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    HijackFrame::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
 }
 
 #endif  // FEATURE_HIJACK
@@ -874,6 +902,8 @@ void PInvokeCalliFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
     VASigCookie *pVASigCookie = GetVASigCookie();
     UpdateRegDisplayHelper(pRD, pVASigCookie->sizeOfArgs+sizeof(int));
+
+    LOG((LF_GCROOTS, LL_INFO100000, "STACKWALK    PInvokeCalliFrame::UpdateRegDisplay(ip:%p, sp:%p)\n", pRD->ControlPC, pRD->SP));
 
     RETURN;
 }
@@ -898,7 +928,7 @@ void TailCallFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
     pRD->IsCallerSPValid      = FALSE;        // Don't add usage of this field.  This is only temporary.
 
     pRD->pCurrentContext->Eip = *PTR_PCODE(pRD->PCTAddr);
-    pRD->pCurrentContext->Esp = pRD->pCurrentContext->ResumeEsp = (DWORD)(pRD->PCTAddr + sizeof(TADDR));
+    pRD->pCurrentContext->Esp = (DWORD)(pRD->PCTAddr + sizeof(TADDR));
 
     UpdateRegDisplayFromCalleeSavedRegisters(pRD, &m_regs);
     ClearRegDisplayArgumentAndScratchRegisters(pRD);
@@ -923,6 +953,14 @@ void TailCallFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
     RETURN;
 }
+
+#ifdef FEATURE_READYTORUN
+void DynamicHelperFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
+{
+    WRAPPER_NO_CONTRACT;
+    UpdateRegDisplayHelper(pRD, 0);
+}
+#endif // FEATURE_READYTORUN
 
 //------------------------------------------------------------------------
 // This is declared as returning WORD instead of PRD_TYPE because of
@@ -1038,7 +1076,7 @@ Stub *GenerateInitPInvokeFrameHelper()
     unsigned negSpace = FrameInfo.offsetOfFrameVptr;
 
     // mov esi, GetThread()
-    psl->X86EmitCurrentThreadFetch(kESI, (1<<kEDI)|(1<<kEBX)|(1<<kECX)|(1<<kEDX));
+    psl->X86EmitCurrentThreadFetch(kESI, (1 << kEDI) | (1 << kEBX) | (1 << kECX) | (1 << kEDX));
 
     // mov [edi + FrameInfo.offsetOfGSCookie], GetProcessGSCookie()
     psl->X86EmitOffsetModRM(0xc7, (X86Reg)0x0, kEDI, FrameInfo.offsetOfGSCookie - negSpace);
@@ -1286,30 +1324,6 @@ extern "C" VOID STDCALL StubRareDisableTHROWWorker(Thread *pThread)
     pThread->HandleThreadAbort();
 }
 
-#ifndef FEATURE_PAL
-// Note that this logic is copied below, in PopSEHRecords
-__declspec(naked)
-VOID __cdecl PopSEHRecords(LPVOID pTargetSP)
-{
-    // No CONTRACT possible on naked functions
-    STATIC_CONTRACT_NOTHROW;
-    STATIC_CONTRACT_GC_NOTRIGGER;
-
-    __asm{
-        mov     ecx, [esp+4]        ;; ecx <- pTargetSP
-        mov     eax, fs:[0]         ;; get current SEH record
-  poploop:
-        cmp     eax, ecx
-        jge     done
-        mov     eax, [eax]          ;; get next SEH record
-        jmp     poploop
-  done:
-        mov     fs:[0], eax
-        retn
-    }
-}
-#endif // FEATURE_PAL
-
 //////////////////////////////////////////////////////////////////////////////
 //
 // JITInterface
@@ -1462,7 +1476,7 @@ extern "C" DWORD __stdcall getcpuid(DWORD arg, unsigned char result[16])
             "  mov %%edx, 12(%[result])\n" \
         : "=a"(eax) /*output in eax*/\
         : "a"(arg), [result]"r"(result) /*inputs - arg in eax, result in any register*/\
-        : "eax", "ebx", "ecx", "edx", "memory" /* registers that are clobbered, *result is clobbered */
+        : "ebx", "ecx", "edx", "memory" /* registers that are clobbered, *result is clobbered */
         );
     return eax;
 }
@@ -1470,14 +1484,15 @@ extern "C" DWORD __stdcall getcpuid(DWORD arg, unsigned char result[16])
 extern "C" DWORD __stdcall getextcpuid(DWORD arg1, DWORD arg2, unsigned char result[16])
 {
     DWORD eax;
+    DWORD ecx;
     __asm("  cpuid\n" \
             "  mov %%eax, 0(%[result])\n" \
             "  mov %%ebx, 4(%[result])\n" \
             "  mov %%ecx, 8(%[result])\n" \
             "  mov %%edx, 12(%[result])\n" \
-        : "=a"(eax) /*output in eax*/\
+        : "=a"(eax), "=c"(ecx) /*output in eax, ecx is rewritten*/\
         : "c"(arg1), "a"(arg2), [result]"r"(result) /*inputs - arg1 in ecx, arg2 in eax, result in any register*/\
-        : "eax", "ebx", "ecx", "edx", "memory" /* registers that are clobbered, *result is clobbered */
+        : "ebx", "edx", "memory" /* registers that are clobbered, *result is clobbered */
         );
     return eax;
 }
@@ -1488,7 +1503,7 @@ extern "C" DWORD __stdcall xmmYmmStateSupport()
     __asm("  xgetbv\n" \
         : "=a"(eax) /*output in eax*/\
         : "c"(0) /*inputs - 0 in ecx*/\
-        : "eax", "edx" /* registers that are clobbered*/
+        : "edx" /* registers that are clobbered*/
         );
     // check OS has enabled both XMM and YMM state support
     return ((eax & 0x06) == 0x06) ? 1 : 0;
@@ -1593,6 +1608,13 @@ void UMEntryThunkCode::Encode(BYTE* pTargetCode, void* pvSecretParam)
     m_execstub   = (BYTE*) ((pTargetCode) - (4+((BYTE*)&m_execstub)));
 
     FlushInstructionCache(GetCurrentProcess(),GetEntryPoint(),sizeof(UMEntryThunkCode));
+}
+
+void UMEntryThunkCode::Poison()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    m_movEAX = X86_INSTR_INT3;
 }
 
 UMEntryThunk* UMEntryThunk::Decode(LPVOID pCallback)
@@ -1868,23 +1890,47 @@ PCODE DynamicHelpers::CreateReturnIndirConst(LoaderAllocator * pAllocator, TADDR
     END_DYNAMIC_HELPER_EMIT();
 }
 
+EXTERN_C VOID DynamicHelperArgsStub();
+
 PCODE DynamicHelpers::CreateHelperWithTwoArgs(LoaderAllocator * pAllocator, TADDR arg, PCODE target)
 {
+#ifdef UNIX_X86_ABI
+    BEGIN_DYNAMIC_HELPER_EMIT(18);
+#else
     BEGIN_DYNAMIC_HELPER_EMIT(12);
+#endif
 
+#ifdef UNIX_X86_ABI
+	// sub esp, 8
+	*p++ = 0x83;
+	*p++ = 0xec;
+	*p++ = 0x8;
+#else
     // pop eax
     *p++ = 0x58;
+#endif
 
     // push arg
     *p++ = 0x68;
     *(INT32 *)p = arg;
     p += 4;
 
+#ifdef UNIX_X86_ABI
+    // mov eax, target
+    *p++ = 0xB8;
+    *(INT32 *)p = target;
+    p += 4;
+#else
     // push eax
     *p++ = 0x50;
+#endif
 
     *p++ = X86_INSTR_JMP_REL32; // jmp rel32
+#ifdef UNIX_X86_ABI
+    *(INT32 *)p = rel32UsingJumpStub((INT32 *)p, (PCODE)DynamicHelperArgsStub);
+#else
     *(INT32 *)p = rel32UsingJumpStub((INT32 *)p, target);
+#endif
     p += 4;
 
     END_DYNAMIC_HELPER_EMIT();
@@ -1892,10 +1938,21 @@ PCODE DynamicHelpers::CreateHelperWithTwoArgs(LoaderAllocator * pAllocator, TADD
 
 PCODE DynamicHelpers::CreateHelperWithTwoArgs(LoaderAllocator * pAllocator, TADDR arg, TADDR arg2, PCODE target)
 {
+#ifdef UNIX_X86_ABI
+    BEGIN_DYNAMIC_HELPER_EMIT(23);
+#else
     BEGIN_DYNAMIC_HELPER_EMIT(17);
+#endif
 
+#ifdef UNIX_X86_ABI
+	// sub esp, 4
+	*p++ = 0x83;
+	*p++ = 0xec;
+	*p++ = 0x4;
+#else
     // pop eax
     *p++ = 0x58;
+#endif
 
     // push arg
     *p++ = 0x68;
@@ -1907,11 +1964,22 @@ PCODE DynamicHelpers::CreateHelperWithTwoArgs(LoaderAllocator * pAllocator, TADD
     *(INT32 *)p = arg2;
     p += 4;
 
+#ifdef UNIX_X86_ABI
+    // mov eax, target
+    *p++ = 0xB8;
+    *(INT32 *)p = target;
+    p += 4;
+#else
     // push eax
     *p++ = 0x50;
+#endif
 
     *p++ = X86_INSTR_JMP_REL32; // jmp rel32
+#ifdef UNIX_X86_ABI
+    *(INT32 *)p = rel32UsingJumpStub((INT32 *)p, (PCODE)DynamicHelperArgsStub);
+#else
     *(INT32 *)p = rel32UsingJumpStub((INT32 *)p, target);
+#endif
     p += 4;
 
     END_DYNAMIC_HELPER_EMIT();

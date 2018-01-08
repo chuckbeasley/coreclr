@@ -4,11 +4,9 @@
 
 // 
 
-using System.Diagnostics.Contracts;
 
 namespace System.Collections
 {
-    [Serializable]
     internal class CompatibleComparer : IEqualityComparer
     {
         private IComparer _comparer;
@@ -33,7 +31,7 @@ namespace System.Collections
             if (ia != null)
                 return ia.CompareTo(b);
 
-            throw new ArgumentException(Environment.GetResourceString("Argument_ImplementIComparable"));
+            throw new ArgumentException(SR.Argument_ImplementIComparable);
         }
 
         public new bool Equals(Object a, Object b)
@@ -47,7 +45,6 @@ namespace System.Collections
             {
                 throw new ArgumentNullException(nameof(obj));
             }
-            Contract.EndContractBlock();
 
             if (_hcp != null)
                 return _hcp.GetHashCode(obj);

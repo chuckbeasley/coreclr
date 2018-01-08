@@ -21,7 +21,6 @@ using System.Text;
 using Microsoft.Win32.SafeHandles;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 namespace System.IO
 {
@@ -93,14 +92,14 @@ namespace System.IO
                 int index = 0;
                 long fileLength = fs.Length;
                 if (fileLength > Int32.MaxValue)
-                    throw new IOException(Environment.GetResourceString("IO.IO_FileTooLong2GB"));
+                    throw new IOException(SR.IO_FileTooLong2GB);
                 int count = (int)fileLength;
                 bytes = new byte[count];
                 while (count > 0)
                 {
                     int n = fs.Read(bytes, index, count);
                     if (n == 0)
-                        __Error.EndOfFile();
+                        throw Error.GetEndOfFile();
                     index += n;
                     count -= n;
                 }
@@ -114,17 +113,16 @@ namespace System.IO
             if (path == null)
                 throw new ArgumentNullException(nameof(path));
             if (path.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyPath"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_EmptyPath);
 
             return InternalReadAllLines(path, Encoding.UTF8);
         }
 
         private static String[] InternalReadAllLines(String path, Encoding encoding)
         {
-            Contract.Requires(path != null);
-            Contract.Requires(encoding != null);
-            Contract.Requires(path.Length != 0);
+            Debug.Assert(path != null);
+            Debug.Assert(encoding != null);
+            Debug.Assert(path.Length != 0);
 
             String line;
             List<String> lines = new List<String>();
@@ -150,13 +148,16 @@ namespace System.IO
                 // Remove trialing slash since this can cause grief to FindFirstFile. You will get an invalid argument error
                 String tempPath = path.TrimEnd(new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar });
 
+#if !PLATFORM_UNIX
                 // For floppy drives, normally the OS will pop up a dialog saying
                 // there is no disk in drive A:, please insert one.  We don't want that.
-                // SetErrorMode will let us disable this, but we should set the error
+                // SetThreadErrorMode will let us disable this, but we should set the error
                 // mode back, since this may have wide-ranging effects.
-                int oldMode = Win32Native.SetErrorMode(Win32Native.SEM_FAILCRITICALERRORS);
+                uint oldMode;
+                bool errorModeSuccess = Interop.Kernel32.SetThreadErrorMode(Interop.Kernel32.SEM_FAILCRITICALERRORS, out oldMode);
                 try
                 {
+#endif
                     bool error = false;
                     SafeFindHandle handle = Win32Native.FindFirstFile(tempPath, findData);
                     try
@@ -192,36 +193,46 @@ namespace System.IO
                             // if we're already returning an error, don't throw another one. 
                             if (!error)
                             {
-                                Debug.Assert(false, "File::FillAttributeInfo - FindClose failed!");
-                                __Error.WinIOError();
+                                Debug.Fail("File::FillAttributeInfo - FindClose failed!");
+                                throw Win32Marshal.GetExceptionForLastWin32Error();
                             }
                         }
                     }
+#if !PLATFORM_UNIX
                 }
                 finally
                 {
-                    Win32Native.SetErrorMode(oldMode);
+                    if (errorModeSuccess)
+                        Interop.Kernel32.SetThreadErrorMode(oldMode, out oldMode);
                 }
+#endif
 
                 // Copy the information to data
                 data.PopulateFrom(findData);
             }
             else
             {
+                bool success = false;
+
+#if !PLATFORM_UNIX
                 // For floppy drives, normally the OS will pop up a dialog saying
                 // there is no disk in drive A:, please insert one.  We don't want that.
-                // SetErrorMode will let us disable this, but we should set the error
+                // SetThreadErrorMode will let us disable this, but we should set the error
                 // mode back, since this may have wide-ranging effects.
-                bool success = false;
-                int oldMode = Win32Native.SetErrorMode(Win32Native.SEM_FAILCRITICALERRORS);
+                uint oldMode;
+                bool errorModeSuccess = Interop.Kernel32.SetThreadErrorMode(Interop.Kernel32.SEM_FAILCRITICALERRORS, out oldMode);
                 try
                 {
+#endif
                     success = Win32Native.GetFileAttributesEx(path, GetFileExInfoStandard, ref data);
+#if !PLATFORM_UNIX
                 }
                 finally
                 {
-                    Win32Native.SetErrorMode(oldMode);
+                    if (errorModeSuccess)
+                        Interop.Kernel32.SetThreadErrorMode(oldMode, out oldMode);
                 }
+#endif
 
                 if (!success)
                 {

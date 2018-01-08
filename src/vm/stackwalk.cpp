@@ -24,10 +24,6 @@
 #define PROCESS_EXPLICIT_FRAME_BEFORE_MANAGED_FRAME
 #endif
 
-#ifdef _DEBUG
-void* forceFrame;   // Variable used to force a local variable to the frame
-#endif
-
 CrawlFrame::CrawlFrame()
 {
     LIMITED_METHOD_DAC_CONTRACT;
@@ -1133,7 +1129,7 @@ void StackFrameIterator::CommonCtor(Thread * pThread, PTR_Frame pFrame, ULONG32 
     m_fDidFuncletReportGCReferences = true;
 #endif // WIN64EXCEPTIONS
 
-#if !defined(_TARGET_X86_)
+#if defined(RECORD_RESUMABLE_FRAME_SP)
     m_pvResumableFrameTargetSP = NULL;
 #endif
 } // StackFrameIterator::CommonCtor()
@@ -2640,7 +2636,7 @@ StackWalkAction StackFrameIterator::NextRaw(void)
             {
                 m_crawl.pFrame->UpdateRegDisplay(m_crawl.pRD);
 
-#if !defined(_TARGET_X86_)
+#if defined(RECORD_RESUMABLE_FRAME_SP)
                 CONSISTENCY_CHECK(NULL == m_pvResumableFrameTargetSP);
 
                 if (m_crawl.isFirst)
@@ -2668,7 +2664,7 @@ StackWalkAction StackFrameIterator::NextRaw(void)
                     EECodeManager::EnsureCallerContextIsValid(m_crawl.pRD, m_crawl.GetStackwalkCacheEntry());
                     m_pvResumableFrameTargetSP = (LPVOID)GetSP(m_crawl.pRD->pCallerContext);
                 }
-#endif // !_TARGET_X86_
+#endif // RECORD_RESUMABLE_FRAME_SP
 
 
 #if defined(_DEBUG) && !defined(DACCESS_COMPILE) && !defined(WIN64EXCEPTIONS)
@@ -3119,7 +3115,7 @@ void StackFrameIterator::PreProcessingForManagedFrames(void)
     WRAPPER_NO_CONTRACT;
     SUPPORTS_DAC;
 
-#if !defined(_TARGET_X86_)
+#if defined(RECORD_RESUMABLE_FRAME_SP)
     if (m_pvResumableFrameTargetSP)
     {
         // We expect that if we saw a resumable frame, the next managed
@@ -3133,7 +3129,7 @@ void StackFrameIterator::PreProcessingForManagedFrames(void)
         m_pvResumableFrameTargetSP = NULL;
         m_crawl.isFirst = true;
     }
-#endif // !_TARGET_X86_
+#endif // RECORD_RESUMABLE_FRAME_SP
 
 #if !defined(DACCESS_COMPILE)
     m_pCachedGSCookie = (GSCookie*)m_crawl.GetCodeManager()->GetGSCookieAddr(
@@ -3149,7 +3145,10 @@ void StackFrameIterator::PreProcessingForManagedFrames(void)
 
     INDEBUG(m_crawl.pThread->DebugLogStackWalkInfo(&m_crawl, "CONSIDER", m_uFramesProcessed));
 
-#if defined(_DEBUG) && defined(_TARGET_X86_) && !defined(DACCESS_COMPILE)
+#if defined(_DEBUG) && !defined(WIN64EXCEPTIONS) && !defined(DACCESS_COMPILE)
+    //
+    // VM is responsible for synchronization on non-funclet EH model.
+    //
     // m_crawl.GetThisPointer() requires full unwind
     // In GC's relocate phase, objects is not verifiable
     if ( !(m_flags & (LIGHTUNWIND | QUICKUNWIND | ALLOW_INVALID_OBJECTS)) && 
@@ -3173,7 +3172,7 @@ void StackFrameIterator::PreProcessingForManagedFrames(void)
 
         END_GCX_ASSERT_COOP;
     }
-#endif // _DEBUG && _TARGET_X86_ && !DACCESS_COMPILE
+#endif // _DEBUG && !WIN64EXCEPTIONS && !DACCESS_COMPILE
 
     m_frameState = SFITER_FRAMELESS_METHOD;
 } // StackFrameIterator::PreProcessingForManagedFrames()

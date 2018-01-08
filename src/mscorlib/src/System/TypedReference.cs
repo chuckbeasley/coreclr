@@ -13,7 +13,6 @@ namespace System
     using CultureInfo = System.Globalization.CultureInfo;
     using FieldInfo = System.Reflection.FieldInfo;
     using System.Runtime.Versioning;
-    using System.Diagnostics.Contracts;
 
     [CLSCompliant(false)]
     [System.Runtime.Versioning.NonVersionable] // This only applies to field layout
@@ -29,9 +28,8 @@ namespace System
                 throw new ArgumentNullException(nameof(target));
             if (flds == null)
                 throw new ArgumentNullException(nameof(flds));
-            Contract.EndContractBlock();
             if (flds.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Arg_ArrayZeroError"));
+                throw new ArgumentException(SR.Arg_ArrayZeroError);
 
             IntPtr[] fields = new IntPtr[flds.Length];
             // For proper handling of Nullable<T> don't change GetType() to something like 'IsAssignableFrom'
@@ -41,20 +39,20 @@ namespace System
             {
                 RuntimeFieldInfo field = flds[i] as RuntimeFieldInfo;
                 if (field == null)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_MustBeRuntimeFieldInfo"));
+                    throw new ArgumentException(SR.Argument_MustBeRuntimeFieldInfo);
 
                 if (field.IsInitOnly || field.IsStatic)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_TypedReferenceInvalidField"));
+                    throw new ArgumentException(SR.Argument_TypedReferenceInvalidField);
 
                 if (targetType != field.GetDeclaringTypeInternal() && !targetType.IsSubclassOf(field.GetDeclaringTypeInternal()))
-                    throw new MissingMemberException(Environment.GetResourceString("MissingMemberTypeRef"));
+                    throw new MissingMemberException(SR.MissingMemberTypeRef);
 
                 RuntimeType fieldType = (RuntimeType)field.FieldType;
                 if (fieldType.IsPrimitive)
-                    throw new ArgumentException(Environment.GetResourceString("Arg_TypeRefPrimitve"));
+                    throw new ArgumentException(SR.Arg_TypeRefPrimitve);
 
                 if (i < (flds.Length - 1) && !fieldType.IsValueType)
-                    throw new MissingMemberException(Environment.GetResourceString("MissingMemberNestErr"));
+                    throw new MissingMemberException(SR.MissingMemberNestErr);
 
                 fields[i] = field.FieldHandle.Value;
                 targetType = fieldType;
@@ -84,7 +82,7 @@ namespace System
 
         public override bool Equals(Object o)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_NYI"));
+            throw new NotSupportedException(SR.NotSupported_NYI);
         }
 
         public unsafe static Object ToObject(TypedReference value)
@@ -99,7 +97,7 @@ namespace System
         {
             get
             {
-                return Value.IsNull() && Type.IsNull();
+                return Value == IntPtr.Zero && Type == IntPtr.Zero;
             }
         }
 

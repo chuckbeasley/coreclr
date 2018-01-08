@@ -4,6 +4,7 @@
 
 
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -106,7 +107,7 @@ namespace Microsoft.Win32
                     basekey = Registry.CurrentConfig;
                     break;
                 default:
-                    throw new ArgumentException(Environment.GetResourceString("Arg_RegInvalidKeyName", nameof(keyName)));
+                    throw new ArgumentException(SR.Format(SR.Arg_RegInvalidKeyName, nameof(keyName)));
             }
             if (i == -1 || i == keyName.Length)
             {
@@ -123,7 +124,7 @@ namespace Microsoft.Win32
         {
             string subKeyName;
             RegistryKey basekey = GetBaseKeyFromKeyName(keyName, out subKeyName);
-            BCLDebug.Assert(basekey != null, "basekey can't be null.");
+            Debug.Assert(basekey != null, "basekey can't be null.");
             RegistryKey key = basekey.OpenSubKey(subKeyName);
             if (key == null)
             { // if the key doesn't exist, do nothing

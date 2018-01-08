@@ -61,13 +61,6 @@ DeleteFileA(
 PALIMPORT
 BOOL
 PALAPI
-MoveFileA(
-     IN LPCSTR lpExistingFileName,
-     IN LPCSTR lpNewFileName);
-
-PALIMPORT
-BOOL
-PALAPI
 MoveFileExA(
         IN LPCSTR lpExistingFileName,
         IN LPCSTR lpNewFileName,
@@ -289,12 +282,6 @@ BOOL
 PALAPI
 FreeEnvironmentStringsA(
             IN LPSTR);
-
-PALIMPORT
-BOOL
-PALAPI
-GetVersionExA(
-          IN OUT LPOSVERSIONINFOA lpVersionInformation);
 
 PALIMPORT
 BOOL

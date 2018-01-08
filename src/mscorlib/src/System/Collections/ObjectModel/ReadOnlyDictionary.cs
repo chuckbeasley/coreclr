@@ -15,21 +15,16 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 namespace System.Collections.ObjectModel
 {
-    [Serializable]
-    [DebuggerTypeProxy(typeof(Mscorlib_DictionaryDebugView<,>))]
+    [DebuggerTypeProxy(typeof(IDictionaryDebugView<,>))]
     [DebuggerDisplay("Count = {Count}")]
-    public class ReadOnlyDictionary<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue>
+    internal class ReadOnlyDictionary<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue>
     {
         private readonly IDictionary<TKey, TValue> m_dictionary;
-        [NonSerialized]
         private Object m_syncRoot;
-        [NonSerialized]
         private KeyCollection m_keys;
-        [NonSerialized]
         private ValueCollection m_values;
 
         public ReadOnlyDictionary(IDictionary<TKey, TValue> dictionary)
@@ -38,7 +33,6 @@ namespace System.Collections.ObjectModel
             {
                 throw new ArgumentNullException(nameof(dictionary));
             }
-            Contract.EndContractBlock();
             m_dictionary = dictionary;
         }
 
@@ -51,7 +45,6 @@ namespace System.Collections.ObjectModel
         {
             get
             {
-                Contract.Ensures(Contract.Result<KeyCollection>() != null);
                 if (m_keys == null)
                 {
                     m_keys = new KeyCollection(m_dictionary.Keys);
@@ -64,7 +57,6 @@ namespace System.Collections.ObjectModel
         {
             get
             {
-                Contract.Ensures(Contract.Result<ValueCollection>() != null);
                 if (m_values == null)
                 {
                     m_values = new ValueCollection(m_dictionary.Values);
@@ -365,7 +357,6 @@ namespace System.Collections.ObjectModel
             }
         }
 
-        [Serializable]
         private struct DictionaryEnumerator : IDictionaryEnumerator
         {
             private readonly IDictionary<TKey, TValue> m_dictionary;
@@ -430,13 +421,11 @@ namespace System.Collections.ObjectModel
 
         #endregion IReadOnlyDictionary members
 
-        [DebuggerTypeProxy(typeof(Mscorlib_CollectionDebugView<>))]
+        [DebuggerTypeProxy(typeof(ICollectionDebugView<>))]
         [DebuggerDisplay("Count = {Count}")]
-        [Serializable]
         public sealed class KeyCollection : ICollection<TKey>, ICollection, IReadOnlyCollection<TKey>
         {
             private readonly ICollection<TKey> m_collection;
-            [NonSerialized]
             private Object m_syncRoot;
 
             internal KeyCollection(ICollection<TKey> collection)
@@ -541,13 +530,11 @@ namespace System.Collections.ObjectModel
             #endregion
         }
 
-        [DebuggerTypeProxy(typeof(Mscorlib_CollectionDebugView<>))]
+        [DebuggerTypeProxy(typeof(ICollectionDebugView<>))]
         [DebuggerDisplay("Count = {Count}")]
-        [Serializable]
         public sealed class ValueCollection : ICollection<TValue>, ICollection, IReadOnlyCollection<TValue>
         {
             private readonly ICollection<TValue> m_collection;
-            [NonSerialized]
             private Object m_syncRoot;
 
             internal ValueCollection(ICollection<TValue> collection)

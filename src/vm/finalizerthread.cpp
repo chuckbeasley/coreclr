@@ -484,7 +484,7 @@ void FinalizerThread::WaitForFinalizerEvent (CLREvent *event)
         case (WAIT_OBJECT_0 + kLowMemoryNotification):
             //short on memory GC immediately
             GetFinalizerThread()->DisablePreemptiveGC();
-            GCHeapUtilities::GetGCHeap()->GarbageCollect(0, TRUE);
+            GCHeapUtilities::GetGCHeap()->GarbageCollect(0, true);
             GetFinalizerThread()->EnablePreemptiveGC();
             //wait only on the event for 2s
             switch (event->Wait(2000, FALSE))
@@ -575,7 +575,7 @@ VOID FinalizerThread::FinalizerThreadWorker(void *args)
         {
             s_forcedGCInProgress = true;
             GetFinalizerThread()->DisablePreemptiveGC();
-            GCHeapUtilities::GetGCHeap()->GarbageCollect(2, FALSE, collection_blocking);
+            GCHeapUtilities::GetGCHeap()->GarbageCollect(2, false, collection_blocking);
             GetFinalizerThread()->EnablePreemptiveGC();
             s_forcedGCInProgress = false;
             
@@ -645,7 +645,7 @@ VOID FinalizerThread::FinalizerThreadWorker(void *args)
             }
             else if (UnloadingAppDomain == NULL)
                 break;
-            else if (!GCHeapUtilities::GetGCHeap()->FinalizeAppDomain(UnloadingAppDomain, fRunFinalizersOnUnload))
+            else if (!GCHeapUtilities::GetGCHeap()->FinalizeAppDomain(UnloadingAppDomain, !!fRunFinalizersOnUnload))
             {
                 break;
             }
@@ -743,6 +743,8 @@ DWORD WINAPI FinalizerThread::FinalizerThreadStart(void *args)
         {
 #endif
             GetFinalizerThread()->SetBackground(TRUE);
+
+            EnsureYieldProcessorNormalizedInitialized();
 
 #ifdef FEATURE_PROFAPI_ATTACH_DETACH 
             // Add the Profiler Attach Event to the array of event handles that the
@@ -909,7 +911,7 @@ void FinalizerThread::FinalizerThreadCreate()
     // actual thread terminates.
     GetFinalizerThread()->IncExternalCount();
 
-    if (GetFinalizerThread()->CreateNewThread(0, &FinalizerThreadStart, NULL))
+    if (GetFinalizerThread()->CreateNewThread(0, &FinalizerThreadStart, NULL, W("Finalizer")) )
     {
         DWORD dwRet = GetFinalizerThread()->StartThread();
 
@@ -1345,6 +1347,8 @@ BOOL FinalizerThread::FinalizerThreadWatchDogHelper()
         }
         ULONGLONG dwCurTickCount = CLRGetTickCount64();
         if (pThread && pThread->m_State & (Thread::TS_UserSuspendPending | Thread::TS_DebugSuspendPending)) {
+            // CoreCLR does not support user-requested thread suspension
+            _ASSERTE(!(pThread->m_State & Thread::TS_UserSuspendPending));
             dwBeginTickCount = dwCurTickCount;
         }
         if (dwCurTickCount - dwBeginTickCount >= maxTotalWait)

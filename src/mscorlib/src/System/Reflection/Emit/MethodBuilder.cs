@@ -16,7 +16,6 @@ namespace System.Reflection.Emit
     using System.Collections.Generic;
     using System.Runtime.InteropServices;
     using System.Diagnostics;
-    using System.Diagnostics.Contracts;
 
     public sealed class MethodBuilder : MethodInfo
     {
@@ -84,14 +83,13 @@ namespace System.Reflection.Emit
                 throw new ArgumentNullException(nameof(name));
 
             if (name.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), nameof(name));
+                throw new ArgumentException(SR.Argument_EmptyName, nameof(name));
 
             if (name[0] == '\0')
-                throw new ArgumentException(Environment.GetResourceString("Argument_IllegalName"), nameof(name));
+                throw new ArgumentException(SR.Argument_IllegalName, nameof(name));
 
             if (mod == null)
                 throw new ArgumentNullException(nameof(mod));
-            Contract.EndContractBlock();
 
             if (parameterTypes != null)
             {
@@ -124,7 +122,7 @@ namespace System.Reflection.Emit
             else if ((attributes & MethodAttributes.Virtual) != 0)
             {
                 // A method can't be both static and virtual
-                throw new ArgumentException(Environment.GetResourceString("Arg_NoStaticVirtual"));
+                throw new ArgumentException(SR.Arg_NoStaticVirtual);
             }
 
             if ((attributes & MethodAttributes.SpecialName) != MethodAttributes.SpecialName)
@@ -135,7 +133,7 @@ namespace System.Reflection.Emit
                     if ((attributes & (MethodAttributes.Abstract | MethodAttributes.Virtual)) !=
                         (MethodAttributes.Abstract | MethodAttributes.Virtual) &&
                         (attributes & MethodAttributes.Static) == 0)
-                        throw new ArgumentException(Environment.GetResourceString("Argument_BadAttributeOnInterfaceMethod"));
+                        throw new ArgumentException(SR.Argument_BadAttributeOnInterfaceMethod);
                 }
             }
 
@@ -195,7 +193,6 @@ namespace System.Reflection.Emit
             {
                 throw new ArgumentNullException(nameof(il));
             }
-            Contract.EndContractBlock();
 
             __ExceptionInfo[] excp;
             int counter = 0;
@@ -212,7 +209,7 @@ namespace System.Reflection.Emit
 
             if (m_bIsBaked)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_MethodHasBody"));
+                throw new InvalidOperationException(SR.InvalidOperation_MethodHasBody);
             }
 
             if (il.m_methodBuilder != this && il.m_methodBuilder != null)
@@ -221,7 +218,7 @@ namespace System.Reflection.Emit
                 // through MethodBuilder::GetILGenerator.
                 //
 
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_BadILGeneratorUsage"));
+                throw new InvalidOperationException(SR.InvalidOperation_BadILGeneratorUsage);
             }
 
             ThrowIfShouldNotHaveBody();
@@ -229,7 +226,7 @@ namespace System.Reflection.Emit
             if (il.m_ScopeTree.m_iOpenScopeCount != 0)
             {
                 // There are still unclosed local scope
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_OpenLocalVariableScope"));
+                throw new InvalidOperationException(SR.InvalidOperation_OpenLocalVariableScope);
             }
 
 
@@ -335,7 +332,7 @@ namespace System.Reflection.Emit
         internal override Type[] GetParameterTypes()
         {
             if (m_parameterTypes == null)
-                m_parameterTypes = EmptyArray<Type>.Value;
+                m_parameterTypes = Array.Empty<Type>();
 
             return m_parameterTypes;
         }
@@ -355,7 +352,7 @@ namespace System.Reflection.Emit
             }
             else
             {
-                Debug.Assert(false, "We should never get here!");
+                Debug.Fail("We should never get here!");
                 return null;
             }
         }
@@ -375,7 +372,7 @@ namespace System.Reflection.Emit
         internal SignatureHelper GetMethodSignature()
         {
             if (m_parameterTypes == null)
-                m_parameterTypes = EmptyArray<Type>.Value;
+                m_parameterTypes = Array.Empty<Type>();
 
             m_signature = SignatureHelper.GetMethodSigHelper(m_module, m_callingConvention, m_inst != null ? m_inst.Length : 0,
                 m_returnType == null ? typeof(void) : m_returnType, m_returnTypeRequiredCustomModifiers, m_returnTypeOptionalCustomModifiers,
@@ -559,7 +556,7 @@ namespace System.Reflection.Emit
         #region MethodBase Overrides
         public override Object Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override MethodImplAttributes GetMethodImplementationFlags()
@@ -579,7 +576,7 @@ namespace System.Reflection.Emit
 
         public override RuntimeMethodHandle MethodHandle
         {
-            get { throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule")); }
+            get { throw new NotSupportedException(SR.NotSupported_DynamicModule); }
         }
 
         public override bool IsSecurityCritical
@@ -612,11 +609,10 @@ namespace System.Reflection.Emit
             }
         }
 
-        [Pure]
         public override ParameterInfo[] GetParameters()
         {
             if (!m_bIsBaked || m_containingType == null || m_containingType.BakedRuntimeType == null)
-                throw new NotSupportedException(Environment.GetResourceString("InvalidOperation_TypeNotCreated"));
+                throw new NotSupportedException(SR.InvalidOperation_TypeNotCreated);
 
             MethodInfo rmi = m_containingType.GetMethod(m_strName, m_parameterTypes);
 
@@ -628,7 +624,7 @@ namespace System.Reflection.Emit
             get
             {
                 if (!m_bIsBaked || m_containingType == null || m_containingType.BakedRuntimeType == null)
-                    throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_TypeNotCreated"));
+                    throw new InvalidOperationException(SR.InvalidOperation_TypeNotCreated);
 
                 MethodInfo rmi = m_containingType.GetMethod(m_strName, m_parameterTypes);
 
@@ -640,17 +636,17 @@ namespace System.Reflection.Emit
         #region ICustomAttributeProvider Implementation
         public override Object[] GetCustomAttributes(bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override Object[] GetCustomAttributes(Type attributeType, bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override bool IsDefined(Type attributeType, bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         #endregion
@@ -678,18 +674,17 @@ namespace System.Reflection.Emit
                 throw new ArgumentNullException(nameof(names));
 
             if (names.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Arg_EmptyArray"), nameof(names));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Arg_EmptyArray, nameof(names));
 
             if (m_inst != null)
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_GenericParametersAlreadySet"));
+                throw new InvalidOperationException(SR.InvalidOperation_GenericParametersAlreadySet);
 
             for (int i = 0; i < names.Length; i++)
                 if (names[i] == null)
                     throw new ArgumentNullException(nameof(names));
 
             if (m_tkMethod.Token != 0)
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_MethodBuilderBaked"));
+                throw new InvalidOperationException(SR.InvalidOperation_MethodBuilderBaked);
 
             m_bIsGenMethDef = true;
             m_inst = new GenericTypeParameterBuilder[names.Length];
@@ -824,14 +819,13 @@ namespace System.Reflection.Emit
         public ParameterBuilder DefineParameter(int position, ParameterAttributes attributes, String strParamName)
         {
             if (position < 0)
-                throw new ArgumentOutOfRangeException(Environment.GetResourceString("ArgumentOutOfRange_ParamSequence"));
-            Contract.EndContractBlock();
+                throw new ArgumentOutOfRangeException(SR.ArgumentOutOfRange_ParamSequence);
 
             ThrowIfGeneric();
             m_containingType.ThrowIfCreated();
 
             if (position > 0 && (m_parameterTypes == null || position > m_parameterTypes.Length))
-                throw new ArgumentOutOfRangeException(Environment.GetResourceString("ArgumentOutOfRange_ParamSequence"));
+                throw new ArgumentOutOfRangeException(SR.ArgumentOutOfRange_ParamSequence);
 
             attributes = attributes & ~ParameterAttributes.ReservedMask;
             return new ParameterBuilder(this, position, attributes, strParamName);
@@ -859,8 +853,6 @@ namespace System.Reflection.Emit
 
         public ILGenerator GetILGenerator()
         {
-            Contract.Ensures(Contract.Result<ILGenerator>() != null);
-
             ThrowIfGeneric();
             ThrowIfShouldNotHaveBody();
 
@@ -871,8 +863,6 @@ namespace System.Reflection.Emit
 
         public ILGenerator GetILGenerator(int size)
         {
-            Contract.Ensures(Contract.Result<ILGenerator>() != null);
-
             ThrowIfGeneric();
             ThrowIfShouldNotHaveBody();
 
@@ -890,7 +880,7 @@ namespace System.Reflection.Emit
             {
                 // cannot attach method body if methodimpl is marked not marked as managed IL
                 //
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_ShouldNotHaveMethodBody"));
+                throw new InvalidOperationException(SR.InvalidOperation_ShouldNotHaveMethodBody);
             }
         }
 
@@ -922,7 +912,6 @@ namespace System.Reflection.Emit
                 throw new ArgumentNullException(nameof(con));
             if (binaryAttribute == null)
                 throw new ArgumentNullException(nameof(binaryAttribute));
-            Contract.EndContractBlock();
 
             ThrowIfGeneric();
 
@@ -939,7 +928,6 @@ namespace System.Reflection.Emit
         {
             if (customBuilder == null)
                 throw new ArgumentNullException(nameof(customBuilder));
-            Contract.EndContractBlock();
 
             ThrowIfGeneric();
 
@@ -1115,7 +1103,7 @@ namespace System.Reflection.Emit
     /// Describes exception handler in a method body.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    internal struct ExceptionHandler : IEquatable<ExceptionHandler>
+    internal readonly struct ExceptionHandler : IEquatable<ExceptionHandler>
     {
         // Keep in sync with unmanged structure. 
         internal readonly int m_exceptionClass;

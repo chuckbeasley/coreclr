@@ -9,9 +9,9 @@ using System.Security;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
+using Internal.Runtime.CompilerServices;
 
 namespace System.Runtime.InteropServices.WindowsRuntime
 {
@@ -28,7 +28,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     {
         private IMapViewToIReadOnlyDictionaryAdapter()
         {
-            Debug.Assert(false, "This class is never instantiated");
+            Debug.Fail("This class is never instantiated");
         }
 
         // V this[K key] { get }
@@ -36,16 +36,15 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
-            Contract.EndContractBlock();
 
-            IMapView<K, V> _this = JitHelpers.UnsafeCast<IMapView<K, V>>(this);
+            IMapView<K, V> _this = Unsafe.As<IMapView<K, V>>(this);
             return Lookup(_this, key);
         }
 
         // IEnumerable<K> Keys { get }
         internal IEnumerable<K> Keys<K, V>()
         {
-            IMapView<K, V> _this = JitHelpers.UnsafeCast<IMapView<K, V>>(this);
+            IMapView<K, V> _this = Unsafe.As<IMapView<K, V>>(this);
             IReadOnlyDictionary<K, V> roDictionary = (IReadOnlyDictionary<K, V>)_this;
             return new ReadOnlyDictionaryKeyCollection<K, V>(roDictionary);
         }
@@ -53,19 +52,18 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         // IEnumerable<V> Values { get }
         internal IEnumerable<V> Values<K, V>()
         {
-            IMapView<K, V> _this = JitHelpers.UnsafeCast<IMapView<K, V>>(this);
+            IMapView<K, V> _this = Unsafe.As<IMapView<K, V>>(this);
             IReadOnlyDictionary<K, V> roDictionary = (IReadOnlyDictionary<K, V>)_this;
             return new ReadOnlyDictionaryValueCollection<K, V>(roDictionary);
         }
 
         // bool ContainsKey(K key)
-        [Pure]
         internal bool ContainsKey<K, V>(K key)
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
 
-            IMapView<K, V> _this = JitHelpers.UnsafeCast<IMapView<K, V>>(this);
+            IMapView<K, V> _this = Unsafe.As<IMapView<K, V>>(this);
             return _this.HasKey(key);
         }
 
@@ -75,7 +73,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
 
-            IMapView<K, V> _this = JitHelpers.UnsafeCast<IMapView<K, V>>(this);
+            IMapView<K, V> _this = Unsafe.As<IMapView<K, V>>(this);
 
             // It may be faster to call HasKey then Lookup.  On failure, we would otherwise
             // throw an exception from Lookup.
@@ -92,7 +90,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)  // Still may hit this case due to a race condition
             {
-                if (__HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex._HResult)
                 {
                     value = default(V);
                     return false;
@@ -105,7 +103,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
         private static V Lookup<K, V>(IMapView<K, V> _this, K key)
         {
-            Contract.Requires(null != key);
+            Debug.Assert(null != key);
 
             try
             {
@@ -113,8 +111,8 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (__HResults.E_BOUNDS == ex._HResult)
-                    throw new KeyNotFoundException(Environment.GetResourceString("Arg_KeyNotFound"));
+                if (HResults.E_BOUNDS == ex._HResult)
+                    throw new KeyNotFoundException(SR.Format(SR.Arg_KeyNotFoundWithKey, key.ToString()));
                 throw;
             }
         }
@@ -123,7 +121,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     }
 
     // Note: One day we may make these return IReadOnlyCollection<T>
-    [Serializable]
     [DebuggerDisplay("Count = {Count}")]
     internal sealed class ReadOnlyDictionaryKeyCollection<TKey, TValue> : IEnumerable<TKey>
     {
@@ -145,9 +142,9 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (index < 0)
                 throw new ArgumentOutOfRangeException(nameof(index));
             if (array.Length <= index && this.Count > 0)
-                throw new ArgumentException(Environment.GetResourceString("Arg_IndexOutOfRangeException"));
+                throw new ArgumentException(SR.Arg_IndexOutOfRangeException);
             if (array.Length - index < dictionary.Count)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InsufficientSpaceToCopyCollection"));
+                throw new ArgumentException(SR.Argument_InsufficientSpaceToCopyCollection);
 
             int i = index;
             foreach (KeyValuePair<TKey, TValue> mapping in dictionary)
@@ -178,7 +175,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     }  // public class ReadOnlyDictionaryKeyCollection<TKey, TValue>
 
 
-    [Serializable]
     internal sealed class ReadOnlyDictionaryKeyEnumerator<TKey, TValue> : IEnumerator<TKey>
     {
         private readonly IReadOnlyDictionary<TKey, TValue> dictionary;
@@ -220,7 +216,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     }  // class ReadOnlyDictionaryKeyEnumerator<TKey, TValue>
 
 
-    [Serializable]
     [DebuggerDisplay("Count = {Count}")]
     internal sealed class ReadOnlyDictionaryValueCollection<TKey, TValue> : IEnumerable<TValue>
     {
@@ -242,9 +237,9 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (index < 0)
                 throw new ArgumentOutOfRangeException(nameof(index));
             if (array.Length <= index && this.Count > 0)
-                throw new ArgumentException(Environment.GetResourceString("Arg_IndexOutOfRangeException"));
+                throw new ArgumentException(SR.Arg_IndexOutOfRangeException);
             if (array.Length - index < dictionary.Count)
-                throw new ArgumentException(Environment.GetResourceString("Argument_InsufficientSpaceToCopyCollection"));
+                throw new ArgumentException(SR.Argument_InsufficientSpaceToCopyCollection);
 
             int i = index;
             foreach (KeyValuePair<TKey, TValue> mapping in dictionary)
@@ -279,7 +274,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     }  // public class ReadOnlyDictionaryValueCollection<TKey, TValue>
 
 
-    [Serializable]
     internal sealed class ReadOnlyDictionaryValueEnumerator<TKey, TValue> : IEnumerator<TValue>
     {
         private readonly IReadOnlyDictionary<TKey, TValue> dictionary;

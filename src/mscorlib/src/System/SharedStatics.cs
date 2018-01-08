@@ -12,12 +12,10 @@
 =============================================================================*/
 
 using System.Threading;
-using System.Runtime.Remoting;
 using System.Security;
 using System.Runtime.CompilerServices;
 using System.Runtime.ConstrainedExecution;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 namespace System
 {
@@ -31,7 +29,7 @@ namespace System
         // when we set up _sharedStatics via AppDomain::SetupSharedStatics
         private SharedStatics()
         {
-            BCLDebug.Assert(false, "SharedStatics..ctor() is never called.");
+            Debug.Fail("SharedStatics..ctor() is never called.");
         }
 
         // This is the total amount of memory currently "reserved" via

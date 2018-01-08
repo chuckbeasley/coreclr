@@ -130,7 +130,6 @@
 #include "syncblk.h"
 #include "eeconfig.h"
 #include "stublink.h"
-#include "handletable.h"
 #include "method.hpp"
 #include "codeman.h"
 #include "frames.h"
@@ -138,7 +137,6 @@
 #include "stackwalk.h"
 #include "gcheaputilities.h"
 #include "interoputil.h"
-#include "security.h"
 #include "fieldmarshaler.h"
 #include "dbginterface.h"
 #include "eedbginterfaceimpl.h"
@@ -177,7 +175,6 @@
 #include "finalizerthread.h"
 #include "threadsuspend.h"
 #include "disassembler.h"
-#include "gcenv.ee.h"
 
 #ifndef FEATURE_PAL
 #include "dwreport.h"
@@ -185,7 +182,6 @@
 
 #include "stringarraylist.h"
 #include "stubhelpers.h"
-#include "perfdefaults.h"
 
 #ifdef FEATURE_STACK_SAMPLING
 #include "stacksampler.h"
@@ -229,10 +225,16 @@
 #include "perfmap.h"
 #endif
 
+#include "eventpipe.h"
+
 #ifndef FEATURE_PAL
 // Included for referencing __security_cookie
 #include "process.h"
 #endif // !FEATURE_PAL
+
+#ifdef FEATURE_GDBJIT
+#include "gdbjit.h"
+#endif // FEATURE_GDBJIT
 
 #ifdef FEATURE_IPCMAN
 static HRESULT InitializeIPCManager(void);
@@ -264,7 +266,6 @@ extern "C" HRESULT __cdecl CorDBGetInterface(DebugInterface** rcInterface);
 
 
 
-extern "C" IExecutionEngine* __stdcall IEE();
 
 // Remember how the last startup of EE went.
 HRESULT g_EEStartupStatus = S_OK;
@@ -279,12 +280,6 @@ BOOL    g_fSuspendOnShutdown = FALSE;
 
 // Flag indicating if the finalizer thread should be suspended on shutdown.
 BOOL    g_fSuspendFinalizerOnShutdown = FALSE;
-
-// Flag indicating if the EE was started up by an managed exe.
-BOOL    g_fEEManagedEXEStartup = FALSE;
-
-// Flag indicating if the EE was started up by an IJW dll.
-BOOL    g_fEEIJWStartup = FALSE;
 
 // Flag indicating if the EE was started up by COM.
 extern BOOL g_fEEComActivatedStartup;
@@ -304,7 +299,7 @@ HRESULT InitializeEE(COINITIEE flags)
 {
     WRAPPER_NO_CONTRACT;
 #ifdef FEATURE_EVENT_TRACE
-    if(!(g_fEEComActivatedStartup || g_fEEManagedEXEStartup || g_fEEIJWStartup))
+    if(!g_fEEComActivatedStartup)
         g_fEEOtherStartup = TRUE;
 #endif // FEATURE_EVENT_TRACE
     return EnsureEEStarted(flags);
@@ -482,11 +477,8 @@ void InitializeStartupFlags()
         g_IGCconcurrent = 0;
 
 
-    InitializeHeapType((flags & STARTUP_SERVER_GC) != 0);
-
-#ifdef FEATURE_LOADER_OPTIMIZATION            
-    g_dwGlobalSharePolicy = (flags&STARTUP_LOADER_OPTIMIZATION_MASK)>>1;
-#endif
+    g_heap_type = (flags & STARTUP_SERVER_GC) == 0 ? GC_HEAP_WKS : GC_HEAP_SVR;
+    g_IGCHoardVM = (flags & STARTUP_HOARD_GC_VM) == 0 ? 0 : 1;
 }
 #endif // CROSSGEN_COMPILE
 
@@ -582,6 +574,23 @@ void InitGSCookie()
     }
 }
 
+Volatile<BOOL> g_bIsGarbageCollectorFullyInitialized = FALSE;
+
+void SetGarbageCollectorFullyInitialized()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    g_bIsGarbageCollectorFullyInitialized = TRUE;
+}
+
+// Tells whether the garbage collector is fully initialized
+// Stronger than IsGCHeapInitialized
+BOOL IsGarbageCollectorFullyInitialized()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    return g_bIsGarbageCollectorFullyInitialized;
+}
 
 // ---------------------------------------------------------------------------
 // %%Function: EEStartupHelper
@@ -672,6 +681,16 @@ void EEStartupHelper(COINITIEE fFlags)
 
         InitThreadManager();
         STRESS_LOG0(LF_STARTUP, LL_ALWAYS, "Returned successfully from InitThreadManager");
+
+#ifdef FEATURE_PERFTRACING
+        // Initialize the event pipe.
+        EventPipe::Initialize();
+#endif // FEATURE_PERFTRACING
+
+#ifdef FEATURE_GDBJIT
+        // Initialize gdbjit
+        NotifyGdb::Initialize();
+#endif // FEATURE_GDBJIT
 
 #ifdef FEATURE_EVENT_TRACE        
         // Initialize event tracing early so we can trace CLR startup time events.
@@ -845,19 +864,20 @@ void EEStartupHelper(COINITIEE fFlags)
 
 #ifndef CROSSGEN_COMPILE
 
+        InitializeGarbageCollector();
+
         // Initialize remoting
 
-        // weak_short, weak_long, strong; no pin
-        if (!Ref_Initialize())
+        if (!GCHandleUtilities::GetGCHandleManager()->Initialize())
+        {
             IfFailGo(E_OUTOFMEMORY);
+        }
 
         // Initialize contexts
         Context::Initialize();
 
         g_pEEShutDownEvent = new CLREvent();
         g_pEEShutDownEvent->CreateManualEvent(FALSE);
-
-
 
 #ifdef FEATURE_IPCMAN
         // Initialize CCLRSecurityAttributeManager
@@ -867,7 +887,6 @@ void EEStartupHelper(COINITIEE fFlags)
         VirtualCallStubManager::InitStatic();
 
         GCInterface::m_MemoryPressureLock.Init(CrstGCMemoryPressure);
-
 
 #endif // CROSSGEN_COMPILE
 
@@ -977,9 +996,6 @@ void EEStartupHelper(COINITIEE fFlags)
 
         StackwalkCache::Init();
 
-        // Start up security
-        Security::Start();
-
         AppDomain::CreateADUnloadStartEvent();
 
         // In coreclr, clrjit is compiled into it, but SO work in clrjit has not been done.
@@ -990,7 +1006,18 @@ void EEStartupHelper(COINITIEE fFlags)
         }
 #endif
 
-        InitializeGarbageCollector();
+        // This isn't done as part of InitializeGarbageCollector() above because it
+        // requires write barriers to have been set up on x86, which happens as part
+        // of InitJITHelpers1.
+        hr = g_pGCHeap->Initialize();
+        IfFailGo(hr);
+
+        // This isn't done as part of InitializeGarbageCollector() above because thread
+        // creation requires AppDomains to have been set up.
+        FinalizerThread::FinalizerThreadCreate();
+
+        // Now we really have fully initialized the garbage collector
+        SetGarbageCollectorFullyInitialized();
 
         InitializePinHandleTable();
 
@@ -1003,7 +1030,11 @@ void EEStartupHelper(COINITIEE fFlags)
              SystemDomain::System()->DefaultDomain()));
         SystemDomain::System()->PublishAppDomainAndInformDebugger(SystemDomain::System()->DefaultDomain());
 #endif
- 
+
+#ifdef FEATURE_PERFTRACING
+        // Start the event pipe if requested.
+        EventPipe::EnableOnStartup();
+#endif // FEATURE_PERFTRACING
 
 #endif // CROSSGEN_COMPILE
 
@@ -1054,8 +1085,8 @@ void EEStartupHelper(COINITIEE fFlags)
 #ifdef FEATURE_MINIMETADATA_IN_TRIAGEDUMPS
         // retrieve configured max size for the mini-metadata buffer (defaults to 64KB)
         g_MiniMetaDataBuffMaxSize = CLRConfig::GetConfigValue(CLRConfig::INTERNAL_MiniMdBufferCapacity);
-        // align up to OS_PAGE_SIZE, with a maximum of 1 MB
-        g_MiniMetaDataBuffMaxSize = (DWORD) min(ALIGN_UP(g_MiniMetaDataBuffMaxSize, OS_PAGE_SIZE), 1024 * 1024);
+        // align up to GetOsPageSize(), with a maximum of 1 MB
+        g_MiniMetaDataBuffMaxSize = (DWORD) min(ALIGN_UP(g_MiniMetaDataBuffMaxSize, GetOsPageSize()), 1024 * 1024);
         // allocate the buffer. this is never touched while the process is running, so it doesn't 
         // contribute to the process' working set. it is needed only as a "shadow" for a mini-metadata
         // buffer that will be set up and reported / updated in the Watson process (the 
@@ -1063,10 +1094,6 @@ void EEStartupHelper(COINITIEE fFlags)
         g_MiniMetaDataBuffAddress = (TADDR) ClrVirtualAlloc(NULL, 
                                                 g_MiniMetaDataBuffMaxSize, MEM_COMMIT, PAGE_READWRITE);
 #endif // FEATURE_MINIMETADATA_IN_TRIAGEDUMPS
-
-        // Load mscorsn.dll if the app requested the legacy mode in its configuration file.
-        if (g_pConfig->LegacyLoadMscorsnOnStartup())
-            IfFailGo(LoadMscorsn());
 
 #endif // CROSSGEN_COMPILE
 
@@ -1088,12 +1115,6 @@ void EEStartupHelper(COINITIEE fFlags)
         if (g_pConfig->ExpandModulesOnLoad())
         {
             SystemDomain::SystemModule()->ExpandAll();
-        }
-
-        //For a similar reason, let's not run VerifyAllOnLoad either.
-        if (g_pConfig->VerifyModulesOnLoad())
-        {
-            SystemDomain::SystemModule()->VerifyAllMethods();
         }
 
         // Perform mscorlib consistency check if requested
@@ -1540,6 +1561,11 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
         ETW::EnumerationLog::ProcessShutdown();
     }
 
+#ifdef FEATURE_PERFTRACING
+    // Shutdown the event pipe.
+    EventPipe::Shutdown();
+#endif // FEATURE_PERFTRACING
+
 #if defined(FEATURE_COMINTEROP)
     // Get the current thread.
     Thread * pThisThread = GetThread();
@@ -1603,6 +1629,13 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
 
         // Indicate the EE is the shut down phase.
         g_fEEShutDown |= ShutDown_Start;
+
+#ifdef FEATURE_TIERED_COMPILATION
+        {
+            GCX_PREEMP();
+            TieredCompilationManager::ShutdownAllDomains();
+        }
+#endif
 
         fFinalizeOK = TRUE;
 
@@ -1680,8 +1713,19 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
             if (!fIBCLoggingDone)
             {
                 if (g_IBCLogger.InstrEnabled())
-                    Module::WriteAllModuleProfileData(true);
+                {
+                    Thread * pThread = GetThread();
+                    ThreadLocalIBCInfo* pInfo = pThread->GetIBCInfo();
 
+                    // Acquire the Crst lock before creating the IBCLoggingDisabler object.
+                    // Only one thread at a time can be processing an IBC logging event.
+                    CrstHolder lock(g_IBCLogger.GetSync());
+                    {
+                        IBCLoggingDisabler disableLogging( pInfo );  // runs IBCLoggingDisabler::DisableLogging
+                        
+                        Module::WriteAllModuleProfileData(true);
+                    }
+                }
                 fIBCLoggingDone = TRUE;
             }
         }
@@ -1828,7 +1872,7 @@ part2:
 #ifdef SHOULD_WE_CLEANUP
                 if (!g_fFastExitProcess)
                 {
-                    Ref_Shutdown(); // shut down the handle table
+                    GCHandleUtilities::GetGCHandleManager()->Shutdown();
                 }
 #endif /* SHOULD_WE_CLEANUP */
 
@@ -1993,8 +2037,6 @@ BOOL IsThreadInSTA()
 }
 #endif
 
-BOOL g_fWeOwnProcess = FALSE;
-
 static LONG s_ActiveShutdownThreadCount = 0;
 
 // ---------------------------------------------------------------------------
@@ -2030,15 +2072,8 @@ DWORD WINAPI EEShutDownProcForSTAThread(LPVOID lpParameter)
     {
         action = eRudeExitProcess;
     }
-    UINT exitCode;
-    if (g_fWeOwnProcess)
-    {
-        exitCode = GetLatchedExitCode();
-    }
-    else
-    {
-        exitCode = HOST_E_EXITPROCESS_TIMEOUT;
-    }
+
+    UINT exitCode = GetLatchedExitCode();
     EEPolicy::HandleExitProcessFromEscalation(action, exitCode);
 
     return 0;
@@ -2132,7 +2167,7 @@ void STDMETHODCALLTYPE EEShutDown(BOOL fIsDllUnloading)
     }
 
 #ifdef FEATURE_COMINTEROP
-    if (!fIsDllUnloading && IsThreadInSTA())
+    if (!fIsDllUnloading && CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_FinalizeOnShutdown) && IsThreadInSTA())
     {
         // #STAShutDown
         // 
@@ -2334,7 +2369,7 @@ BOOL CanRunManagedCode(LoaderLockCheck::kind checkKind, HINSTANCE hInst /*= 0*/)
 //  no longer maintains a ref count since the EE doesn't support being
 //  unloaded and re-loaded. It simply ensures the EE has been started.
 // ---------------------------------------------------------------------------
-HRESULT STDMETHODCALLTYPE CoInitializeEE(DWORD fFlags)
+HRESULT STDAPICALLTYPE CoInitializeEE(DWORD fFlags)
 {
     CONTRACTL
     {
@@ -2365,7 +2400,7 @@ HRESULT STDMETHODCALLTYPE CoInitializeEE(DWORD fFlags)
 // Description:
 //  Must be called by client on shut down in order to free up the system.
 // ---------------------------------------------------------------------------
-void STDMETHODCALLTYPE CoUninitializeEE(BOOL fIsDllUnloading)
+void STDAPICALLTYPE CoUninitializeEE(BOOL fIsDllUnloading)
 {
     LIMITED_METHOD_CONTRACT;
     //BEGIN_ENTRYPOINT_VOIDRET;
@@ -2377,11 +2412,6 @@ void STDMETHODCALLTYPE CoUninitializeEE(BOOL fIsDllUnloading)
     //END_ENTRYPOINT_VOIDRET;
 
 }
-
-
-
-
-
 
 //*****************************************************************************
 BOOL ExecuteDLL_ReturnOrThrow(HRESULT hr, BOOL fFromThunk)
@@ -2400,28 +2430,6 @@ BOOL ExecuteDLL_ReturnOrThrow(HRESULT hr, BOOL fFromThunk)
         COMPlusThrowHR(hr);
     }
     return SUCCEEDED(hr);
-}
-
-
-
-
-
-Volatile<BOOL> g_bIsGarbageCollectorFullyInitialized = FALSE;
-    
-void SetGarbageCollectorFullyInitialized()
-{
-    LIMITED_METHOD_CONTRACT;
-    
-    g_bIsGarbageCollectorFullyInitialized = TRUE;
-}
-
-// Tells whether the garbage collector is fully initialized
-// Stronger than IsGCHeapInitialized
-BOOL IsGarbageCollectorFullyInitialized()
-{
-    LIMITED_METHOD_CONTRACT;      
-
-    return g_bIsGarbageCollectorFullyInitialized;
 }
 
 //
@@ -2450,39 +2458,17 @@ void InitializeGarbageCollector()
     g_pFreeObjectMethodTable->SetBaseSize(ObjSizeOf (ArrayBase));
     g_pFreeObjectMethodTable->SetComponentSize(1);
 
-#ifdef FEATURE_STANDALONE_GC
-    IGCToCLR* gcToClr = new (nothrow) GCToEEInterface();
-    if (!gcToClr)
-        ThrowOutOfMemory();
-#else
-    IGCToCLR* gcToClr = nullptr;
-#endif
-
-
-    IGCHeap *pGCHeap;
-    if (!InitializeGarbageCollector(gcToClr, &pGCHeap, &g_gc_dac_vars)) 
+    hr = GCHeapUtilities::LoadAndInitialize();
+    if (hr != S_OK)
     {
-        ThrowOutOfMemory();
+        ThrowHR(hr);
     }
-
-    assert(pGCHeap != nullptr);
-    g_pGCHeap = pGCHeap;
-    g_gcDacGlobals = &g_gc_dac_vars;
 
     // Apparently the Windows linker removes global variables if they are never
     // read from, which is a problem for g_gcDacGlobals since it's expected that
     // only the DAC will read from it. This forces the linker to include
     // g_gcDacGlobals.
     volatile void* _dummy = g_gcDacGlobals;
-
-    hr = pGCHeap->Initialize();
-    IfFailThrow(hr);
-
-    // Thread for running finalizers...
-    FinalizerThread::FinalizerThreadCreate();
-
-    // Now we really have fully initialized the garbage collector
-    SetGarbageCollectorFullyInitialized();
 }
 
 /*****************************************************************************/
@@ -2609,17 +2595,7 @@ BOOL STDMETHODCALLTYPE EEDllMain( // TRUE on success, FALSE on error.
                                                                                          , TRUE
 #endif
                                                                                          );
-#ifdef FEATURE_IMPLICIT_TLS
                 Thread* thread = GetThread();
-#else
-                // Don't use GetThread because perhaps we didn't initialize yet, or we
-                // have already shutdown the EE.  Note that there is a race here.  We
-                // might ask for TLS from a slot we just released.  We are assuming that
-                // nobody re-allocates that same slot while we are doing this.  It just
-                // isn't worth locking for such an obscure case.
-                DWORD   tlsVal = GetThreadTLSIndex();
-                Thread  *thread = (tlsVal != (DWORD)-1)?(Thread *) UnsafeTlsGetValue(tlsVal):NULL;
-#endif
                 if (thread)
                 {
 #ifdef FEATURE_COMINTEROP
@@ -3205,107 +3181,6 @@ static int GetThreadUICultureId(__out LocaleIDValue* pLocale)
 }
 
 #endif // FEATURE_USE_LCID
-// ---------------------------------------------------------------------------
-// Export shared logging code for JIT, et.al.
-// ---------------------------------------------------------------------------
-#ifdef _DEBUG
-
-extern VOID LogAssert( LPCSTR szFile, int iLine, LPCSTR expr);
-extern "C"
-//__declspec(dllexport)
-VOID STDMETHODCALLTYPE LogHelp_LogAssert( LPCSTR szFile, int iLine, LPCSTR expr)
-{
-    CONTRACTL {
-        NOTHROW;
-        GC_NOTRIGGER;
-        MODE_ANY;
-        ENTRY_POINT;            
-        PRECONDITION(CheckPointer(szFile));
-        PRECONDITION(CheckPointer(expr));
-    }  CONTRACTL_END;
-
-    BEGIN_ENTRYPOINT_VOIDRET;
-    LogAssert(szFile, iLine, expr);
-    END_ENTRYPOINT_VOIDRET;
-
-}
-
-extern "C"
-//__declspec(dllexport)
-BOOL STDMETHODCALLTYPE LogHelp_NoGuiOnAssert()
-{
-    LIMITED_METHOD_CONTRACT;
-    BOOL fRet = FALSE;
-    BEGIN_ENTRYPOINT_VOIDRET;
-    fRet = NoGuiOnAssert();
-    END_ENTRYPOINT_VOIDRET;
-    return fRet;
-}
-
-extern "C"
-//__declspec(dllexport)
-VOID STDMETHODCALLTYPE LogHelp_TerminateOnAssert()
-{
-    LIMITED_METHOD_CONTRACT;
-    BEGIN_ENTRYPOINT_VOIDRET;
-//  __asm int 3;
-    TerminateOnAssert();
-    END_ENTRYPOINT_VOIDRET;
-
-}
-
-#else // !_DEBUG
-
-extern "C"
-//__declspec(dllexport)
-VOID STDMETHODCALLTYPE LogHelp_LogAssert( LPCSTR szFile, int iLine, LPCSTR expr) {
-    LIMITED_METHOD_CONTRACT;
-
-    //BEGIN_ENTRYPOINT_VOIDRET;
-    //END_ENTRYPOINT_VOIDRET;
-}
-
-extern "C"
-//__declspec(dllexport)
-BOOL STDMETHODCALLTYPE LogHelp_NoGuiOnAssert() {
-    LIMITED_METHOD_CONTRACT;
-
-    //BEGIN_ENTRYPOINT_VOIDRET;
-    //END_ENTRYPOINT_VOIDRET;
-
-    return FALSE;
-}
-
-extern "C"
-//__declspec(dllexport)
-VOID STDMETHODCALLTYPE LogHelp_TerminateOnAssert() {
-    LIMITED_METHOD_CONTRACT;
-
-    //BEGIN_ENTRYPOINT_VOIDRET;
-    //END_ENTRYPOINT_VOIDRET;
-
-}
-
-#endif // _DEBUG
-
-
-#ifndef ENABLE_PERF_COUNTERS
-//
-// perf counter stubs for builds which don't have perf counter support
-// These are needed because we export these functions in our DLL
-
-
-Perf_Contexts* STDMETHODCALLTYPE GetPrivateContextsPerfCounters()
-{
-    LIMITED_METHOD_CONTRACT;
-
-    //BEGIN_ENTRYPOINT_VOIDRET;
-    //END_ENTRYPOINT_VOIDRET;
-
-    return NULL;
-}
-
-#endif
 
 
 #ifdef ENABLE_CONTRACTS_IMPL
@@ -3402,24 +3277,4 @@ void ContractRegressionCheck()
 
 #endif // ENABLE_CONTRACTS_IMPL
 
-
 #endif // CROSSGEN_COMPILE
-
-
-//
-// GetOSVersion - Gets the real OS version bypassing the OS compatibility shim
-// Mscoree.dll resides in System32 dir and is always excluded from compat shim.
-// This function calls mscoree!shim function via mscoreei ICLRRuntimeHostInternal interface
-// to get the OS version. We do not do this PAL or coreclr..we direclty call the OS
-// in that case.
-//
-BOOL GetOSVersion(LPOSVERSIONINFO lposVer)
-{
-// Fix for warnings when building against WinBlue build 9444.0.130614-1739
-// warning C4996: 'GetVersionExW': was declared deprecated
-// externalapis\windows\winblue\sdk\inc\sysinfoapi.h(442)
-// Deprecated. Use VerifyVersionInfo* or IsWindows* macros from VersionHelpers.
-#pragma warning( disable : 4996 )
-    return WszGetVersionEx(lposVer);
-#pragma warning( default : 4996 )
-}

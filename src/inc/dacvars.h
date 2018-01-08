@@ -64,11 +64,6 @@
 #define DEFINE_DACVAR(type, true_type, id, var)
 #endif
 
-// Use this macro for any server (namespace SVR) variables
-#ifndef DEFINE_DACVAR_SVR
-#define DEFINE_DACVAR_SVR(type, true_type, id, var)
-#endif
-
 // Use this macro to define a static var that is known to DAC, but not captured in a dump.                         
 #ifndef DEFINE_DACVAR_NO_DUMP
 #define DEFINE_DACVAR_NO_DUMP(type, true_type, id, var)
@@ -121,12 +116,8 @@ DEFINE_DACVAR(ULONG, int, dac__HillClimbingLogSize, ::HillClimbingLogSize)
 DEFINE_DACVAR(ULONG, PTR_Thread, dac__g_pFinalizerThread, ::g_pFinalizerThread)
 DEFINE_DACVAR(ULONG, PTR_Thread, dac__g_pSuspensionThread, ::g_pSuspensionThread)
 
-#ifdef FEATURE_SVR_GC
-DEFINE_DACVAR(ULONG, DWORD, IGCHeap__gcHeapType, IGCHeap::gcHeapType)
-#endif // FEATURE_SVR_GC
-
+DEFINE_DACVAR(ULONG, DWORD, dac__g_heap_type, g_heap_type)
 DEFINE_DACVAR(ULONG, PTR_GcDacVars, dac__g_gcDacGlobals, g_gcDacGlobals)
-DEFINE_DACVAR(ULONG, DWORD, IGCHeap__maxGeneration, IGCHeap::maxGeneration)
 
 DEFINE_DACVAR(ULONG, PTR_SystemDomain, SystemDomain__m_pSystemDomain, SystemDomain::m_pSystemDomain)
 DEFINE_DACVAR(ULONG, ArrayListStatic, SystemDomain__m_appDomainIndexList, SystemDomain::m_appDomainIndexList)
@@ -136,9 +127,7 @@ DEFINE_DACVAR(ULONG, BOOL, SystemDomain__s_fForceInstrument, SystemDomain::s_fFo
 DEFINE_DACVAR(ULONG, PTR_SharedDomain, SharedDomain__m_pSharedDomain, SharedDomain::m_pSharedDomain)
 
 
-DEFINE_DACVAR(ULONG, DWORD, CExecutionEngine__TlsIndex, CExecutionEngine::TlsIndex)
-
-DEFINE_DACVAR(ULONG, LONG, GCScan__m_GcStructuresInvalidCnt, GCScan::m_GcStructuresInvalidCnt)
+DEFINE_DACVAR(ULONG, DWORD, dac__g_TlsIndex, g_TlsIndex)
 
 #if defined(FEATURE_WINDOWSPHONE)
 DEFINE_DACVAR(ULONG, int, CCLRErrorReportingManager__g_ECustomDumpFlavor, CCLRErrorReportingManager::g_ECustomDumpFlavor)
@@ -160,11 +149,6 @@ DEFINE_DACVAR(ULONG, BOOL, StackwalkCache__s_Enabled, StackwalkCache::s_Enabled)
 DEFINE_DACVAR(ULONG, PTR_JITNotification, dac__g_pNotificationTable, ::g_pNotificationTable)
 DEFINE_DACVAR(ULONG, ULONG32, dac__g_dacNotificationFlags, ::g_dacNotificationFlags)
 DEFINE_DACVAR(ULONG, PTR_GcNotification, dac__g_pGcNotificationTable, ::g_pGcNotificationTable)
-
-#ifndef FEATURE_IMPLICIT_TLS
-DEFINE_DACVAR(ULONG, DWORD, dac__gThreadTLSIndex, ::gThreadTLSIndex)
-DEFINE_DACVAR(ULONG, DWORD, dac__gAppDomainTLSIndex, ::gAppDomainTLSIndex)
-#endif
 
 DEFINE_DACVAR(ULONG, PTR_EEConfig, dac__g_pConfig, ::g_pConfig)
 
@@ -217,7 +201,6 @@ DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pICastableInterface, ::g_pICas
 
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pExecuteBackoutCodeHelperMethod, ::g_pExecuteBackoutCodeHelperMethod)
 
-DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pObjectCtorMD, ::g_pObjectCtorMD)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pObjectFinalizerMD, ::g_pObjectFinalizerMD)
 
 DEFINE_DACVAR(ULONG, bool, dac__g_fProcessDetach, ::g_fProcessDetach)
@@ -253,7 +236,6 @@ DEFINE_DACVAR(ULONG, SIZE_T, dac__g_runtimeVirtualSize, ::g_runtimeVirtualSize)
 
 DEFINE_DACVAR(ULONG, SyncBlockCache *, SyncBlockCache__s_pSyncBlockCache, SyncBlockCache::s_pSyncBlockCache)
 
-DEFINE_DACVAR(ULONG, HandleTableMap, dac__g_HandleTableMap, ::g_HandleTableMap)
 DEFINE_DACVAR(ULONG, UNKNOWN_POINTER_TYPE, dac__g_pStressLog, ::g_pStressLog)
 
 DEFINE_DACVAR(ULONG, SIZE_T, dac__s_gsCookie, ::s_gsCookie)
@@ -285,5 +267,4 @@ DEFINE_DACVAR(ULONG, TADDR, dac__g_MiniMetaDataBuffAddress, ::g_MiniMetaDataBuff
 DEFINE_DACVAR(ULONG, SIZE_T, dac__g_clrNotificationArguments, ::g_clrNotificationArguments)
 
 #undef DEFINE_DACVAR
-#undef DEFINE_DACVAR_SVR
 #undef DEFINE_DACVAR_NO_DUMP

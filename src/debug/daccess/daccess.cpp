@@ -29,6 +29,7 @@
 #endif
 
 #include "dwbucketmanager.hpp"
+#include "gcinterface.dac.h"
 
 // To include definiton of IsThrowableThreadAbortException
 // #include <exstatecommon.h>
@@ -3274,6 +3275,10 @@ ClrDataAccess::QueryInterface(THIS_
     {
         ifaceRet = static_cast<ISOSDacInterface4*>(this);
     }
+    else if (IsEqualIID(interfaceId, __uuidof(ISOSDacInterface5)))
+    {
+        ifaceRet = static_cast<ISOSDacInterface5*>(this);
+    }
     else
     {
         *iface = NULL;
@@ -4384,6 +4389,7 @@ ClrDataAccess::TranslateExceptionRecordToNotification(
     GcEvtArgs pubGcEvtArgs;
     ULONG32 notifyType = 0;
     DWORD catcherNativeOffset = 0;
+    TADDR nativeCodeLocation = NULL;
 
     DAC_ENTER();
 
@@ -4446,11 +4452,11 @@ ClrDataAccess::TranslateExceptionRecordToNotification(
             break;
         }
 
-        case DACNotify::JIT_NOTIFICATION:
+        case DACNotify::JIT_NOTIFICATION2:
         {
             TADDR methodDescPtr;
 
-            if (DACNotify::ParseJITNotification(exInfo, methodDescPtr))
+            if(DACNotify::ParseJITNotification(exInfo, methodDescPtr, nativeCodeLocation))
             {
                 // Try and find the right appdomain
                 MethodDesc* methodDesc = PTR_MethodDesc(methodDescPtr);
@@ -4483,7 +4489,7 @@ ClrDataAccess::TranslateExceptionRecordToNotification(
             }
             break;
         }
-
+        
         case DACNotify::EXCEPTION_NOTIFICATION:
         {
             TADDR threadPtr;
@@ -4589,6 +4595,13 @@ ClrDataAccess::TranslateExceptionRecordToNotification(
             notify4 = NULL;
         }
 
+        IXCLRDataExceptionNotification5* notify5;
+        if (notify->QueryInterface(__uuidof(IXCLRDataExceptionNotification5),
+                                   (void**)&notify5) != S_OK)
+        {
+            notify5 = NULL;
+        }
+
         switch(notifyType)
         {
         case DACNotify::MODULE_LOAD_NOTIFICATION:
@@ -4599,8 +4612,13 @@ ClrDataAccess::TranslateExceptionRecordToNotification(
             notify->OnModuleUnloaded(pubModule);
             break;
 
-        case DACNotify::JIT_NOTIFICATION:
+        case DACNotify::JIT_NOTIFICATION2:
             notify->OnCodeGenerated(pubMethodInst);
+
+            if (notify5)
+            {
+                notify5->OnCodeGenerated2(pubMethodInst, TO_CDADDR(nativeCodeLocation));
+            }
             break;
 
         case DACNotify::EXCEPTION_NOTIFICATION:
@@ -4641,6 +4659,14 @@ ClrDataAccess::TranslateExceptionRecordToNotification(
         if (notify3)
         {
             notify3->Release();
+        }
+        if (notify4)
+        {
+            notify4->Release();
+        }
+        if (notify5)
+        {
+            notify5->Release();
         }
     }
 
@@ -5235,7 +5261,7 @@ ClrDataAccess::FollowStubStep(
         // this and redirect to the actual code.
         methodDesc = trace.GetMethodDesc();
         if (methodDesc->IsPreImplemented() &&
-            !methodDesc->IsPointingToNativeCode() &&
+            !methodDesc->IsPointingToStableNativeCode() &&
             !methodDesc->IsGenericMethodDefinition() &&
             methodDesc->HasNativeCode())
         {
@@ -6305,8 +6331,6 @@ bool ClrDataAccess::ReportMem(TADDR addr, TSIZE_T size, bool fExpectSuccess /*= 
         status = m_enumMemCb->EnumMemoryRegion(TO_CDADDR(addr), enumSize);
         if (status != S_OK)
         {
-            m_memStatus = status;
-
             // If dump generation was cancelled, allow us to throw upstack so we'll actually quit.
             if ((fExpectSuccess) && (status != COR_E_OPERATIONCANCELED))
                 return false;
@@ -7934,8 +7958,6 @@ STDAPI OutOfProcessExceptionEventDebuggerLaunchCallback(__in PDWORD pContext,
 
 // DacHandleEnum
 
-// TODO(Local GC) - The DAC should not include GC headers
-#include "../../gc/handletablepriv.h"
 #include "comcallablewrapper.h"
 
 DacHandleWalker::DacHandleWalker()
@@ -7989,7 +8011,7 @@ HRESULT DacHandleWalker::Init(UINT32 typemask)
 {
     SUPPORTS_DAC;
     
-    mMap = &g_HandleTableMap;
+    mMap = g_gcDacGlobals->handle_table_map;
     mTypeMask = typemask;
     
     return S_OK;
@@ -8067,7 +8089,7 @@ bool DacHandleWalker::FetchMoreHandles(HANDLESCANPROC callback)
         {
             for (int i = 0; i < max_slots; ++i)
             {
-                HHANDLETABLE hTable = mMap->pBuckets[mIndex]->pTable[i];
+                DPTR(dac_handle_table) hTable = mMap->pBuckets[mIndex]->pTable[i];
                 if (hTable)
                 {
                     // Yikes!  The handle table callbacks don't produce the handle type or 
@@ -8081,8 +8103,8 @@ bool DacHandleWalker::FetchMoreHandles(HANDLESCANPROC callback)
                     {
                         if (mask & 1)
                         {
-                            HandleTable *pTable = (HandleTable *)hTable;
-                            PTR_AppDomain pDomain = SystemDomain::GetAppDomainAtIndex(pTable->uADIndex);
+                            dac_handle_table *pTable = hTable;
+                            PTR_AppDomain pDomain = SystemDomain::GetAppDomainAtIndex(ADIndex(pTable->uADIndex));
                             param.AppDomain = TO_CDADDR(pDomain.GetAddr());
                             param.Type = handleType;
                             

@@ -12,6 +12,7 @@ syntax: glob
 *.user
 *.userosscache
 *.sln.docstates
+*.swp
 
 # Build results
 [Dd]ebug/
@@ -28,6 +29,8 @@ msbuild.log
 
 # add back architecture directories ignored in 'Build results'
 !tests/x86
+!src/mscorlib/src/System/Runtime/Intrinsics/X86
+!tests/src/JIT/HardwareIntrinsics/X86
 
 # Visual Studio 2015
 .vs/
@@ -148,8 +151,12 @@ publish/
 
 # NuGet Packages
 *.nupkg
+*.nuget.g.props
+*.nuget.g.targets
+*.nuget.cache
 **/packages/*
 project.lock.json
+project.assets.json
 
 # Windows Azure Build Output
 csx/
@@ -310,3 +317,6 @@ src/jit32
 
 # performance testing sandbox
 sandbox
+
+#IL linker for testing
+linker

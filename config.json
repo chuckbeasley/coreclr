@@ -12,6 +12,18 @@
       "values": [],
       "defaultValue": ""
     },
+    "__PublishPackages": {
+      "description": "Specifies whether to publish product packages.",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": true
+    },
+    "__PublishSymbols": {
+      "description": "Specifies whether to publish symbol packages.",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": true
+    },
     "BuildNumberMajor": {
       "description": "Product build major number.",
       "valueType": "property",
@@ -24,8 +36,32 @@
       "values": [],
       "defaultValue": ""
     },
-    "__Container": {
+    "CleanAllProjects": {
+      "description": "MsBuild target that deletes the binary output directory.",
+      "valueType": "target",
+      "values": [],
+      "defaultValue": ""
+    },
+    "CleanPackages": {
+      "description": "MsBuild target that deletes the repo-local nuget package directory.",
+      "valueType": "target",
+      "values": [],
+      "defaultValue": ""
+    },
+    "CleanPackagesCache": {
+      "description": "MsBuild target that deletes the user-local nuget package cache.",
+      "valueType": "target",
+      "values": [],
+      "defaultValue": ""
+    },    
+    "ContainerName": {
       "description": "Container name for Azure upload.",
+      "valueType": "property",
+      "values": [],
+      "defaultValue": ""
+    },
+    "__BlobNamePrefix": {
+      "description": "Blob Prefix for Azure download.",
       "valueType": "property",
       "values": [],
       "defaultValue": ""
@@ -45,7 +81,7 @@
     "FilterToOSGroup": {
       "description": "Specifies the OSGroup.",
       "valueType": "property",
-      "values": [ "Windows_NT", "Linux", "Unix", "OSX" ],
+      "values": [ "Windows_NT", "Linux", "Unix", "OSX", "Android" ],
       "defaultValue": "${OSName}"
     },
     "RestoreNETCorePlatforms": {
@@ -87,7 +123,7 @@
     "__BuildOS": {
       "description": "Specifies the OS to publish packages.",
       "valueType": "property",
-      "values": [ "Linux", "OSX", "FreeBSD", "OpenBSD", "NetBSD", "SunOS", "Windows_NT" ],
+      "values": [ "Linux", "OSX", "FreeBSD", "OpenBSD", "NetBSD", "SunOS", "Windows_NT", "Android" ],
       "defaultValue": "${OSName}"
     },
     "__DistroRid": {
@@ -162,6 +198,12 @@
       "values": [],
       "defaultValue": "/t:GenerateVersionSourceFile /p:GenerateVersionSourceFile=true"
     },
+    "MSBuildNodeCount": {
+      "description": "Sets the value of the number of processors available for MSBuild.",
+      "valueType": "passThrough",
+      "values": [],
+      "defaultValue": "/maxcpucount"
+    },
     "NativeVersionSourceFile": {
       "description": "Provides location for version.cpp",
       "valueType": "property",
@@ -173,6 +215,12 @@
       "valueType": "property",
       "values": [],
       "defaultValue": ""
+    },
+    "OverwriteCoreClrPackageVersion": {
+      "description": "Sets the property specifying to overwrite CoreClr Package version using OfficialBuildId",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": true
     },
     "OfficialBuildId": {
       "description": "Official Build Id.",
@@ -186,6 +234,30 @@
       "values": [ "debug", "release", "checked" ],
       "defaultValue": "debug"
     },
+    "EnableProfileGuidedOptimization": {
+      "description": "Enables IBC profile optimizations if profile data are available.",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": false
+    },
+    "RestoreDefaultOptimizationDataPackage": {
+      "description": "Instructs BuildTools to restore the default OptimizationData package.",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": true
+    },
+    "UsePartialNGENOptimization": {
+      "description": "Adds the `-partialNGEN -minify` arguments when invoking IBCMerge.",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": true
+    },
+    "OptimizationDataDir": {
+      "description": "Sets the path where the build should look for IBC profile data.",
+      "valueType": "property",
+      "values": [],
+      "defaultValue": ""
+    },
     "UseEnv": {
       "description": "Set when building for arm64.",
       "valueType": "property",
@@ -197,6 +269,12 @@
       "valueType": "property",
       "values": [ "x86", "x64", "arm", "arm64" ],
       "defaultValue": "${CPUArch}"
+    },
+    "PortableBuild": {
+      "description": "Indicates if this is a portable build.",
+      "valueType": "property",
+      "values": [ "false", "true"],
+      "defaultValue": "true"
     },
     "Rebuild": {
       "description": "Specifies rebuild target.",
@@ -228,6 +306,12 @@
       "values": [ true, false ],
       "defaultValue": true
     },
+    "SkipSOS": {
+      "description": "",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": false
+    },
     "SignType": {
       "description": "Sets the SignType.",
       "valueType": "property",
@@ -239,12 +323,6 @@
       "valueType": "property",
       "values": [],
       "defaultValue": ""
-    },
-    "IlasmRoundTrip": {
-      "description": "Sets ilasm round trip property.",
-      "valueType": "property",
-      "values": [ true, false ],
-      "defaultValue": true
     },
     "CreateTestOverlay": {
       "description": "Runs CreateTestOverlay target.",
@@ -294,6 +372,12 @@
       "values": [ true, false ],
       "defaultValue": true
     },
+    "TargetsWindows": {
+      "description": "Sets the property specifying if the tests we're building will target Windows",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": true
+    },
     "PublishTestNativeBins": {
       "description": "Publishes test native binaries to Azure on non-windows",
       "valueType": "property",
@@ -306,17 +390,17 @@
       "values": [ true, false ],
       "defaultValue": true
     },
+    "Crossgen": {
+      "description": "Determines if we're running Crossgen tests",
+      "valueType": "property",
+      "values": [ true, false ],
+      "defaultValue": true
+    },
     "RuntimeId": {
       "description": "Specifies the OS to build Core_Root for",
       "valueType": "property",
-      "values": [ "debian.8-x64", "fedora.23-x64", "opensuse.42.1-x64", "osx.10.10-x64", "rhel.7-x64", "ubuntu.14.04-x64", "ubuntu.16.04-x64", "ubuntu.16.10-x64" ],
+      "values": [ "debian.8-x64", "fedora.24-x64", "fedora.25-x64", "opensuse.42.1-x64", "osx.10.12-x64", "rhel.7-x64", "ubuntu.14.04-x64", "ubuntu.16.04-x64", "ubuntu.16.10-x64", "android.21-arm64" ],
       "defaultValue": "${__RuntimeId}"
-    },
-    "UpdateDependencies": {
-      "description": "MsBuild target that updates project.json dependencies.",
-      "valueType": "target",
-      "values": [],
-      "defaultValue": ""
     },
     "BatchRestorePackages": {
       "description": "MsBuild target that restores the packages.",
@@ -339,6 +423,24 @@
     "CopyCrossgenToProduct": {
       "description": "Place crossgen.exe in bin/Product folder for building tests against",
       "valueType": "target",
+      "values": [],
+      "defaultValue": ""
+    },
+    "OptionalToolSource": {
+      "description": "URL of the nuget feed used by 'optional-tools'",
+      "valueType": "property",
+      "values": [],
+      "defaultValue": ""
+    },
+    "OptionalToolSourceUser": {
+      "description": "User name for authenticating to the optional tools feed",
+      "valueType": "property",
+      "values": [],
+      "defaultValue": ""
+    },
+    "OptionalToolSourcePassword": {
+      "description": "VSTS token for authenticating to the optional tools feed; requires 'package(READ)' permission",
+      "valueType": "property",
       "values": [],
       "defaultValue": ""
     },
@@ -427,7 +529,39 @@
           "MsBuildLog": "default",
           "MsBuildWrn": "default",
           "MsBuildErr": "default",
-          "MsBuildEventLogging": "default"
+          "MsBuildEventLogging": "default",
+          "RestoreDefaultOptimizationDataPackage": "false",
+          "PortableBuild": "true",
+          "UsePartialNGENOptimization": "false",
+          "MSBuildNodeCount": "default"
+        }
+      }
+    },
+    "clean": {
+      "alias": {
+        "b": {
+          "description": "Deletes the binary output directory.",
+          "settings": {
+            "CleanAllProjects": "default"
+          }
+        },
+        "p": {
+          "description": "Deletes the repo-local nuget package directory.",
+          "settings": {
+            "CleanPackages": "default"
+            }
+        },
+        "c": {
+          "description": "Deletes the user-local nuget package cache.",
+          "settings": {
+            "CleanPackagesCache": "default"
+          }
+        }
+      },
+      "defaultValues": {
+        "toolName": "msbuild",
+        "settings": {
+          "MsBuildLog":"/flp:v=normal;LogFile=clean.log"
         }
       }
     },
@@ -477,7 +611,13 @@
         "container": {
           "description": "Container name to download from in Azure Blob storage.",
           "settings": {
-            "__Container": "default"
+            "ContainerName": "default"
+          }
+        },
+        "blobNamePrefix": {
+          "description": "Blob Prefix to download from in Azure container.",
+          "settings": {
+            "__BlobNamePrefix": "default"
           }
         },
         "runtimeId": {
@@ -529,7 +669,7 @@
         "container": {
           "description": "Container name to upload into in Azure Blob storage.",
           "settings": {
-            "__Container": "default"
+            "ContainerName": "default"
           }
         },
         "buildArch": {
@@ -561,13 +701,26 @@
           "settings": {
             "PublishTestNativeBins": "default"
           }
-        }
+        },
+        "PublishPackages": {
+          "description": "Publishes product packages.",
+          "settings": {
+            "__PublishPackages": "default"
+          }
+        },
+        "PublishSymbols": {
+          "description": "Publishes symbol packages.",
+          "settings": {
+            "__PublishSymbols": "default"
+          }
+        },
       },
       "defaultValues": {
         "toolName": "msbuild",
         "settings": {
+          "__BuildOS": "default",
           "Project": "./src/publish.proj",
-          "MsBuildFileLogging": "/flp:v=detailed;LogFile=publish-packages.log"
+          "MsBuildFileLogging": "/flp:v=detailed;LogFile=publish-packages.log /clp:v=detailed"
         }
       }
     },
@@ -598,6 +751,7 @@
           "__BuildOS": "default",
           "MsBuildFileLogging": "/flp:v=detailed;Append;LogFile=build-packages.log",
           "MsBuildEventLogging": "default",
+          "PortableBuild": "true",
           "Project": "src/.nuget/packages.builds"
         }
       }
@@ -607,11 +761,11 @@
     "msbuild": {
       "osSpecific": {
         "windows": {
-          "defaultParameters": "/nologo /verbosity:minimal /clp:Summary /maxcpucount /nodeReuse:false",
+          "defaultParameters": "/nologo /verbosity:minimal /clp:Summary /nodeReuse:false",
           "path": "Tools/msbuild.cmd"
         },
         "unix": {
-          "defaultParameters": "/nologo /verbosity:minimal /clp:Summary /maxcpucount",
+          "defaultParameters": "/nologo /verbosity:minimal /clp:Summary",
           "path": "Tools/msbuild.sh"
         }
       },

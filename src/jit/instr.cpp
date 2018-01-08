@@ -72,7 +72,7 @@ const char* CodeGen::genInsName(instruction ins)
     };
     // clang-format on
 
-    assert((unsigned)ins < sizeof(insNames) / sizeof(insNames[0]));
+    assert((unsigned)ins < _countof(insNames));
     assert(insNames[ins] != nullptr);
 
     return insNames[ins];
@@ -213,7 +213,7 @@ void CodeGen::instGen(instruction ins)
 // static inline
 bool CodeGenInterface::instIsFP(instruction ins)
 {
-    assert((unsigned)ins < sizeof(instInfo) / sizeof(instInfo[0]));
+    assert((unsigned)ins < _countof(instInfo));
 
     return (instInfo[ins] & INST_FP) != 0;
 }
@@ -244,8 +244,15 @@ void CodeGen::inst_JMP(emitJumpKind jmp, BasicBlock* tgtBlock)
     //
     // Thus only on x86 do we need to assert that the stack level at the target block matches the current stack level.
     //
-    assert(tgtBlock->bbTgtStkDepth * sizeof(int) == genStackLevel || compiler->rpFrameType != FT_ESP_FRAME);
+    CLANG_FORMAT_COMMENT_ANCHOR;
+
+#ifdef UNIX_X86_ABI
+    // bbTgtStkDepth is a (pure) argument count (stack alignment padding should be excluded).
+    assert((tgtBlock->bbTgtStkDepth * sizeof(int) == (genStackLevel - curNestedAlignment)) || isFramePointerUsed());
+#else
+    assert((tgtBlock->bbTgtStkDepth * sizeof(int) == genStackLevel) || isFramePointerUsed());
 #endif
+#endif // !FEATURE_FIXED_OUT_ARGS
 
     getEmitter()->emitIns_J(emitter::emitJumpKindToIns(jmp), tgtBlock);
 }
@@ -433,7 +440,7 @@ void CodeGen::inst_RV_RV_RV(instruction ins,
 {
 #ifdef _TARGET_ARM_
     getEmitter()->emitIns_R_R_R(ins, size, reg1, reg2, reg3, flags);
-#elif defined(_TARGET_XARCH_) && defined(FEATURE_AVX_SUPPORT)
+#elif defined(_TARGET_XARCH_)
     getEmitter()->emitIns_R_R_R(ins, size, reg1, reg2, reg3);
 #else
     NYI("inst_RV_RV_RV");
@@ -632,10 +639,10 @@ void CodeGen::instGetAddrMode(GenTreePtr addr, regNumber* baseReg, unsigned* ind
         /* For GT_ARR_ELEM, the addressibility registers are marked on
            gtArrObj and gtArrInds[0] */
 
-        assert(addr->gtArrElem.gtArrObj->gtFlags & GTF_REG_VAL);
+        assert(addr->gtArrElem.gtArrObj->InReg());
         *baseReg = addr->gtArrElem.gtArrObj->gtRegNum;
 
-        assert(addr->gtArrElem.gtArrInds[0]->gtFlags & GTF_REG_VAL);
+        assert(addr->gtArrElem.gtArrInds[0]->InReg());
         *indReg = addr->gtArrElem.gtArrInds[0]->gtRegNum;
 
         if (jitIsScaleIndexMul(addr->gtArrElem.gtArrElemSize))
@@ -649,9 +656,9 @@ void CodeGen::instGetAddrMode(GenTreePtr addr, regNumber* baseReg, unsigned* ind
     {
         GenTreeAddrMode* lea  = addr->AsAddrMode();
         GenTreePtr       base = lea->Base();
-        assert(!base || (base->gtFlags & GTF_REG_VAL));
+        assert(!base || (base->InReg()));
         GenTreePtr index = lea->Index();
-        assert(!index || (index->gtFlags & GTF_REG_VAL));
+        assert(!index || (index->InReg()));
 
         *baseReg  = base ? base->gtRegNum : REG_NA;
         *indReg   = index ? index->gtRegNum : REG_NA;
@@ -689,7 +696,7 @@ void CodeGen::instGetAddrMode(GenTreePtr addr, regNumber* baseReg, unsigned* ind
             }
             assert(rv1->gtFlags & GTF_REG_VAL);
         }
-        if (rv2 && ((rv2->gtFlags & GTF_REG_VAL) == 0))
+        if (rv2 && !rv2->InReg())
         {
             if (rv2->gtFlags & GTF_SPILLED)
             {
@@ -700,7 +707,7 @@ void CodeGen::instGetAddrMode(GenTreePtr addr, regNumber* baseReg, unsigned* ind
                 genCodeForTree(rv2, RBM_NONE);
                 regSet.rsMarkRegUsed(rv2, addr);
             }
-            assert(rv2->gtFlags & GTF_REG_VAL);
+            assert(rv2->InReg());
         }
         // If we did both, we might have spilled rv1.
         if (rv1 && ((rv1->gtFlags & GTF_SPILLED) != 0))
@@ -790,14 +797,13 @@ void CodeGen::sched_AM(instruction ins,
 
     regMaskTP avoidMask = RBM_NONE;
 
-    if (addr->gtFlags & GTF_REG_VAL)
+    if (addr->InReg())
     {
         /* The address is "[reg+offs]" */
         baseReg = addr->gtRegNum;
     }
     else if (addr->IsCnsIntOrI())
     {
-#ifdef RELOC_SUPPORT
         // Do we need relocations?
         if (compiler->opts.compReloc && addr->IsIconHandle())
         {
@@ -806,7 +812,6 @@ void CodeGen::sched_AM(instruction ins,
             // so that we can uniquely identify the handle
             assert(offs <= 4);
         }
-#endif
         ssize_t disp = addr->gtIntCon.gtIconVal + offs;
         if ((insType == eIT_Store) && (ireg != REG_NA))
         {
@@ -972,7 +977,7 @@ void CodeGen::sched_AM(instruction ins,
         // Setup regVal
         //
 
-        regVal = regSet.rsPickReg(RBM_ALLINT & ~avoidMask);
+        regVal = regSet.rsPickFreeReg(RBM_ALLINT & ~avoidMask);
         regTracker.rsTrackRegTrash(regVal);
         avoidMask |= genRegMask(regVal);
         var_types load_store_type;
@@ -1092,9 +1097,9 @@ void CodeGen::sched_AM(instruction ins,
     /* Has the address been conveniently loaded into a register,
        or is it an absolute value ? */
 
-    if ((addr->gtFlags & GTF_REG_VAL) || (addr->IsCnsIntOrI()))
+    if ((addr->InReg()) || (addr->IsCnsIntOrI()))
     {
-        if (addr->gtFlags & GTF_REG_VAL)
+        if (addr->InReg())
         {
             /* The address is "[reg+offs]" */
 
@@ -1113,7 +1118,6 @@ void CodeGen::sched_AM(instruction ins,
 
             assert(addr->IsCnsIntOrI());
 
-#ifdef RELOC_SUPPORT
             // Do we need relocations?
             if (compiler->opts.compReloc && addr->IsIconHandle())
             {
@@ -1122,7 +1126,7 @@ void CodeGen::sched_AM(instruction ins,
                 // so that we can uniquely identify the handle
                 assert(offs <= 4);
             }
-#endif
+
             reg          = REG_NA;
             ssize_t disp = addr->gtIntCon.gtIconVal + offs;
 
@@ -1210,41 +1214,22 @@ void CodeGen::sched_AM(instruction ins,
         assert(baseReg != REG_NA);
         reg = baseReg;
 
-#ifdef LATE_DISASM
-        /*
-            Keep in mind that non-static data members (GT_FIELD nodes) were
-            transformed into GT_IND nodes - we keep the CLS/CPX information
-            in the GT_CNS_INT node representing the field offset of the
-            class member
-         */
-
-        if (addr->gtOper != GT_LEA && (addr->gtOp.gtOp2->gtOper == GT_CNS_INT) &&
-            addr->gtOp.gtOp2->IsIconHandle(GTF_ICON_FIELD_HDL))
-        {
-            /* This is a field offset - set the CPX/CLS values to emit a fixup */
-
-            cpx = addr->gtOp.gtOp2->gtIntCon.gtIconFld.gtIconCPX;
-            cls = addr->gtOp.gtOp2->gtIntCon.gtIconFld.gtIconCls;
-        }
-#endif
-
         if (cons)
         {
-            getEmitter()->emitIns_I_AR(ins, size, imm, reg, offs, cpx, cls);
+            getEmitter()->emitIns_I_AR(ins, size, imm, reg, offs);
         }
         else if (rdst)
         {
-            getEmitter()->emitIns_R_AR(ins, size, ireg, reg, offs, cpx, cls);
+            getEmitter()->emitIns_R_AR(ins, size, ireg, reg, offs);
         }
         else
         {
-            getEmitter()->emitIns_AR_R(ins, size, ireg, reg, offs, cpx, cls);
+            getEmitter()->emitIns_AR_R(ins, size, ireg, reg, offs);
         }
     }
 }
 
 #endif // !CPU_LOAD_STORE_ARCH
-#endif // LEGACY_BACKEND
 
 /*****************************************************************************
  *
@@ -1287,7 +1272,7 @@ void CodeGen::instEmit_indCall(GenTreeCall* call,
 
     if (!addr->OperIsIndir())
     {
-        if (!(addr->gtFlags & GTF_REG_VAL) && (addr->OperGet() == GT_CNS_INT))
+        if (!(addr->InReg()) && (addr->OperGet() == GT_CNS_INT))
         {
             ssize_t funcPtr = addr->gtIntCon.gtIconVal;
 
@@ -1314,7 +1299,7 @@ void CodeGen::instEmit_indCall(GenTreeCall* call,
         addr = addr->gtOp.gtOp1;
     }
 
-    if (addr->gtFlags & GTF_REG_VAL)
+    if (addr->InReg())
     {
         /* The address is "reg" */
 
@@ -1328,7 +1313,7 @@ void CodeGen::instEmit_indCall(GenTreeCall* call,
 #ifdef LEGACY_BACKEND
         genCodeForTree(addr, RBM_NONE);
 #endif // LEGACY_BACKEND
-        assert(addr->gtFlags & GTF_REG_VAL);
+        assert(addr->InReg());
         brg = addr->gtRegNum;
     }
 
@@ -1338,7 +1323,7 @@ void CodeGen::instEmit_indCall(GenTreeCall* call,
 
     if (!addr->OperIsIndir())
     {
-        if (addr->gtFlags & GTF_REG_VAL)
+        if (addr->InReg())
         {
             emitCallType = emitter::EC_INDIR_R;
             brg          = addr->gtRegNum;
@@ -1385,7 +1370,7 @@ void CodeGen::instEmit_indCall(GenTreeCall* call,
 
         /* Has the address been conveniently loaded into a register? */
 
-        if (addr->gtFlags & GTF_REG_VAL)
+        if (addr->InReg())
         {
             /* The address is "reg" */
 
@@ -1409,13 +1394,13 @@ void CodeGen::instEmit_indCall(GenTreeCall* call,
 
             if (rv1)
             {
-                assert(rv1->gtFlags & GTF_REG_VAL);
+                assert(rv1->InReg());
                 brg = rv1->gtRegNum;
             }
 
             if (rv2)
             {
-                assert(rv2->gtFlags & GTF_REG_VAL);
+                assert(rv2->InReg());
                 xrg = rv2->gtRegNum;
             }
         }
@@ -1445,7 +1430,6 @@ void CodeGen::instEmit_indCall(GenTreeCall* call,
     // clang-format on
 }
 
-#ifdef LEGACY_BACKEND
 /*****************************************************************************
  *
  *  Emit an "op [r/m]" instruction (the r/m operand given by a tree).
@@ -1502,16 +1486,15 @@ void CodeGen::inst_TT(instruction ins, GenTreePtr tree, unsigned offs, int shfv,
 
 AGAIN:
 
+#ifdef LEGACY_BACKEND
     /* Is the value sitting in a register? */
 
-    if (tree->gtFlags & GTF_REG_VAL)
+    if (tree->InReg())
     {
         regNumber reg;
 
 #ifndef _TARGET_64BIT_
-#ifdef LEGACY_BACKEND
     LONGREG_TT:
-#endif // LEGACY_BACKEND
 #endif
 
 #if FEATURE_STACK_FP_X87
@@ -1575,6 +1558,7 @@ AGAIN:
             return;
         }
     }
+#endif // LEGACY_BACKEND
 
     /* Is this a spilled value? */
 
@@ -1592,7 +1576,7 @@ AGAIN:
 #ifdef LEGACY_BACKEND
             /* Is this an enregistered long ? */
 
-            if (tree->gtType == TYP_LONG && !(tree->gtFlags & GTF_REG_VAL))
+            if (tree->gtType == TYP_LONG && !(tree->InReg()))
             {
                 /* Avoid infinite loop */
 
@@ -1691,9 +1675,10 @@ void CodeGen::inst_TT_RV(instruction ins, GenTreePtr tree, regNumber reg, unsign
 
 AGAIN:
 
+#ifdef LEGACY_BACKEND
     /* Is the value sitting in a register? */
 
-    if (tree->gtFlags & GTF_REG_VAL)
+    if (tree->InReg())
     {
         regNumber rg2;
 
@@ -1749,6 +1734,7 @@ AGAIN:
 
 #endif // _TARGET_64BIT_
     }
+#endif // LEGACY_BACKEND
 
     /* Is this a spilled value? */
 
@@ -1776,7 +1762,7 @@ AGAIN:
         case GT_LCL_VAR:
 
 #ifdef LEGACY_BACKEND
-            if (tree->gtType == TYP_LONG && !(tree->gtFlags & GTF_REG_VAL))
+            if (tree->gtType == TYP_LONG && !(tree->InReg()))
             {
                 /* Avoid infinite loop */
 
@@ -1884,18 +1870,13 @@ AGAIN:
     }
 }
 
+#ifdef LEGACY_BACKEND
 regNumber CodeGen::genGetZeroRegister()
 {
-    regNumber zeroReg = REG_NA;
-
-#if REDUNDANT_LOAD
-
     // Is the constant already in some register?
 
-    zeroReg = regTracker.rsIconIsInReg(0);
-#endif
+    regNumber zeroReg = regTracker.rsIconIsInReg(0);
 
-#ifdef LEGACY_BACKEND
     if (zeroReg == REG_NA)
     {
         regMaskTP freeMask = regSet.rsRegMaskFree();
@@ -1920,7 +1901,6 @@ regNumber CodeGen::genGetZeroRegister()
             genSetRegToIcon(zeroReg, 0, TYP_INT);
         }
     }
-#endif // !LEGACY_BACKEND
 
     return zeroReg;
 }
@@ -1930,7 +1910,6 @@ regNumber CodeGen::genGetZeroRegister()
  *  Generate an instruction that has one operand given by a tree (which has
  *  been made addressable) and another that is an integer constant.
  */
-#ifdef LEGACY_BACKEND
 void CodeGen::inst_TT_IV(instruction ins, GenTreePtr tree, ssize_t val, unsigned offs, emitAttr size, insFlags flags)
 {
     bool sizeInferred = false;
@@ -1948,7 +1927,7 @@ AGAIN:
 
     /* Is the value sitting in a register? */
 
-    if (tree->gtFlags & GTF_REG_VAL)
+    if (tree->InReg())
     {
 #ifndef _TARGET_64BIT_
     LONGREG_TT_IV:
@@ -2116,8 +2095,12 @@ AGAIN:
 
 #ifndef _TARGET_64BIT_
             /* Is this an enregistered long ? */
-
-            if (tree->gtType == TYP_LONG && !(tree->gtFlags & GTF_REG_VAL))
+            CLANG_FORMAT_COMMENT_ANCHOR;
+#ifdef LEGACY_BACKEND
+            if (tree->gtType == TYP_LONG && !(tree->InReg()))
+#else  // !LEGACY_BACKEND
+            if (tree->gtType == TYP_LONG)
+#endif // !LEGACY_BACKEND
             {
                 /* Avoid infinite loop */
 
@@ -2257,9 +2240,7 @@ AGAIN:
             assert(!"invalid address");
     }
 }
-#endif // LEGACY_BACKEND
 
-#ifdef LEGACY_BACKEND
 /*****************************************************************************
  *
  *  Generate an instruction that has one operand given by a register and the
@@ -2355,20 +2336,18 @@ void CodeGen::inst_RV_TT(instruction ins,
 #if defined(_TARGET_ARM_) && CPU_LONG_USES_REGPAIR
         if (tree->TypeGet() != TYP_LONG)
         {
-            ins = ins_Move_Extend(tree->TypeGet(), (tree->gtFlags & GTF_REG_VAL) != 0);
+            ins = ins_Move_Extend(tree->TypeGet(), tree->InReg());
         }
         else if (offs == 0)
         {
-            ins = ins_Move_Extend(TYP_INT,
-                                  (tree->gtFlags & GTF_REG_VAL) != 0 && genRegPairLo(tree->gtRegPair) != REG_STK);
+            ins = ins_Move_Extend(TYP_INT, tree->InReg() && genRegPairLo(tree->gtRegPair) != REG_STK);
         }
         else
         {
-            ins = ins_Move_Extend(TYP_INT,
-                                  (tree->gtFlags & GTF_REG_VAL) != 0 && genRegPairHi(tree->gtRegPair) != REG_STK);
+            ins = ins_Move_Extend(TYP_INT, tree->InReg() && genRegPairHi(tree->gtRegPair) != REG_STK);
         }
-#elif defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
-        ins = ins_Move_Extend(tree->TypeGet(), (tree->gtFlags & GTF_REG_VAL) != 0);
+#elif defined(_TARGET_ARM64_) || defined(_TARGET_ARM64_)
+        ins = ins_Move_Extend(tree->TypeGet(), false);
 #else
         NYI("CodeGen::inst_RV_TT with INS_mov");
 #endif
@@ -2377,9 +2356,10 @@ void CodeGen::inst_RV_TT(instruction ins,
 
 AGAIN:
 
+#ifdef LEGACY_BACKEND
     /* Is the value sitting in a register? */
 
-    if (tree->gtFlags & GTF_REG_VAL)
+    if (tree->InReg())
     {
 #ifdef _TARGET_64BIT_
         assert(instIsFP(ins) == 0);
@@ -2450,6 +2430,7 @@ AGAIN:
 
 #endif // _TARGET_64BIT_
     }
+#endif // LEGACY_BACKEND
 
     /* Is this a spilled value? */
 
@@ -2468,7 +2449,7 @@ AGAIN:
 #ifdef LEGACY_BACKEND
             /* Is this an enregistered long ? */
 
-            if (tree->gtType == TYP_LONG && !(tree->gtFlags & GTF_REG_VAL))
+            if (tree->gtType == TYP_LONG && !(tree->InReg()))
             {
 
                 /* Avoid infinite loop */
@@ -2524,7 +2505,24 @@ AGAIN:
                     }
                     else
                     {
-                        regTmp = regSet.rsPickReg(RBM_ALLINT & ~genRegMask(reg));
+                        // Lock the destination register to ensure that rsPickReg does not choose it.
+                        const regMaskTP regMask = genRegMask(reg);
+                        if ((regMask & regSet.rsMaskUsed) == 0)
+                        {
+                            regSet.rsLockReg(regMask);
+                            regTmp = regSet.rsPickReg(RBM_ALLINT);
+                            regSet.rsUnlockReg(regMask);
+                        }
+                        else if ((regMask & regSet.rsMaskLock) == 0)
+                        {
+                            regSet.rsLockUsedReg(regMask);
+                            regTmp = regSet.rsPickReg(RBM_ALLINT);
+                            regSet.rsUnlockUsedReg(regMask);
+                        }
+                        else
+                        {
+                            regTmp = regSet.rsPickReg(RBM_ALLINT);
+                        }
                     }
 #endif // LEGACY_BACKEND
 
@@ -2826,13 +2824,14 @@ void CodeGen::inst_RV_ST(instruction ins, emitAttr size, regNumber reg, GenTreeP
 {
     assert(size == EA_1BYTE || size == EA_2BYTE);
 
-    /* "movsx erx, rl" must be handled as a special case */
-
-    if (tree->gtFlags & GTF_REG_VAL)
+#ifdef LEGACY_BACKEND
+    if (tree->InReg())
     {
+        /* "movsx erx, rl" must be handled as a special case */
         inst_RV_RR(ins, size, reg, tree->gtRegNum);
     }
     else
+#endif // LEGACY_BACKEND
     {
         inst_RV_TT(ins, reg, tree, 0, size);
     }
@@ -2891,22 +2890,24 @@ void CodeGen::inst_mov_RV_ST(regNumber reg, GenTreePtr tree)
 {
     /* Figure out the size of the value being loaded */
 
-    emitAttr    size    = EA_ATTR(genTypeSize(tree->gtType));
-    instruction loadIns = ins_Move_Extend(tree->TypeGet(), (tree->gtFlags & GTF_REG_VAL) != 0);
+    emitAttr size = EA_ATTR(genTypeSize(tree->gtType));
+#ifdef LEGACY_BACKEND
+    instruction loadIns = ins_Move_Extend(tree->TypeGet(), tree->InReg());
+#else  // !LEGACY_BACKEND
+    instruction loadIns = ins_Move_Extend(tree->TypeGet(), false);
+#endif // !LEGACY_BACKEND
 
     if (size < EA_4BYTE)
     {
-        if ((tree->gtFlags & GTF_SMALL_OK) && (size == EA_1BYTE)
-#if CPU_HAS_BYTE_REGS
-            && (genRegMask(reg) & RBM_BYTE_REGS)
-#endif
-                )
+#if CPU_HAS_BYTE_REGS && defined(LEGACY_BACKEND)
+        if ((tree->gtFlags & GTF_SMALL_OK) && (size == EA_1BYTE) && (genRegMask(reg) & RBM_BYTE_REGS))
         {
             /* We only need to load the actual size */
 
             inst_RV_TT(INS_mov, reg, tree, 0, EA_1BYTE);
         }
         else
+#endif // CPU_HAS_BYTE_REGS && defined(LEGACY_BACKEND)
         {
             /* Generate the "movsx/movzx" opcode */
 
@@ -3121,9 +3122,11 @@ instruction CodeGen::ins_Move_Extend(var_types srcType, bool srcInReg)
         // TODO-CQ: based on whether src type is aligned use movaps instead
 
         return (srcInReg) ? INS_movaps : INS_movups;
-#else  // !defined(_TARGET_XARCH_) || defined(LEGACY_BACKEND)
+#elif defined(_TARGET_ARM64_)
+        return (srcInReg) ? INS_mov : ins_Load(srcType);
+#else  // !defined(_TARGET_ARM64_) && !(defined(_TARGET_XARCH_) && !defined(LEGACY_BACKEND))
         assert(!"unhandled SIMD type");
-#endif // !defined(_TARGET_XARCH_) || defined(LEGACY_BACKEND)
+#endif // !defined(_TARGET_ARM64_) && !(defined(_TARGET_XARCH_) && !defined(LEGACY_BACKEND))
     }
 
 #if defined(_TARGET_XARCH_) && !defined(LEGACY_BACKEND)
@@ -3271,7 +3274,7 @@ instruction CodeGenInterface::ins_Load(var_types srcType, bool aligned /*=false*
         }
         else
 #endif // FEATURE_SIMD
-            if (compiler->canUseAVX())
+            if (compiler->canUseVexEncoding())
         {
             return (aligned) ? INS_movapd : INS_movupd;
         }
@@ -3282,6 +3285,8 @@ instruction CodeGenInterface::ins_Load(var_types srcType, bool aligned /*=false*
             // latter.
             return (aligned) ? INS_movaps : INS_movups;
         }
+#elif defined(_TARGET_ARM64_)
+        return INS_ldr;
 #else
         assert(!"ins_Load with SIMD type");
 #endif
@@ -3434,7 +3439,7 @@ instruction CodeGenInterface::ins_Store(var_types dstType, bool aligned /*=false
         }
         else
 #endif // FEATURE_SIMD
-            if (compiler->canUseAVX())
+            if (compiler->canUseVexEncoding())
         {
             return (aligned) ? INS_movapd : INS_movupd;
         }
@@ -3557,19 +3562,24 @@ instruction CodeGen::ins_MathOp(genTreeOps oper, var_types type)
     switch (oper)
     {
         case GT_ADD:
+#ifdef LEGACY_BACKEND
         case GT_ASG_ADD:
+#endif
             return type == TYP_DOUBLE ? INS_addsd : INS_addss;
-            break;
         case GT_SUB:
+#ifdef LEGACY_BACKEND
         case GT_ASG_SUB:
+#endif
             return type == TYP_DOUBLE ? INS_subsd : INS_subss;
-            break;
         case GT_MUL:
+#ifdef LEGACY_BACKEND
         case GT_ASG_MUL:
+#endif
             return type == TYP_DOUBLE ? INS_mulsd : INS_mulss;
-            break;
         case GT_DIV:
+#ifdef LEGACY_BACKEND
         case GT_ASG_DIV:
+#endif
             return type == TYP_DOUBLE ? INS_divsd : INS_divss;
         case GT_AND:
             return type == TYP_DOUBLE ? INS_andpd : INS_andps;
@@ -3686,14 +3696,32 @@ instruction CodeGen::ins_FloatCopy(var_types type)
 
 instruction CodeGen::ins_CopyIntToFloat(var_types srcType, var_types dstType)
 {
-    // Not used and not implemented
-    unreached();
+    assert((dstType == TYP_FLOAT) || (dstType == TYP_DOUBLE));
+    assert((srcType == TYP_INT) || (srcType == TYP_UINT) || (srcType == TYP_LONG) || (srcType == TYP_ULONG));
+
+    if ((srcType == TYP_LONG) || (srcType == TYP_ULONG))
+    {
+        return INS_vmov_i2d;
+    }
+    else
+    {
+        return INS_vmov_i2f;
+    }
 }
 
 instruction CodeGen::ins_CopyFloatToInt(var_types srcType, var_types dstType)
 {
-    // Not used and not implemented
-    unreached();
+    assert((srcType == TYP_FLOAT) || (srcType == TYP_DOUBLE));
+    assert((dstType == TYP_INT) || (dstType == TYP_UINT) || (dstType == TYP_LONG) || (dstType == TYP_ULONG));
+
+    if ((dstType == TYP_LONG) || (dstType == TYP_ULONG))
+    {
+        return INS_vmov_d2i;
+    }
+    else
+    {
+        return INS_vmov_f2i;
+    }
 }
 
 instruction CodeGen::ins_FloatCompare(var_types type)
@@ -3713,19 +3741,25 @@ instruction CodeGen::ins_MathOp(genTreeOps oper, var_types type)
     switch (oper)
     {
         case GT_ADD:
+#ifdef LEGACY_BACKEND
         case GT_ASG_ADD:
+#endif
             return INS_vadd;
-            break;
         case GT_SUB:
+#ifdef LEGACY_BACKEND
         case GT_ASG_SUB:
+#endif
             return INS_vsub;
-            break;
         case GT_MUL:
+#ifdef LEGACY_BACKEND
         case GT_ASG_MUL:
+#endif
             return INS_vmul;
             break;
         case GT_DIV:
+#ifdef LEGACY_BACKEND
         case GT_ASG_DIV:
+#endif
             return INS_vdiv;
         case GT_NEG:
             return INS_vneg;
@@ -3850,7 +3884,11 @@ void CodeGen::instGen_Return(unsigned stkArgSize)
  *     Note: all MemoryBarriers instructions can be removed by
  *           SET COMPlus_JitNoMemoryBarriers=1
  */
+#ifdef _TARGET_ARM64_
+void CodeGen::instGen_MemoryBarrier(insBarrier barrierType)
+#else
 void CodeGen::instGen_MemoryBarrier()
+#endif
 {
 #ifdef DEBUG
     if (JitConfig.JitNoMemoryBarriers() == 1)
@@ -3865,7 +3903,7 @@ void CodeGen::instGen_MemoryBarrier()
 #elif defined(_TARGET_ARM_)
     getEmitter()->emitIns_I(INS_dmb, EA_4BYTE, 0xf);
 #elif defined(_TARGET_ARM64_)
-    getEmitter()->emitIns_BARR(INS_dmb, INS_BARRIER_SY);
+    getEmitter()->emitIns_BARR(INS_dmb, barrierType);
 #else
 #error "Unknown _TARGET_"
 #endif
@@ -3894,9 +3932,7 @@ void CodeGen::instGen_Set_Reg_To_Zero(emitAttr size, regNumber reg, insFlags fla
  */
 void CodeGen::instGen_Set_Reg_To_Imm(emitAttr size, regNumber reg, ssize_t imm, insFlags flags)
 {
-#if RELOC_SUPPORT
     if (!compiler->opts.compReloc)
-#endif // RELOC_SUPPORT
     {
         size = EA_SIZE(size); // Strip any Reloc flags from size if we aren't doing relocs
     }
@@ -3913,8 +3949,7 @@ void CodeGen::instGen_Set_Reg_To_Imm(emitAttr size, regNumber reg, ssize_t imm, 
 
         if (EA_IS_RELOC(size))
         {
-            getEmitter()->emitIns_R_I(INS_movw, size, reg, imm);
-            getEmitter()->emitIns_R_I(INS_movt, size, reg, imm);
+            genMov32RelocatableImmediate(size, imm, reg);
         }
         else if (arm_Valid_Imm_For_Mov(imm))
         {

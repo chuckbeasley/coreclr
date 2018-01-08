@@ -17,7 +17,6 @@
 
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 namespace System.Threading
 {
@@ -323,7 +322,7 @@ namespace System.Threading
             int id = ~m_idComplement;
             if (id < 0)
             {
-                throw new ObjectDisposedException(Environment.GetResourceString("ThreadLocal_Disposed"));
+                throw new ObjectDisposedException(SR.ThreadLocal_Disposed);
             }
 
             Debugger.NotifyOfCrossThreadDependency();
@@ -340,7 +339,7 @@ namespace System.Threading
 
                 if (IsValueCreated)
                 {
-                    throw new InvalidOperationException(Environment.GetResourceString("ThreadLocal_Value_RecursiveCallsToValue"));
+                    throw new InvalidOperationException(SR.ThreadLocal_Value_RecursiveCallsToValue);
                 }
             }
 
@@ -356,7 +355,7 @@ namespace System.Threading
             // If the object has been disposed, id will be -1.
             if (id < 0)
             {
-                throw new ObjectDisposedException(Environment.GetResourceString("ThreadLocal_Disposed"));
+                throw new ObjectDisposedException(SR.ThreadLocal_Disposed);
             }
 
             // If a slot array has not been created on this thread yet, create it.
@@ -394,7 +393,7 @@ namespace System.Threading
 
                 if (!m_initialized)
                 {
-                    throw new ObjectDisposedException(Environment.GetResourceString("ThreadLocal_Disposed"));
+                    throw new ObjectDisposedException(SR.ThreadLocal_Disposed);
                 }
 
                 slot.Value = value;
@@ -416,7 +415,7 @@ namespace System.Threading
                 // Dispose also executes under a lock.
                 if (!m_initialized)
                 {
-                    throw new ObjectDisposedException(Environment.GetResourceString("ThreadLocal_Disposed"));
+                    throw new ObjectDisposedException(SR.ThreadLocal_Disposed);
                 }
 
                 LinkedSlot firstRealNode = m_linkedSlot.Next;
@@ -454,11 +453,11 @@ namespace System.Threading
             {
                 if (!m_trackAllValues)
                 {
-                    throw new InvalidOperationException(Environment.GetResourceString("ThreadLocal_ValuesNotAvailable"));
+                    throw new InvalidOperationException(SR.ThreadLocal_ValuesNotAvailable);
                 }
 
                 var list = GetValuesAsList(); // returns null if disposed
-                if (list == null) throw new ObjectDisposedException(Environment.GetResourceString("ThreadLocal_Disposed"));
+                if (list == null) throw new ObjectDisposedException(SR.ThreadLocal_Disposed);
                 return list;
             }
         }
@@ -511,7 +510,7 @@ namespace System.Threading
                 int id = ~m_idComplement;
                 if (id < 0)
                 {
-                    throw new ObjectDisposedException(Environment.GetResourceString("ThreadLocal_Disposed"));
+                    throw new ObjectDisposedException(SR.ThreadLocal_Disposed);
                 }
 
                 LinkedSlotVolatile[] slotArray = ts_slotArray;
@@ -712,7 +711,7 @@ namespace System.Threading
         /// A class that facilitates ThreadLocal cleanup after a thread exits.
         /// 
         /// After a thread with an associated thread-local table has exited, the FinalizationHelper 
-        /// is reponsible for removing back-references to the table. Since an instance of FinalizationHelper 
+        /// is responsible for removing back-references to the table. Since an instance of FinalizationHelper 
         /// is only referenced from a single thread-local slot, the FinalizationHelper will be GC'd once
         /// the thread has exited.
         /// 

@@ -4,7 +4,6 @@
 
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.Text;
 
 namespace System.Globalization
@@ -21,7 +20,7 @@ namespace System.Globalization
                 CodePageDataItem dataItem = s_encodingDataTableItems[i];
 
                 arrayEncodingInfo[i] = new EncodingInfo(dataItem.CodePage, dataItem.WebName,
-                    Environment.GetResourceString(dataItem.DisplayNameResourceKey));
+                    SR.GetResourceString(dataItem.DisplayNameResourceKey));
             }
 
             return arrayEncodingInfo;
@@ -33,7 +32,6 @@ namespace System.Globalization
             {
                 throw new ArgumentNullException(nameof(name));
             }
-            Contract.EndContractBlock();
 
             ushort codePage;
             if (s_encodingDataTable.TryGetValue(name, out codePage))
@@ -45,7 +43,7 @@ namespace System.Globalization
             throw new ArgumentException(
                 string.Format(
                     CultureInfo.CurrentCulture,
-                    Environment.GetResourceString("Argument_EncodingNotSupported"), name), nameof(name));
+                    SR.Argument_EncodingNotSupported, name), nameof(name));
         }
 
         internal static CodePageDataItem GetCodePageDataItem(int codepage)

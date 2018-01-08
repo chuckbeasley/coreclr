@@ -1,24 +1,24 @@
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}) 
-include_directories(BEFORE ${CLR_DIR}/src/vm)
-include_directories(BEFORE ${CLR_DIR}/src/vm/${ARCH_SOURCES_DIR})
+# Local GC meta-issue: https://github.com/dotnet/coreclr/issues/11518
 
-if(CLR_CMAKE_PLATFORM_UNIX)
-  add_compile_options(-fPIC)
-endif(CLR_CMAKE_PLATFORM_UNIX)
+# https://github.com/dotnet/coreclr/issues/11514
+remove_definitions(-DFEATURE_EVENT_TRACE=1)
 
-if(CMAKE_CONFIGURATION_TYPES)
-  foreach (Config DEBUG CHECKED)  
-     set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS $<$<CONFIG:${Config}>:WRITE_BARRIER_CHECK=1>)
-  endforeach (Config)
-else()
-  if(UPPERCASE_CMAKE_BUILD_TYPE STREQUAL DEBUG OR UPPERCASE_CMAKE_BUILD_TYPE STREQUAL CHECKED)
-    add_definitions(-DWRITE_BARRIER_CHECK=1)
-  endif(UPPERCASE_CMAKE_BUILD_TYPE STREQUAL DEBUG OR UPPERCASE_CMAKE_BUILD_TYPE STREQUAL CHECKED)
-endif(CMAKE_CONFIGURATION_TYPES)
+# https://github.com/dotnet/coreclr/issues/11517
+remove_definitions(-DFEATURE_APPDOMAIN_RESOURCE_MONITORING)
 
-set( GC_SOURCES_DAC_AND_WKS_COMMON
+# https://github.com/dotnet/coreclr/issues/11516
+remove_definitions(-DSTRESS_HEAP)
+
+# https://github.com/dotnet/coreclr/issues/11519
+remove_definitions(-DWRITE_BARRIER_CHECK)
+
+# https://github.com/dotnet/coreclr/issues/14701
+add_definitions(-DFEATURE_REDHAWK)
+
+set( GC_SOURCES
+  gcconfig.cpp
   gccommon.cpp
   gcscan.cpp
   gcsvr.cpp
@@ -27,27 +27,55 @@ set( GC_SOURCES_DAC_AND_WKS_COMMON
   handletablecore.cpp
   handletablescan.cpp
   objecthandle.cpp
-  softwarewritewatch.cpp)
-
-set( GC_SOURCES_WKS
-  ${GC_SOURCES_DAC_AND_WKS_COMMON}
+  softwarewritewatch.cpp
+  gchandletable.cpp
   gceesvr.cpp
   gceewks.cpp
+  gcload.cpp
   handletablecache.cpp)
 
-set( GC_SOURCES_DAC
-  ${GC_SOURCES_DAC_AND_WKS_COMMON})
+if(CLR_CMAKE_PLATFORM_UNIX)
+  include(unix/configure.cmake)
+  set ( GC_SOURCES
+    ${GC_SOURCES}
+    unix/gcenv.unix.cpp
+    unix/events.cpp
+    unix/cgroup.cpp)
+else()
+  set ( GC_SOURCES
+    ${GC_SOURCES}
+    windows/gcenv.windows.cpp)
+endif(CLR_CMAKE_PLATFORM_UNIX)
 
-if(FEATURE_STANDALONE_GC)
-  if(NOT CLR_CMAKE_PLATFORM_UNIX)
-    set ( GC_SOURCES_WKS
-      ${GC_SOURCES_WKS}
-      windows/gcenv.windows.cpp)
-  endif(NOT CLR_CMAKE_PLATFORM_UNIX)
-endif(FEATURE_STANDALONE_GC)
+if(WIN32)
+  set (GC_LINK_LIBRARIES
+    ${STATIC_MT_CRT_LIB}
+    ${STATIC_MT_VCRT_LIB}
+    kernel32.lib)
+else()
+  set (GC_LINK_LIBRARIES)
+endif(WIN32)
 
-convert_to_absolute_path(GC_SOURCES_WKS ${GC_SOURCES_WKS})
-convert_to_absolute_path(GC_SOURCES_DAC ${GC_SOURCES_DAC})
+convert_to_absolute_path(GC_SOURCES ${GC_SOURCES})
 
-add_subdirectory(wks)
-add_subdirectory(dac)
+add_library_clr(clrgc SHARED ${GC_SOURCES})
+target_link_libraries(clrgc ${GC_LINK_LIBRARIES})
+install_clr(clrgc)
+
+if(CLR_CMAKE_PLATFORM_UNIX)
+  add_compile_options(-fPIC)
+  # dprintf causes many warnings (https://github.com/dotnet/coreclr/issues/13367)
+  add_compile_options(-Wno-format)
+endif(CLR_CMAKE_PLATFORM_UNIX)
+
+add_definitions(-DBUILD_AS_STANDALONE)
+if(CLR_CMAKE_PLATFORM_DARWIN)
+  # The implementation of GCToOSInterface on MacOS makes use of non-POSIX
+  # pthreads APIs, which by default are not included in the pthreads header
+  # unless we define this macro.
+  add_definitions(-D_DARWIN_C_SOURCE)
+endif(CLR_CMAKE_PLATFORM_DARWIN)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/env)
+

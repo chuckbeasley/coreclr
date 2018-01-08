@@ -110,9 +110,6 @@ ASMCONSTANTS_C_ASSERT(SIZEOF__ArrayOfValueType == ObjSizeOf(ArrayBase));
 #define ArrayBase__m_NumComponents     0x4
 ASMCONSTANTS_C_ASSERT(ArrayBase__m_NumComponents == offsetof(ArrayBase, m_NumComponents));
 
-#define ArrayTypeDesc__m_TemplateMT    0x4
-ASMCONSTANTS_C_ASSERT(ArrayTypeDesc__m_TemplateMT == offsetof(ArrayTypeDesc, m_TemplateMT));
-
 #define ArrayTypeDesc__m_Arg           0x8
 ASMCONSTANTS_C_ASSERT(ArrayTypeDesc__m_Arg == offsetof(ArrayTypeDesc, m_Arg));
 
@@ -258,9 +255,6 @@ ASMCONSTANTS_C_ASSERT(VASigCookie__pNDirectILStub == offsetof(VASigCookie, pNDir
 
 #define CONTEXT_Pc 0x040
 ASMCONSTANTS_C_ASSERT(CONTEXT_Pc == offsetof(T_CONTEXT,Pc))
-
-#define TLS_GETTER_MAX_SIZE_ASM 0x10
-ASMCONSTANTS_C_ASSERT(TLS_GETTER_MAX_SIZE_ASM == TLS_GETTER_MAX_SIZE)
 
 #define CallDescrData__pSrc                0x00
 #define CallDescrData__numStackSlots       0x04

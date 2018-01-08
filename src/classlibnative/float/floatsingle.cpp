@@ -9,17 +9,11 @@
 
 #include "floatsingle.h"
 
-#define IS_FLT_INFINITY(x)         (((*((INT32*)((void*)&x))) & 0x7FFFFFFF) == 0x7F800000)
-
 // Windows x86 and Windows ARM/ARM64 may not define _isnanf() or _copysignf() but they do
 // define _isnan() and _copysign(). We will redirect the macros to these other functions if
 // the macro is not defined for the platform. This has the side effect of a possible implicit
 // upcasting for arguments passed in and an explicit downcasting for the _copysign() call.
 #if (defined(_TARGET_X86_) || defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)) && !defined(FEATURE_PAL)
-
-#if !defined(_isnanf)
-#define _isnanf      _isnan
-#endif
 
 #if !defined(_copysignf)
 #define _copysignf   (float)_copysign
@@ -64,6 +58,15 @@ FCIMPL1_V(float, COMSingle::Acos, float x)
     return (float)acosf(x);
 FCIMPLEND
 
+/*=====================================Acosh====================================
+**
+==============================================================================*/
+FCIMPL1_V(float, COMSingle::Acosh, float x)
+    FCALL_CONTRACT;
+
+    return (float)acoshf(x);
+FCIMPLEND
+
 /*=====================================Asin=====================================
 **
 ==============================================================================*/
@@ -71,6 +74,15 @@ FCIMPL1_V(float, COMSingle::Asin, float x)
     FCALL_CONTRACT;
 
     return (float)asinf(x);
+FCIMPLEND
+
+/*=====================================Asinh====================================
+**
+==============================================================================*/
+FCIMPL1_V(float, COMSingle::Asinh, float x)
+    FCALL_CONTRACT;
+
+    return (float)asinhf(x);
 FCIMPLEND
 
 /*=====================================Atan=====================================
@@ -82,20 +94,31 @@ FCIMPL1_V(float, COMSingle::Atan, float x)
     return (float)atanf(x);
 FCIMPLEND
 
+/*=====================================Atanh====================================
+**
+==============================================================================*/
+FCIMPL1_V(float, COMSingle::Atanh, float x)
+    FCALL_CONTRACT;
+
+    return (float)atanhf(x);
+FCIMPLEND
+
 /*=====================================Atan2====================================
 **
 ==============================================================================*/
 FCIMPL2_VV(float, COMSingle::Atan2, float y, float x)
     FCALL_CONTRACT;
 
-    // atan2f(+/-INFINITY, +/-INFINITY) produces +/-0.785398163f (x is +INFINITY) and
-    // +/-2.35619449f (x is -INFINITY) instead of the expected value of NaN. We handle
-    // that case here ourselves.
-    if (IS_FLT_INFINITY(y) && IS_FLT_INFINITY(x)) {
-        return (float)(y / x);
-    }
-
     return (float)atan2f(y, x);
+FCIMPLEND
+
+/*====================================Cbrt======================================
+**
+==============================================================================*/
+FCIMPL1_V(float, COMSingle::Cbrt, float x)
+    FCALL_CONTRACT;
+
+    return (float)cbrtf(x);
 FCIMPLEND
 
 /*====================================Ceil======================================
@@ -143,6 +166,15 @@ FCIMPL1_V(float, COMSingle::Floor, float x)
     return (float)floorf(x);
 FCIMPLEND
 
+/*=====================================FMod=====================================
+**
+==============================================================================*/
+FCIMPL2_VV(float, COMSingle::FMod, float x, float y)
+    FCALL_CONTRACT;
+
+    return (float)fmodf(x, y);
+FCIMPLEND
+
 /*=====================================Log======================================
 **
 ==============================================================================*/
@@ -164,10 +196,10 @@ FCIMPLEND
 /*=====================================ModF=====================================
 **
 ==============================================================================*/
-FCIMPL1(float, COMSingle::ModF, float* iptr)
+FCIMPL2_VI(float, COMSingle::ModF, float x, float* intptr)
     FCALL_CONTRACT;
 
-    return (float)modff(*iptr, iptr);
+    return (float)modff(x, intptr);
 FCIMPLEND
 
 /*=====================================Pow======================================
@@ -176,50 +208,7 @@ FCIMPLEND
 FCIMPL2_VV(float, COMSingle::Pow, float x, float y)
     FCALL_CONTRACT;
 
-    // The CRT version of pow preserves the NaN payload of x over the NaN payload of y.
-
-    if(_isnanf(y)) {
-        return y; // IEEE 754-2008: NaN payload must be preserved
-    }
-
-    if(_isnanf(x)) {
-        return x; // IEEE 754-2008: NaN payload must be preserved
-    }
-
-    // The CRT version of powf does not return NaN for powf(-1.0f, +/-INFINITY) and
-    // instead returns +1.0f.
-
-    if(IS_FLT_INFINITY(y) && (x == -1.0f)) {
-        INT32 result = CLR_NAN_32;
-        return (*((float*)((INT32*)&result)));
-    }
-
     return (float)powf(x, y);
-FCIMPLEND
-
-/*====================================Round=====================================
-**
-==============================================================================*/
-FCIMPL1_V(float, COMSingle::Round, float x)
-    FCALL_CONTRACT;
-
-    // If the number has no fractional part do nothing
-    // This shortcut is necessary to workaround precision loss in borderline cases on some platforms
-    if (x == (float)((INT32)x)) {
-        return x;
-    }
-
-    // We had a number that was equally close to 2 integers.
-    // We need to return the even one.
-
-    float tempVal = (x + 0.5f);
-    float flrTempVal = floorf(tempVal);
-
-    if ((flrTempVal == tempVal) && (fmodf(tempVal, 2.0f) != 0)) {
-        flrTempVal -= 1.0f;
-    }
-
-    return _copysignf(flrTempVal, x);
 FCIMPLEND
 
 /*=====================================Sin======================================

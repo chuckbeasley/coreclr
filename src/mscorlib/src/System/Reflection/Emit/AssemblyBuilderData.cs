@@ -18,7 +18,6 @@ namespace System.Reflection.Emit
     using System.IO;
     using System.Runtime.Versioning;
     using System.Diagnostics.SymbolStore;
-    using System.Diagnostics.Contracts;
 
     // This is a package private class. This class hold all of the managed
     // data member for AssemblyBuilder. Note that what ever data members added to
@@ -28,21 +27,13 @@ namespace System.Reflection.Emit
         internal AssemblyBuilderData(
             InternalAssemblyBuilder assembly,
             String strAssemblyName,
-            AssemblyBuilderAccess access,
-            String dir)
+            AssemblyBuilderAccess access)
         {
             m_assembly = assembly;
             m_strAssemblyName = strAssemblyName;
             m_access = access;
             m_moduleBuilderList = new List<ModuleBuilder>();
             m_resWriterList = new List<ResWriterData>();
-
-            //Init to null/0 done for you by the CLR.  FXCop has spoken
-
-            if (dir == null && access != AssemblyBuilderAccess.Run)
-                m_strDir = Environment.CurrentDirectory;
-            else
-                m_strDir = dir;
 
             m_peFileKind = PEFileKinds.Dll;
         }
@@ -106,7 +97,6 @@ namespace System.Reflection.Emit
         // Helper to ensure the type name is unique underneath assemblyBuilder
         internal void CheckTypeNameConflict(String strTypeName, TypeBuilder enclosingType)
         {
-            BCLDebug.Log("DYNIL", "## DYNIL LOGGING: AssemblyBuilderData.CheckTypeNameConflict( " + strTypeName + " )");
             for (int i = 0; i < m_moduleBuilderList.Count; i++)
             {
                 ModuleBuilder curModule = m_moduleBuilderList[i];
@@ -120,7 +110,7 @@ namespace System.Reflection.Emit
             //      if (enclosingType == null && m_assembly.GetType(strTypeName, false, false) != null)
             //      {
             //          // Cannot have two types with the same name
-            //          throw new ArgumentException(Environment.GetResourceString("Argument_DuplicateTypeName"));
+            //          throw new ArgumentException(SR.Argument_DuplicateTypeName);
             //      }
         }
 
@@ -135,7 +125,6 @@ namespace System.Reflection.Emit
 
         internal bool m_isSaved;
         internal const int m_iInitialSize = 16;
-        internal String m_strDir;
 
         // hard coding the assembly def token
         internal const int m_tkAssembly = 0x20000001;

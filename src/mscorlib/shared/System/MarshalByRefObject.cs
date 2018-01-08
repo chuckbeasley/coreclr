@@ -4,7 +4,6 @@
 
 namespace System
 {
-    [Serializable]
     public abstract class MarshalByRefObject
     {
         protected MarshalByRefObject()
@@ -13,12 +12,12 @@ namespace System
 
         public object GetLifetimeService()
         {
-            throw new PlatformNotSupportedException();
+            throw new PlatformNotSupportedException(SR.PlatformNotSupported_Remoting);
         }
 
         public virtual object InitializeLifetimeService()
         {
-            throw new PlatformNotSupportedException();
+            throw new PlatformNotSupportedException(SR.PlatformNotSupported_Remoting);
         }
 
         protected MarshalByRefObject MemberwiseClone(bool cloneIdentity)

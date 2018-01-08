@@ -9,7 +9,6 @@ namespace System.Reflection.Emit
     using System.Runtime.InteropServices;
     using System;
     using System.Reflection;
-    using System.Diagnostics.Contracts;
     using CultureInfo = System.Globalization.CultureInfo;
 
     internal sealed class SymbolMethod : MethodInfo
@@ -47,7 +46,7 @@ namespace System.Reflection.Emit
             }
             else
             {
-                m_parameterTypes = EmptyArray<Type>.Value;
+                m_parameterTypes = Array.Empty<Type>();
             }
 
             m_module = mod;
@@ -96,20 +95,19 @@ namespace System.Reflection.Emit
         #endregion
 
         #region MethodBase Overrides
-        [Pure]
         public override ParameterInfo[] GetParameters()
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_SymbolMethod"));
+            throw new NotSupportedException(SR.NotSupported_SymbolMethod);
         }
 
         public override MethodImplAttributes GetMethodImplementationFlags()
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_SymbolMethod"));
+            throw new NotSupportedException(SR.NotSupported_SymbolMethod);
         }
 
         public override MethodAttributes Attributes
         {
-            get { throw new NotSupportedException(Environment.GetResourceString("NotSupported_SymbolMethod")); }
+            get { throw new NotSupportedException(SR.NotSupported_SymbolMethod); }
         }
 
         public override CallingConventions CallingConvention
@@ -119,7 +117,7 @@ namespace System.Reflection.Emit
 
         public override RuntimeMethodHandle MethodHandle
         {
-            get { throw new NotSupportedException(Environment.GetResourceString("NotSupported_SymbolMethod")); }
+            get { throw new NotSupportedException(SR.NotSupported_SymbolMethod); }
         }
 
         #endregion
@@ -140,7 +138,7 @@ namespace System.Reflection.Emit
 
         public override Object Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_SymbolMethod"));
+            throw new NotSupportedException(SR.NotSupported_SymbolMethod);
         }
 
         public override MethodInfo GetBaseDefinition()
@@ -152,17 +150,17 @@ namespace System.Reflection.Emit
         #region ICustomAttributeProvider Implementation
         public override Object[] GetCustomAttributes(bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_SymbolMethod"));
+            throw new NotSupportedException(SR.NotSupported_SymbolMethod);
         }
 
         public override Object[] GetCustomAttributes(Type attributeType, bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_SymbolMethod"));
+            throw new NotSupportedException(SR.NotSupported_SymbolMethod);
         }
 
         public override bool IsDefined(Type attributeType, bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_SymbolMethod"));
+            throw new NotSupportedException(SR.NotSupported_SymbolMethod);
         }
 
         #endregion

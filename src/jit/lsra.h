@@ -41,22 +41,13 @@ inline regMaskTP calleeSaveRegs(RegisterType rt)
 
 struct LocationInfo
 {
+    Interval*    interval;
+    GenTree*     treeNode;
     LsraLocation loc;
+    TreeNodeInfo info;
 
-    // Reg Index in case of multi-reg result producing call node.
-    // Indicates the position of the register that this location refers to.
-    // The max bits needed is based on max value of MAX_RET_REG_COUNT value
-    // across all targets and that happens 4 on on Arm.  Hence index value
-    // would be 0..MAX_RET_REG_COUNT-1.
-    unsigned multiRegIdx : 2;
-
-    Interval* interval;
-    GenTree*  treeNode;
-
-    LocationInfo(LsraLocation l, Interval* i, GenTree* t, unsigned regIdx = 0)
-        : loc(l), multiRegIdx(regIdx), interval(i), treeNode(t)
+    LocationInfo(LsraLocation l, Interval* i, GenTree* t, unsigned regIdx = 0) : interval(i), treeNode(t), loc(l)
     {
-        assert(multiRegIdx == regIdx);
     }
 
     // default constructor for data structures
@@ -65,12 +56,256 @@ struct LocationInfo
     }
 };
 
+//------------------------------------------------------------------------
+// LocationInfoListNode: used to store a single `LocationInfo` value for a
+//                       node during `buildIntervals`.
+//
+// This is the node type for `LocationInfoList` below.
+//
+class LocationInfoListNode final : public LocationInfo
+{
+    friend class LocationInfoList;
+    friend class LocationInfoListNodePool;
+
+    LocationInfoListNode* m_next; // The next node in the list
+
+public:
+    LocationInfoListNode(LsraLocation l, Interval* i, GenTree* t, unsigned regIdx = 0) : LocationInfo(l, i, t, regIdx)
+    {
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoListNode::Next: Returns the next node in the list.
+    LocationInfoListNode* Next() const
+    {
+        return m_next;
+    }
+};
+
+//------------------------------------------------------------------------
+// LocationInfoList: used to store a list of `LocationInfo` values for a
+//                   node during `buildIntervals`.
+//
+// This list of 'LocationInfoListNode's contains the source nodes consumed by
+// a node, and is created by 'TreeNodeInfoInit'.
+//
+class LocationInfoList final
+{
+    friend class LocationInfoListNodePool;
+
+    LocationInfoListNode* m_head; // The head of the list
+    LocationInfoListNode* m_tail; // The tail of the list
+
+public:
+    LocationInfoList() : m_head(nullptr), m_tail(nullptr)
+    {
+    }
+
+    LocationInfoList(LocationInfoListNode* node) : m_head(node), m_tail(node)
+    {
+        assert(m_head->m_next == nullptr);
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoList::IsEmpty: Returns true if the list is empty.
+    //
+    bool IsEmpty() const
+    {
+        return m_head == nullptr;
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoList::Begin: Returns the first node in the list.
+    //
+    LocationInfoListNode* Begin() const
+    {
+        return m_head;
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoList::End: Returns the position after the last node in the
+    //                        list. The returned value is suitable for use as
+    //                        a sentinel for iteration.
+    //
+    LocationInfoListNode* End() const
+    {
+        return nullptr;
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoList::End: Returns the position after the last node in the
+    //                        list. The returned value is suitable for use as
+    //                        a sentinel for iteration.
+    //
+    LocationInfoListNode* Last() const
+    {
+        return m_tail;
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoList::Append: Appends a node to the list.
+    //
+    // Arguments:
+    //    node - The node to append. Must not be part of an existing list.
+    //
+    void Append(LocationInfoListNode* node)
+    {
+        assert(node->m_next == nullptr);
+
+        if (m_tail == nullptr)
+        {
+            assert(m_head == nullptr);
+            m_head = node;
+        }
+        else
+        {
+            m_tail->m_next = node;
+        }
+
+        m_tail = node;
+    }
+    //------------------------------------------------------------------------
+    // LocationInfoList::Append: Appends another list to this list.
+    //
+    // Arguments:
+    //    other - The list to append.
+    //
+    void Append(LocationInfoList other)
+    {
+        if (m_tail == nullptr)
+        {
+            assert(m_head == nullptr);
+            m_head = other.m_head;
+        }
+        else
+        {
+            m_tail->m_next = other.m_head;
+        }
+
+        m_tail = other.m_tail;
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoList::Prepend: Prepends a node to the list.
+    //
+    // Arguments:
+    //    node - The node to prepend. Must not be part of an existing list.
+    //
+    void Prepend(LocationInfoListNode* node)
+    {
+        assert(node->m_next == nullptr);
+
+        if (m_head == nullptr)
+        {
+            assert(m_tail == nullptr);
+            m_tail = node;
+        }
+        else
+        {
+            node->m_next = m_head;
+        }
+
+        m_head = node;
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoList::Add: Adds a node to the list.
+    //
+    // Arguments:
+    //    node    - The node to add. Must not be part of an existing list.
+    //    prepend - True if it should be prepended (otherwise is appended)
+    //
+    void Add(LocationInfoListNode* node, bool prepend)
+    {
+        if (prepend)
+        {
+            Prepend(node);
+        }
+        else
+        {
+            Append(node);
+        }
+    }
+
+    //------------------------------------------------------------------------
+    // GetTreeNodeInfo - retrieve the TreeNodeInfo for the given node
+    //
+    // Notes:
+    //     The TreeNodeInfoInit methods use this helper to retrieve the TreeNodeInfo for child nodes
+    //     from the useList being constructed. Note that, if the user knows the order of the operands,
+    //     it is expected that they should just retrieve them directly.
+
+    LocationInfoListNode* removeListNode(GenTree* node)
+    {
+        LocationInfoListNode* prevListNode = nullptr;
+        for (LocationInfoListNode *listNode = Begin(), *end = End(); listNode != end; listNode = listNode->Next())
+        {
+            if (listNode->treeNode == node)
+            {
+                LocationInfoListNode* nextNode = listNode->Next();
+                if (prevListNode == nullptr)
+                {
+                    m_head = nextNode;
+                }
+                else
+                {
+                    prevListNode->m_next = nextNode;
+                }
+                if (nextNode == nullptr)
+                {
+                    m_tail = prevListNode;
+                }
+                listNode->m_next = nullptr;
+                return listNode;
+            }
+            prevListNode = listNode;
+        }
+        assert(!"GetTreeNodeInfo didn't find the node");
+        unreached();
+    }
+
+    //------------------------------------------------------------------------
+    // GetTreeNodeInfo - retrieve the TreeNodeInfo for the given node
+    //
+    // Notes:
+    //     The TreeNodeInfoInit methods use this helper to retrieve the TreeNodeInfo for child nodes
+    //     from the useList being constructed. Note that, if the user knows the order of the operands,
+    //     it is expected that they should just retrieve them directly.
+
+    TreeNodeInfo& GetTreeNodeInfo(GenTree* node)
+    {
+        for (LocationInfoListNode *listNode = Begin(), *end = End(); listNode != end; listNode = listNode->Next())
+        {
+            if (listNode->treeNode == node)
+            {
+                return listNode->info;
+            }
+        }
+        assert(!"GetTreeNodeInfo didn't find the node");
+        unreached();
+    }
+
+    //------------------------------------------------------------------------
+    // LocationInfoList::GetSecond: Gets the second node in the list.
+    //
+    // Arguments:
+    //    (DEBUG ONLY) treeNode - The GenTree* we expect to be in the second node.
+    //
+    LocationInfoListNode* GetSecond(INDEBUG(GenTree* treeNode))
+    {
+        noway_assert((Begin() != nullptr) && (Begin()->Next() != nullptr));
+        LocationInfoListNode* second = Begin()->Next();
+        assert(second->treeNode == treeNode);
+        return second;
+    }
+};
+
 struct LsraBlockInfo
 {
     // bbNum of the predecessor to use for the register location of live-in variables.
     // 0 for fgFirstBB.
-    BasicBlock::weight_t weight;
     unsigned int         predBBNum;
+    BasicBlock::weight_t weight;
     bool                 hasCriticalInEdge;
     bool                 hasCriticalOutEdge;
 
@@ -121,7 +356,7 @@ inline bool RefTypeIsDef(RefType refType)
     return ((refType & RefTypeDef) == RefTypeDef);
 }
 
-typedef regNumber* VarToRegMap;
+typedef regNumberSmall* VarToRegMap;
 
 template <typename ElementType, CompMemKind MemKind>
 class ListElementAllocator
@@ -161,8 +396,10 @@ public:
 typedef ListElementAllocator<Interval, CMK_LSRA_Interval>       LinearScanMemoryAllocatorInterval;
 typedef ListElementAllocator<RefPosition, CMK_LSRA_RefPosition> LinearScanMemoryAllocatorRefPosition;
 
-typedef jitstd::list<Interval, LinearScanMemoryAllocatorInterval>       IntervalList;
-typedef jitstd::list<RefPosition, LinearScanMemoryAllocatorRefPosition> RefPositionList;
+typedef jitstd::list<Interval, LinearScanMemoryAllocatorInterval>                         IntervalList;
+typedef jitstd::list<RefPosition, LinearScanMemoryAllocatorRefPosition>                   RefPositionList;
+typedef jitstd::list<RefPosition, LinearScanMemoryAllocatorRefPosition>::iterator         RefPositionIterator;
+typedef jitstd::list<RefPosition, LinearScanMemoryAllocatorRefPosition>::reverse_iterator RefPositionReverseIterator;
 
 class Referenceable
 {
@@ -417,13 +654,13 @@ public:
     // Insert a copy in the case where a tree node value must be moved to a different
     // register at the point of use, or it is reloaded to a different register
     // than the one it was spilled from
-    void insertCopyOrReload(BasicBlock* block, GenTreePtr tree, unsigned multiRegIdx, RefPosition* refPosition);
+    void insertCopyOrReload(BasicBlock* block, GenTree* tree, unsigned multiRegIdx, RefPosition* refPosition);
 
 #if FEATURE_PARTIAL_SIMD_CALLEE_SAVE
     // Insert code to save and restore the upper half of a vector that lives
     // in a callee-save register at the point of a call (the upper half is
     // not preserved).
-    void insertUpperVectorSaveAndReload(GenTreePtr tree, RefPosition* refPosition, BasicBlock* block);
+    void insertUpperVectorSaveAndReload(GenTree* tree, RefPosition* refPosition, BasicBlock* block);
 #endif // FEATURE_PARTIAL_SIMD_CALLEE_SAVE
 
     // resolve along one block-block edge
@@ -445,8 +682,17 @@ public:
         InsertAtBottom
     };
 
+#ifdef _TARGET_ARM_
+    void addResolutionForDouble(BasicBlock*     block,
+                                GenTreePtr      insertionPoint,
+                                Interval**      sourceIntervals,
+                                regNumberSmall* location,
+                                regNumber       toReg,
+                                regNumber       fromReg,
+                                ResolveType     resolveType);
+#endif
     void addResolution(
-        BasicBlock* block, GenTreePtr insertionPoint, Interval* interval, regNumber outReg, regNumber inReg);
+        BasicBlock* block, GenTree* insertionPoint, Interval* interval, regNumber outReg, regNumber inReg);
 
     void handleOutgoingCriticalEdges(BasicBlock* block);
 
@@ -630,11 +876,26 @@ private:
         return getLsraRegOptionalControl() == LSRA_REG_OPTIONAL_NO_ALLOC;
     }
 
+    bool candidatesAreStressLimited()
+    {
+        return ((lsraStressMask & (LSRA_LIMIT_MASK | LSRA_SELECT_MASK)) != 0);
+    }
+
     // Dump support
+    void dumpDefList();
     void lsraDumpIntervals(const char* msg);
     void dumpRefPositions(const char* msg);
     void dumpVarRefPositions(const char* msg);
 
+    // Checking code
+    static bool IsLsraAdded(GenTree* node)
+    {
+        return ((node->gtDebugFlags & GTF_DEBUG_NODE_LSRA_ADDED) != 0);
+    }
+    static void SetLsraAdded(GenTree* node)
+    {
+        node->gtDebugFlags |= GTF_DEBUG_NODE_LSRA_ADDED;
+    }
     static bool IsResolutionMove(GenTree* node);
     static bool IsResolutionNode(LIR::Range& containingRange, GenTree* node);
 
@@ -666,11 +927,21 @@ private:
     {
         return false;
     }
+    static void SetLsraAdded(GenTree* node)
+    {
+        // do nothing; checked only under #DEBUG
+    }
+    bool candidatesAreStressLimited()
+    {
+        return false;
+    }
 #endif // !DEBUG
 
 public:
     // Used by Lowering when considering whether to split Longs, as well as by identifyCandidates().
     bool isRegCandidate(LclVarDsc* varDsc);
+
+    bool isContainableMemoryOp(GenTree* node);
 
 private:
     // Determine which locals are candidates for allocation
@@ -688,11 +959,27 @@ private:
     void setFrameType();
 
     // Update allocations at start/end of block
+    void unassignIntervalBlockStart(RegRecord* regRecord, VarToRegMap inVarToRegMap);
     void processBlockEndAllocation(BasicBlock* current);
 
     // Record variable locations at start/end of block
     void processBlockStartLocations(BasicBlock* current, bool allocationPass);
     void processBlockEndLocations(BasicBlock* current);
+
+#ifdef _TARGET_ARM_
+    bool isSecondHalfReg(RegRecord* regRec, Interval* interval);
+    RegRecord* getSecondHalfRegRec(RegRecord* regRec);
+    RegRecord* findAnotherHalfRegRec(RegRecord* regRec);
+    bool canSpillDoubleReg(RegRecord* physRegRecord, LsraLocation refLocation, unsigned* recentAssignedRefWeight);
+    void unassignDoublePhysReg(RegRecord* doubleRegRecord);
+#endif
+    void updateAssignedInterval(RegRecord* reg, Interval* interval, RegisterType regType);
+    void updatePreviousInterval(RegRecord* reg, Interval* interval, RegisterType regType);
+    bool canRestorePreviousInterval(RegRecord* regRec, Interval* assignedInterval);
+    bool isAssignedToInterval(Interval* interval, RegRecord* regRec);
+    bool isRefPositionActive(RefPosition* refPosition, LsraLocation refLocation);
+    bool canSpillReg(RegRecord* physRegRecord, LsraLocation refLocation, unsigned* recentAssignedRefWeight);
+    bool isRegInUse(RegRecord* regRec, RefPosition* refPosition);
 
     RefType CheckBlockType(BasicBlock* block, BasicBlock* prevBlock);
 
@@ -709,8 +996,7 @@ private:
     void buildRefPositionsForNode(GenTree*                  tree,
                                   BasicBlock*               block,
                                   LocationInfoListNodePool& listNodePool,
-                                  HashTableBase<GenTree*, LocationInfoList>& operandToLocationInfoMap,
-                                  LsraLocation loc);
+                                  LsraLocation              loc);
 
 #if FEATURE_PARTIAL_SIMD_CALLEE_SAVE
     VARSET_VALRET_TP buildUpperVectorSaveRefPositions(GenTree* tree, LsraLocation currentLoc);
@@ -728,34 +1014,6 @@ private:
     // Update reg state for an incoming register argument
     void updateRegStateForArg(LclVarDsc* argDsc);
 
-    inline void setTreeNodeInfo(GenTree* tree, TreeNodeInfo info)
-    {
-        tree->gtLsraInfo = info;
-        tree->gtClearReg(compiler);
-
-        DBEXEC(VERBOSE, info.dump(this));
-    }
-
-    inline void clearDstCount(GenTree* tree)
-    {
-        tree->gtLsraInfo.dstCount = 0;
-    }
-
-    inline void clearOperandCounts(GenTree* tree)
-    {
-        TreeNodeInfo& info = tree->gtLsraInfo;
-        info.srcCount      = 0;
-        info.dstCount      = 0;
-
-        info.internalIntCount   = 0;
-        info.internalFloatCount = 0;
-    }
-
-    inline bool isLocalDefUse(GenTree* tree)
-    {
-        return tree->gtLsraInfo.isLocalDefUse;
-    }
-
     inline bool isCandidateLocalRef(GenTree* tree)
     {
         if (tree->IsLocal())
@@ -769,7 +1027,7 @@ private:
         return false;
     }
 
-    static Compiler::fgWalkResult markAddrModeOperandsHelperMD(GenTreePtr tree, void* p);
+    static Compiler::fgWalkResult markAddrModeOperandsHelperMD(GenTree* tree, void* p);
 
     // Return the registers killed by the given tree node.
     regMaskTP getKillSetForNode(GenTree* tree);
@@ -783,6 +1041,7 @@ private:
     regMaskTP allSIMDRegs();
     regMaskTP internalFloatRegCandidates();
 
+    bool isMultiRegRelated(RefPosition* refPosition, LsraLocation location);
     bool registerIsFree(regNumber regNum, RegisterType regType);
     bool registerIsAvailable(RegRecord*    physRegRecord,
                              LsraLocation  currentLoc,
@@ -791,34 +1050,20 @@ private:
     void freeRegister(RegRecord* physRegRecord);
     void freeRegisters(regMaskTP regsToFree);
 
-    regMaskTP getUseCandidates(GenTree* useNode);
-    regMaskTP getDefCandidates(GenTree* tree);
     var_types getDefType(GenTree* tree);
 
-    RefPosition* defineNewInternalTemp(GenTree*     tree,
-                                       RegisterType regType,
-                                       LsraLocation currentLoc,
-                                       regMaskTP regMask DEBUGARG(unsigned minRegCandidateCount));
+    RefPosition* defineNewInternalTemp(GenTree* tree, RegisterType regType, regMaskTP regMask);
 
-    int buildInternalRegisterDefsForNode(GenTree*     tree,
-                                         LsraLocation currentLoc,
-                                         RefPosition* defs[] DEBUGARG(unsigned minRegCandidateCount));
+    int buildInternalRegisterDefsForNode(GenTree* tree, TreeNodeInfo* info, RefPosition* defs[]);
 
-    void buildInternalRegisterUsesForNode(GenTree*     tree,
-                                          LsraLocation currentLoc,
-                                          RefPosition* defs[],
-                                          int total DEBUGARG(unsigned minRegCandidateCount));
+    void buildInternalRegisterUsesForNode(GenTree* tree, TreeNodeInfo* info, RefPosition* defs[], int total);
 
-    void resolveLocalRef(BasicBlock* block, GenTreePtr treeNode, RefPosition* currentRefPosition);
+    void resolveLocalRef(BasicBlock* block, GenTree* treeNode, RefPosition* currentRefPosition);
 
-    void insertMove(BasicBlock* block, GenTreePtr insertionPoint, unsigned lclNum, regNumber inReg, regNumber outReg);
+    void insertMove(BasicBlock* block, GenTree* insertionPoint, unsigned lclNum, regNumber inReg, regNumber outReg);
 
-    void insertSwap(BasicBlock* block,
-                    GenTreePtr  insertionPoint,
-                    unsigned    lclNum1,
-                    regNumber   reg1,
-                    unsigned    lclNum2,
-                    regNumber   reg2);
+    void insertSwap(
+        BasicBlock* block, GenTree* insertionPoint, unsigned lclNum1, regNumber reg1, unsigned lclNum2, regNumber reg2);
 
 public:
     // TODO-Cleanup: unused?
@@ -845,10 +1090,20 @@ public:
 private:
     Interval* newInterval(RegisterType regType);
 
-    Interval* getIntervalForLocalVar(unsigned varNum)
+    Interval* getIntervalForLocalVar(unsigned varIndex)
     {
-        return localVarIntervals[varNum];
+        assert(varIndex < compiler->lvaTrackedCount);
+        assert(localVarIntervals[varIndex] != nullptr);
+        return localVarIntervals[varIndex];
     }
+
+    Interval* getIntervalForLocalVarNode(GenTreeLclVarCommon* tree)
+    {
+        LclVarDsc* varDsc = &compiler->lvaTable[tree->gtLclNum];
+        assert(varDsc->lvTracked);
+        return getIntervalForLocalVar(varDsc->lvVarIndex);
+    }
+
     RegRecord* getRegisterRecord(regNumber regNum);
 
     RefPosition* newRefPositionRaw(LsraLocation nodeLocation, GenTree* treeNode, RefType refType);
@@ -858,7 +1113,7 @@ private:
                                 RefType      theRefType,
                                 GenTree*     theTreeNode,
                                 regMaskTP    mask,
-                                unsigned multiRegIdx = 0 DEBUGARG(unsigned minRegCandidateCount = 1));
+                                unsigned     multiRegIdx = 0);
 
     RefPosition* newRefPosition(
         regNumber reg, LsraLocation theLocation, RefType theRefType, GenTree* theTreeNode, regMaskTP mask);
@@ -876,13 +1131,14 @@ private:
      ****************************************************************************/
     RegisterType getRegisterType(Interval* currentInterval, RefPosition* refPosition);
     regNumber tryAllocateFreeReg(Interval* current, RefPosition* refPosition);
-    RegRecord* findBestPhysicalReg(RegisterType regType,
-                                   LsraLocation endLocation,
-                                   regMaskTP    candidates,
-                                   regMaskTP    preferences);
     regNumber allocateBusyReg(Interval* current, RefPosition* refPosition, bool allocateIfProfitable);
     regNumber assignCopyReg(RefPosition* refPosition);
 
+    bool isMatchingConstant(RegRecord* physRegRecord, RefPosition* refPosition);
+    bool isSpillCandidate(Interval*     current,
+                          RefPosition*  refPosition,
+                          RegRecord*    physRegRecord,
+                          LsraLocation& nextLocation);
     void checkAndAssignInterval(RegRecord* regRec, Interval* interval);
     void assignPhysReg(RegRecord* regRec, Interval* interval);
     void assignPhysReg(regNumber reg, Interval* interval)
@@ -890,7 +1146,10 @@ private:
         assignPhysReg(getRegisterRecord(reg), interval);
     }
 
+    bool isAssigned(RegRecord* regRec ARM_ARG(RegisterType newRegType));
+    bool isAssigned(RegRecord* regRec, LsraLocation lastLocation ARM_ARG(RegisterType newRegType));
     void checkAndClearInterval(RegRecord* regRec, RefPosition* spillRefPosition);
+    void unassignPhysReg(RegRecord* regRec ARM_ARG(RegisterType newRegType));
     void unassignPhysReg(RegRecord* regRec, RefPosition* spillRefPosition);
     void unassignPhysRegNoSpill(RegRecord* reg);
     void unassignPhysReg(regNumber reg)
@@ -924,8 +1183,7 @@ private:
         unsigned fromBBNum;
         unsigned toBBNum;
     };
-    typedef SimplerHashTable<unsigned, SmallPrimitiveKeyFuncs<unsigned>, SplitEdgeInfo, JitSimplerHashBehavior>
-                                SplitBBNumToTargetBBNumMap;
+    typedef JitHashTable<unsigned, JitSmallPrimitiveKeyFuncs<unsigned>, SplitEdgeInfo> SplitBBNumToTargetBBNumMap;
     SplitBBNumToTargetBBNumMap* splitBBNumToTargetBBNumMap;
     SplitBBNumToTargetBBNumMap* getSplitBBNumToTargetBBNumMap()
     {
@@ -943,7 +1201,8 @@ private:
     void setOutVarRegForBB(unsigned int bbNum, unsigned int varNum, regNumber reg);
     VarToRegMap getInVarToRegMap(unsigned int bbNum);
     VarToRegMap getOutVarToRegMap(unsigned int bbNum);
-    regNumber getVarReg(VarToRegMap map, unsigned int varNum);
+    void setVarReg(VarToRegMap map, unsigned int trackedVarIndex, regNumber reg);
+    regNumber getVarReg(VarToRegMap map, unsigned int trackedVarIndex);
     // Initialize the incoming VarToRegMap to the given map values (generally a predecessor of
     // the block)
     VarToRegMap setInVarToRegMap(unsigned int bbNum, VarToRegMap srcVarToRegMap);
@@ -967,16 +1226,12 @@ private:
     //     shown.
 
     enum LsraTupleDumpMode{LSRA_DUMP_PRE, LSRA_DUMP_REFPOS, LSRA_DUMP_POST};
-    void lsraGetOperandString(GenTreePtr        tree,
-                              LsraTupleDumpMode mode,
-                              char*             operandString,
-                              unsigned          operandStringLength);
-    void lsraDispNode(GenTreePtr tree, LsraTupleDumpMode mode, bool hasDest);
+    void lsraGetOperandString(GenTree* tree, LsraTupleDumpMode mode, char* operandString, unsigned operandStringLength);
+    void lsraDispNode(GenTree* tree, LsraTupleDumpMode mode, bool hasDest);
     void DumpOperandDefs(
         GenTree* operand, bool& first, LsraTupleDumpMode mode, char* operandString, const unsigned operandStringLength);
     void TupleStyleDump(LsraTupleDumpMode mode);
 
-    bool         dumpTerse;
     LsraLocation maxNodeLocation;
 
     // Width of various fields - used to create a streamlined dump during allocation that shows the
@@ -1003,11 +1258,19 @@ private:
     // How many rows have we printed since last printing a "title row"?
     static const int MAX_ROWS_BETWEEN_TITLES = 50;
     int              rowCountSinceLastTitle;
+    // Current mask of registers being printed in the dump.
+    regMaskTP lastDumpedRegisters;
+    regMaskTP registersToDump;
+    int       lastUsedRegNumIndex;
+    bool shouldDumpReg(regNumber regNum)
+    {
+        return (registersToDump & genRegMask(regNum)) != 0;
+    }
 
     void dumpRegRecordHeader();
     void dumpRegRecordTitle();
+    void dumpRegRecordTitleIfNeeded();
     void dumpRegRecordTitleLines();
-    int  getLastUsedRegNumIndex();
     void dumpRegRecords();
     // An abbreviated RefPosition dump for printing with column-based register state
     void dumpRefPositionShort(RefPosition* refPosition, BasicBlock* currentBlock);
@@ -1016,8 +1279,7 @@ private:
     // A dump of Referent, in exactly regColumnWidth characters
     void dumpIntervalName(Interval* interval);
 
-    // Events during the allocation phase that cause some dump output, which differs depending
-    // upon whether dumpTerse is set:
+    // Events during the allocation phase that cause some dump output
     enum LsraDumpEvent{
         // Conflicting def/use
         LSRA_EVENT_DEFUSE_CONFLICT, LSRA_EVENT_DEFUSE_FIXED_DELAY_USE, LSRA_EVENT_DEFUSE_CASE1, LSRA_EVENT_DEFUSE_CASE2,
@@ -1058,6 +1320,7 @@ private:
         LSRA_STAT_SPILL, LSRA_STAT_COPY_REG, LSRA_STAT_RESOLUTION_MOV, LSRA_STAT_SPLIT_EDGE,
     };
 
+    unsigned regCandidateVarCount;
     void updateLsraStat(LsraStat stat, unsigned currentBBNum);
 
     void dumpLsraStats(FILE* file);
@@ -1071,17 +1334,17 @@ private:
 
 private:
 #if MEASURE_MEM_ALLOC
-    IAllocator* lsraIAllocator;
+    CompAllocator* lsraAllocator;
 #endif
 
-    IAllocator* getAllocator(Compiler* comp)
+    CompAllocator* getAllocator(Compiler* comp)
     {
 #if MEASURE_MEM_ALLOC
-        if (lsraIAllocator == nullptr)
+        if (lsraAllocator == nullptr)
         {
-            lsraIAllocator = new (comp, CMK_LSRA) CompAllocator(comp, CMK_LSRA);
+            lsraAllocator = new (comp, CMK_LSRA) CompAllocator(comp, CMK_LSRA);
         }
-        return lsraIAllocator;
+        return lsraAllocator;
 #else
         return comp->getAllocator();
 #endif
@@ -1096,6 +1359,7 @@ private:
 
     RegRecord physRegs[REG_COUNT];
 
+    // Map from tracked variable index to Interval*.
     Interval** localVarIntervals;
 
     // Set of blocks that have been visited.
@@ -1131,12 +1395,14 @@ private:
     int compareBlocksForSequencing(BasicBlock* block1, BasicBlock* block2, bool useBlockWeights);
     BasicBlockList* blockSequenceWorkList;
     bool            blockSequencingDone;
-    void addToBlockSequenceWorkList(BlockSet sequencedBlockSet, BasicBlock* block);
+    void addToBlockSequenceWorkList(BlockSet sequencedBlockSet, BasicBlock* block, BlockSet& predSet);
     void removeFromBlockSequenceWorkList(BasicBlockList* listNode, BasicBlockList* prevNode);
     BasicBlock* getNextCandidateFromWorkList();
 
     // The bbNum of the block being currently allocated or resolved.
     unsigned int curBBNum;
+    // The current location
+    LsraLocation currentLoc;
     // The ordinal of the block we're on (i.e. this is the curBBSeqNum-th block we've allocated).
     unsigned int curBBSeqNum;
     // The number of blocks that we've sequenced.
@@ -1145,6 +1411,14 @@ private:
     LsraLocation curBBStartLocation;
     // True if the method contains any critical edges.
     bool hasCriticalEdges;
+
+    // True if there are any register candidate lclVars available for allocation.
+    bool enregisterLocalVars;
+
+    virtual bool willEnregisterLocalVars() const
+    {
+        return enregisterLocalVars;
+    }
 
     // Ordered list of RefPositions
     RefPositionList refPositions;
@@ -1161,8 +1435,10 @@ private:
     PhasedVar<regMaskTP> availableFloatRegs;
     PhasedVar<regMaskTP> availableDoubleRegs;
 
-    // Current set of live tracked vars, used during building of RefPositions to determine whether
-    // to preference to callee-save
+    // The set of all register candidates. Note that this may be a subset of tracked vars.
+    VARSET_TP registerCandidateVars;
+    // Current set of live register candidate vars, used during building of RefPositions to determine
+    // whether to preference to callee-save.
     VARSET_TP currentLiveVars;
     // Set of variables that may require resolution across an edge.
     // This is first constructed during interval building, to contain all the lclVars that are live at BB edges.
@@ -1174,11 +1450,19 @@ private:
     VARSET_TP fpCalleeSaveCandidateVars;
 #if FEATURE_PARTIAL_SIMD_CALLEE_SAVE
 #if defined(_TARGET_AMD64_)
-    static const var_types LargeVectorType     = TYP_SIMD32;
+    static bool varTypeNeedsPartialCalleeSave(var_types type)
+    {
+        return (emitTypeSize(type) == 32);
+    }
     static const var_types LargeVectorSaveType = TYP_SIMD16;
 #elif defined(_TARGET_ARM64_)
-    static const var_types LargeVectorType      = TYP_SIMD16;
-    static const var_types LargeVectorSaveType  = TYP_DOUBLE;
+    static bool varTypeNeedsPartialCalleeSave(var_types type)
+    {
+        // ARM64 ABI FP Callee save registers only require Callee to save lower 8 Bytes
+        // For SIMD types longer then 8 bytes Caller is responsible for saving and restoring Upper bytes.
+        return (emitTypeSize(type) == 16);
+    }
+    static const var_types LargeVectorSaveType = TYP_DOUBLE;
 #else // !defined(_TARGET_AMD64_) && !defined(_TARGET_ARM64_)
 #error("Unknown target architecture for FEATURE_SIMD")
 #endif // !defined(_TARGET_AMD64_) && !defined(_TARGET_ARM64_)
@@ -1188,6 +1472,127 @@ private:
     // Set of large vector (TYP_SIMD32 on AVX) variables to consider for callee-save registers.
     VARSET_TP largeVectorCalleeSaveCandidateVars;
 #endif // FEATURE_PARTIAL_SIMD_CALLEE_SAVE
+
+    //-----------------------------------------------------------------------
+    // TreeNodeInfo methods
+    //-----------------------------------------------------------------------
+
+    // The defList is used for the transient TreeNodeInfo that is computed by
+    // the TreeNodeInfoInit methods, and used in building RefPositions.
+    // When Def RefPositions are built for a node, their NodeInfo is placed
+    // in the defList. As the consuming node is handled, it moves the NodeInfo
+    // into an ordered useList corresponding to the uses for that node.
+    LocationInfoList defList;
+    // The useList is constructed for each node by the TreeNodeInfoInit methods.
+    // It contains the TreeNodeInfo for its operands, in their order of use.
+    LocationInfoList useList;
+
+    // Remove the LocationInfoListNode for the given node from the defList, and put it into the useList.
+    // The node must not be contained, and must have been processed by buildRefPositionsForNode().
+    void appendLocationInfoToList(GenTree* node)
+    {
+        LocationInfoListNode* locationInfo = defList.removeListNode(node);
+        useList.Append(locationInfo);
+    }
+    // Get the LocationInfoListNodes for the given node, and return it, but don't put it into the useList.
+    // The node must not be contained, and must have been processed by buildRefPositionsForNode().
+    LocationInfoListNode* getLocationInfo(GenTree* node)
+    {
+        LocationInfoListNode* locationInfo = defList.removeListNode(node);
+        return locationInfo;
+    }
+    //------------------------------------------------------------------------
+    // appendBinaryLocationInfoToList: Get the LocationInfoListNodes for the operands of the
+    //    given node, and put them into the useList.
+    //
+    // Arguments:
+    //    node - a GenTreeOp
+    //
+    // Return Value:
+    //    The number of actual register operands.
+    //
+    // Notes:
+    //    The operands must already have been processed by buildRefPositionsForNode, and their
+    //    LocationInfoListNodes placed in the defList.
+    //
+    int appendBinaryLocationInfoToList(GenTreeOp* node)
+    {
+        bool                  found;
+        LocationInfoListNode* op1LocationInfo = nullptr;
+        LocationInfoListNode* op2LocationInfo = nullptr;
+        int                   srcCount        = 0;
+        GenTree*              op1             = node->gtOp1;
+        GenTree*              op2             = node->gtGetOp2IfPresent();
+        if (node->IsReverseOp() && op2 != nullptr)
+        {
+            srcCount += GetOperandInfo(op2);
+            op2 = nullptr;
+        }
+        if (op1 != nullptr)
+        {
+            srcCount += GetOperandInfo(op1);
+        }
+        if (op2 != nullptr)
+        {
+            srcCount += GetOperandInfo(op2);
+        }
+        return srcCount;
+    }
+
+    // This is the main entry point for computing the TreeNodeInfo for a node.
+    void TreeNodeInfoInit(GenTree* stmt, TreeNodeInfo* info);
+
+    void TreeNodeInfoInitCheckByteable(GenTree* tree, TreeNodeInfo* info);
+
+    bool CheckAndSetDelayFree(GenTree* delayUseSrc);
+
+    void TreeNodeInfoInitSimple(GenTree* tree, TreeNodeInfo* info);
+    int GetOperandInfo(GenTree* node);
+    int GetOperandInfo(GenTree* node, LocationInfoListNode** pFirstInfo);
+    int GetIndirInfo(GenTreeIndir* indirTree);
+    void HandleFloatVarArgs(GenTreeCall* call, TreeNodeInfo* info, GenTree* argNode, bool* callHasFloatRegArgs);
+
+    void TreeNodeInfoInitStoreLoc(GenTree* tree, TreeNodeInfo* info);
+    void TreeNodeInfoInitReturn(GenTree* tree, TreeNodeInfo* info);
+    // This method, unlike the others, returns the number of sources, since it may be called when
+    // 'tree' is contained.
+    int TreeNodeInfoInitShiftRotate(GenTree* tree, TreeNodeInfo* info);
+    void TreeNodeInfoInitPutArgReg(GenTreeUnOp* node, TreeNodeInfo* info);
+    void TreeNodeInfoInitCall(GenTreeCall* call, TreeNodeInfo* info);
+    void TreeNodeInfoInitCmp(GenTree* tree, TreeNodeInfo* info);
+    void TreeNodeInfoInitStructArg(GenTree* structArg, TreeNodeInfo* info);
+    void TreeNodeInfoInitBlockStore(GenTreeBlk* blkNode, TreeNodeInfo* info);
+    void TreeNodeInfoInitModDiv(GenTree* tree, TreeNodeInfo* info);
+    void TreeNodeInfoInitIntrinsic(GenTree* tree, TreeNodeInfo* info);
+    void TreeNodeInfoInitStoreLoc(GenTreeLclVarCommon* tree, TreeNodeInfo* info);
+    void TreeNodeInfoInitIndir(GenTreeIndir* indirTree, TreeNodeInfo* info);
+    void TreeNodeInfoInitGCWriteBarrier(GenTree* tree, TreeNodeInfo* info);
+    void TreeNodeInfoInitCast(GenTree* tree, TreeNodeInfo* info);
+
+#ifdef _TARGET_X86_
+    bool ExcludeNonByteableRegisters(GenTree* tree);
+#endif
+
+#if defined(_TARGET_XARCH_)
+    // returns true if the tree can use the read-modify-write memory instruction form
+    bool isRMWRegOper(GenTree* tree);
+    void TreeNodeInfoInitMul(GenTree* tree, TreeNodeInfo* info);
+    void SetContainsAVXFlags(bool isFloatingPointType = true, unsigned sizeOfSIMDVector = 0);
+#endif // defined(_TARGET_XARCH_)
+
+#ifdef FEATURE_SIMD
+    void TreeNodeInfoInitSIMD(GenTreeSIMD* tree, TreeNodeInfo* info);
+#endif // FEATURE_SIMD
+
+#if FEATURE_HW_INTRINSICS
+    void TreeNodeInfoInitHWIntrinsic(GenTreeHWIntrinsic* intrinsicTree, TreeNodeInfo* info);
+#endif // FEATURE_HW_INTRINSICS
+
+    void TreeNodeInfoInitPutArgStk(GenTreePutArgStk* argNode, TreeNodeInfo* info);
+#ifdef _TARGET_ARM_
+    void TreeNodeInfoInitPutArgSplit(GenTreePutArgSplit* tree, TreeNodeInfo* info);
+#endif
+    void TreeNodeInfoInitLclHeap(GenTree* tree, TreeNodeInfo* info);
 };
 
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -1217,10 +1622,11 @@ public:
         , isStructField(false)
         , isPromotedStruct(false)
         , hasConflictingDefUse(false)
-        , hasNonCommutativeRMWDef(false)
+        , hasInterferingUses(false)
         , isSpecialPutArg(false)
         , preferCalleeSave(false)
         , isConstant(false)
+        , isMultiReg(false)
         , physReg(REG_COUNT)
 #ifdef DEBUG
         , intervalIndex(0)
@@ -1238,7 +1644,7 @@ public:
     void microDump();
 #endif // DEBUG
 
-    void setLocalNumber(unsigned localNum, LinearScan* l);
+    void setLocalNumber(Compiler* compiler, unsigned lclNum, LinearScan* l);
 
     // Fixed registers for which this Interval has a preference
     regMaskTP registerPreferences;
@@ -1274,8 +1680,9 @@ public:
     // true if this is an SDSU interval for which the def and use have conflicting register
     // requirements
     bool hasConflictingDefUse : 1;
-    // true if this interval is defined by a non-commutative 2-operand instruction
-    bool hasNonCommutativeRMWDef : 1;
+    // true if this interval's defining node has "delayRegFree" uses, either due to it being an RMW instruction,
+    // OR because it requires an internal register that differs from the target.
+    bool hasInterferingUses : 1;
 
     // True if this interval is defined by a putArg, whose source is a non-last-use lclVar.
     // During allocation, this flag will be cleared if the source is not already in the required register.
@@ -1289,6 +1696,9 @@ public:
     // True if this interval is defined by a constant node that may be reused and/or may be
     // able to reuse a constant that's already in a register.
     bool isConstant : 1;
+
+    // True if this Interval is defined by a node that produces multiple registers.
+    bool isMultiReg : 1;
 
     // The register to which it is currently assigned.
     regNumber physReg;
@@ -1421,6 +1831,105 @@ public:
 class RefPosition
 {
 public:
+    // A RefPosition refers to either an Interval or a RegRecord. 'referent' points to one
+    // of these types. If it refers to a RegRecord, then 'isPhysRegRef' is true. If it
+    // refers to an Interval, then 'isPhysRegRef' is false.
+    //
+    // Q: can 'referent' be NULL?
+
+    Referenceable* referent;
+
+    // nextRefPosition is the next in code order.
+    // Note that in either case there is no need for these to be doubly linked, as they
+    // are only traversed in the forward direction, and are not moved.
+    RefPosition* nextRefPosition;
+
+    // The remaining fields are common to both options
+    GenTree*     treeNode;
+    unsigned int bbNum;
+
+    // Prior to the allocation pass, registerAssignment captures the valid registers
+    // for this RefPosition. An empty set means that any register is valid.  A non-empty
+    // set means that it must be one of the given registers (may be the full set if the
+    // only constraint is that it must reside in SOME register)
+    // After the allocation pass, this contains the actual assignment
+    LsraLocation nodeLocation;
+    regMaskTP    registerAssignment;
+
+    RefType refType;
+
+    // NOTE: C++ only packs bitfields if the base type is the same. So make all the base
+    // NOTE: types of the logically "bool" types that follow 'unsigned char', so they match
+    // NOTE: RefType that precedes this, and multiRegIdx can also match.
+
+    // Indicates whether this ref position is to be allocated a reg only if profitable. Currently these are the
+    // ref positions that lower/codegen has indicated as reg optional and is considered a contained memory operand if
+    // no reg is allocated.
+    unsigned char allocRegIfProfitable : 1;
+
+    // Used by RefTypeDef/Use positions of a multi-reg call node.
+    // Indicates the position of the register that this ref position refers to.
+    // The max bits needed is based on max value of MAX_RET_REG_COUNT value
+    // across all targets and that happens 4 on on Arm.  Hence index value
+    // would be 0..MAX_RET_REG_COUNT-1.
+    unsigned char multiRegIdx : 2;
+
+    // Last Use - this may be true for multiple RefPositions in the same Interval
+    unsigned char lastUse : 1;
+
+    // Spill and Copy info
+    //   reload indicates that the value was spilled, and must be reloaded here.
+    //   spillAfter indicates that the value is spilled here, so a spill must be added.
+    //   copyReg indicates that the value needs to be copied to a specific register,
+    //      but that it will also retain its current assigned register.
+    //   moveReg indicates that the value needs to be moved to a different register,
+    //      and that this will be its new assigned register.
+    // A RefPosition may have any flag individually or the following combinations:
+    //  - reload and spillAfter (i.e. it remains in memory), but not in combination with copyReg or moveReg
+    //    (reload cannot exist with copyReg or moveReg; it should be reloaded into the appropriate reg)
+    //  - spillAfter and copyReg (i.e. it must be copied to a new reg for use, but is then spilled)
+    //  - spillAfter and moveReg (i.e. it most be both spilled and moved)
+    //    NOTE: a moveReg involves an explicit move, and would usually not be needed for a fixed Reg if it is going
+    //    to be spilled, because the code generator will do the move to the fixed register, and doesn't need to
+    //    record the new register location as the new "home" location of the lclVar. However, if there is a conflicting
+    //    use at the same location (e.g. lclVar V1 is in rdx and needs to be in rcx, but V2 needs to be in rdx), then
+    //    we need an explicit move.
+    //  - copyReg and moveReg must not exist with each other.
+
+    unsigned char reload : 1;
+    unsigned char spillAfter : 1;
+    unsigned char copyReg : 1;
+    unsigned char moveReg : 1; // true if this var is moved to a new register
+
+    unsigned char isPhysRegRef : 1; // true if 'referent' points of a RegRecord, false if it points to an Interval
+    unsigned char isFixedRegRef : 1;
+    unsigned char isLocalDefUse : 1;
+
+    // delayRegFree indicates that the register should not be freed right away, but instead wait
+    // until the next Location after it would normally be freed.  This is used for the case of
+    // non-commutative binary operators, where op2 must not be assigned the same register as
+    // the target.  We do this by not freeing it until after the target has been defined.
+    // Another option would be to actually change the Location of the op2 use until the same
+    // Location as the def, but then it could potentially reuse a register that has been freed
+    // from the other source(s), e.g. if it's a lastUse or spilled.
+    unsigned char delayRegFree : 1;
+
+    // outOfOrder is marked on a (non-def) RefPosition that doesn't follow a definition of the
+    // register currently assigned to the Interval.  This happens when we use the assigned
+    // register from a predecessor that is not the most recently allocated BasicBlock.
+    unsigned char outOfOrder : 1;
+
+#ifdef DEBUG
+    // Minimum number registers that needs to be ensured while
+    // constraining candidates for this ref position under
+    // LSRA stress.
+    unsigned minRegCandidateCount;
+
+    // The unique RefPosition number, equal to its index in the
+    // refPositions list. Only used for debugging dumps.
+    unsigned rpNum;
+#endif // DEBUG
+
     RefPosition(unsigned int bbNum, LsraLocation nodeLocation, GenTree* treeNode, RefType refType)
         : referent(nullptr)
         , nextRefPosition(nullptr)
@@ -1447,14 +1956,6 @@ public:
     {
     }
 
-    // A RefPosition refers to either an Interval or a RegRecord. 'referent' points to one
-    // of these types. If it refers to a RegRecord, then 'isPhysRegRef' is true. If it
-    // refers to an Interval, then 'isPhysRegRef' is false.
-    //
-    // Q: can 'referent' be NULL?
-
-    Referenceable* referent;
-
     Interval* getInterval()
     {
         assert(!isPhysRegRef);
@@ -1478,23 +1979,6 @@ public:
         registerAssignment = genRegMask(r->regNum);
     }
 
-    // nextRefPosition is the next in code order.
-    // Note that in either case there is no need for these to be doubly linked, as they
-    // are only traversed in the forward direction, and are not moved.
-    RefPosition* nextRefPosition;
-
-    // The remaining fields are common to both options
-    GenTree*     treeNode;
-    unsigned int bbNum;
-
-    // Prior to the allocation pass, registerAssignment captures the valid registers
-    // for this RefPosition. An empty set means that any register is valid.  A non-empty
-    // set means that it must be one of the given registers (may be the full set if the
-    // only constraint is that it must reside in SOME register)
-    // After the allocation pass, this contains the actual assignment
-    LsraLocation nodeLocation;
-    regMaskTP    registerAssignment;
-
     regNumber assignedReg()
     {
         if (registerAssignment == RBM_NONE)
@@ -1504,8 +1988,6 @@ public:
 
         return genRegNumFromMask(registerAssignment);
     }
-
-    RefType refType;
 
     // Returns true if it is a reference on a gentree node.
     bool IsActualRef()
@@ -1523,14 +2005,7 @@ public:
                !AllocateIfProfitable();
     }
 
-    // Indicates whether this ref position is to be allocated
-    // a reg only if profitable. Currently these are the
-    // ref positions that lower/codegen has indicated as reg
-    // optional and is considered a contained memory operand if
-    // no reg is allocated.
-    unsigned allocRegIfProfitable : 1;
-
-    void setAllocateIfProfitable(unsigned val)
+    void setAllocateIfProfitable(bool val)
     {
         allocRegIfProfitable = val;
     }
@@ -1546,13 +2021,6 @@ public:
         return allocRegIfProfitable && !copyReg && !moveReg;
     }
 
-    // Used by RefTypeDef/Use positions of a multi-reg call node.
-    // Indicates the position of the register that this ref position refers to.
-    // The max bits needed is based on max value of MAX_RET_REG_COUNT value
-    // across all targets and that happens 4 on on Arm.  Hence index value
-    // would be 0..MAX_RET_REG_COUNT-1.
-    unsigned multiRegIdx : 2;
-
     void setMultiRegIdx(unsigned idx)
     {
         multiRegIdx = idx;
@@ -1564,66 +2032,10 @@ public:
         return multiRegIdx;
     }
 
-    // Last Use - this may be true for multiple RefPositions in the same Interval
-    bool lastUse : 1;
-
-    // Spill and Copy info
-    //   reload indicates that the value was spilled, and must be reloaded here.
-    //   spillAfter indicates that the value is spilled here, so a spill must be added.
-    //   copyReg indicates that the value needs to be copied to a specific register,
-    //      but that it will also retain its current assigned register.
-    //   moveReg indicates that the value needs to be moved to a different register,
-    //      and that this will be its new assigned register.
-    // A RefPosition may have any flag individually or the following combinations:
-    //  - reload and spillAfter (i.e. it remains in memory), but not in combination with copyReg or moveReg
-    //    (reload cannot exist with copyReg or moveReg; it should be reloaded into the appropriate reg)
-    //  - spillAfter and copyReg (i.e. it must be copied to a new reg for use, but is then spilled)
-    //  - spillAfter and moveReg (i.e. it most be both spilled and moved)
-    //    NOTE: a moveReg involves an explicit move, and would usually not be needed for a fixed Reg if it is going
-    //    to be spilled, because the code generator will do the move to the fixed register, and doesn't need to
-    //    record the new register location as the new "home" location of the lclVar. However, if there is a conflicting
-    //    use at the same location (e.g. lclVar V1 is in rdx and needs to be in rcx, but V2 needs to be in rdx), then
-    //    we need an explicit move.
-    //  - copyReg and moveReg must not exist with each other.
-
-    bool reload : 1;
-    bool spillAfter : 1;
-    bool copyReg : 1;
-    bool moveReg : 1; // true if this var is moved to a new register
-
-    bool isPhysRegRef : 1; // true if 'referent' points of a RegRecord, false if it points to an Interval
-    bool isFixedRegRef : 1;
-    bool isLocalDefUse : 1;
-
-    // delayRegFree indicates that the register should not be freed right away, but instead wait
-    // until the next Location after it would normally be freed.  This is used for the case of
-    // non-commutative binary operators, where op2 must not be assigned the same register as
-    // the target.  We do this by not freeing it until after the target has been defined.
-    // Another option would be to actually change the Location of the op2 use until the same
-    // Location as the def, but then it could potentially reuse a register that has been freed
-    // from the other source(s), e.g. if it's a lastUse or spilled.
-    bool delayRegFree : 1;
-
-    // outOfOrder is marked on a (non-def) RefPosition that doesn't follow a definition of the
-    // register currently assigned to the Interval.  This happens when we use the assigned
-    // register from a predecessor that is not the most recently allocated BasicBlock.
-    bool outOfOrder : 1;
-
     LsraLocation getRefEndLocation()
     {
         return delayRegFree ? nodeLocation + 1 : nodeLocation;
     }
-
-#ifdef DEBUG
-    // Minimum number registers that needs to be ensured while
-    // constraining candidates for this ref position under
-    // LSRA stress.
-    unsigned minRegCandidateCount;
-
-    // The unique RefPosition number, equal to its index in the
-    // refPositions list. Only used for debugging dumps.
-    unsigned rpNum;
-#endif // DEBUG
 
     bool isIntervalRef()
     {

@@ -21,7 +21,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     /// </summary>
     /// <typeparam name="TKey">Type of objects that act as keys.</typeparam>    
     /// <typeparam name="TValue">Type of objects that act as entries / values.</typeparam>
-    [Serializable]
     [DebuggerDisplay("Count = {Count}")]
     internal sealed class ConstantSplittableMap<TKey, TValue> : IMapView<TKey, TValue>
     {
@@ -46,7 +45,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             if (data == null)
                 throw new ArgumentNullException(nameof(data));
-            Contract.EndContractBlock();
 
             firstItemIndex = 0;
             lastItemIndex = data.Count - 1;
@@ -102,8 +100,8 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
             if (!found)
             {
-                Exception e = new KeyNotFoundException(Environment.GetResourceString("Arg_KeyNotFound"));
-                e.SetErrorCode(__HResults.E_BOUNDS);
+                Exception e = new KeyNotFoundException(SR.Format(SR.Arg_KeyNotFoundWithKey, key.ToString()));
+                e.SetErrorCode(HResults.E_BOUNDS);
                 throw e;
             }
 
@@ -169,7 +167,6 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
         #region IKeyValuePair Enumerator
 
-        [Serializable]
         internal struct IKeyValuePairEnumerator : IEnumerator<IKeyValuePair<TKey, TValue>>
         {
             private KeyValuePair<TKey, TValue>[] _array;
@@ -179,11 +176,11 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
             internal IKeyValuePairEnumerator(KeyValuePair<TKey, TValue>[] items, int first, int end)
             {
-                Contract.Requires(items != null);
-                Contract.Requires(first >= 0);
-                Contract.Requires(end >= 0);
-                Contract.Requires(first < items.Length);
-                Contract.Requires(end < items.Length);
+                Debug.Assert(items != null);
+                Debug.Assert(first >= 0);
+                Debug.Assert(end >= 0);
+                Debug.Assert(first < items.Length);
+                Debug.Assert(end < items.Length);
 
                 _array = items;
                 _start = first;
@@ -205,8 +202,8 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             {
                 get
                 {
-                    if (_current < _start) throw new InvalidOperationException(Environment.GetResourceString(ResId.InvalidOperation_EnumNotStarted));
-                    if (_current > _end) throw new InvalidOperationException(Environment.GetResourceString(ResId.InvalidOperation_EnumEnded));
+                    if (_current < _start) throw new InvalidOperationException(SR.InvalidOperation_EnumNotStarted);
+                    if (_current > _end) throw new InvalidOperationException(SR.InvalidOperation_EnumEnded);
                     return new CLRIKeyValuePairImpl<TKey, TValue>(ref _array[_current]);
                 }
             }

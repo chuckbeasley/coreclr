@@ -18,7 +18,6 @@
 #include "field.h"
 #include "eeconfig.h"
 #include "runtimehandles.h" // for SignatureNative
-#include "security.h" // for CanSkipVerification
 #include "winwrap.h"
 #include <formattype.h>
 #include "sigbuilder.h"
@@ -1199,7 +1198,8 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
             
             PREFIX_ASSUME(pZapSigContext != NULL);
             pModule = pZapSigContext->GetZapSigModule()->GetModuleFromIndex(ix);
-            if (pModule != NULL)
+
+            if ((pModule != NULL) && pModule->IsInCurrentVersionBubble())
             {
                 thRet = psig.GetTypeHandleThrowing(pModule, 
                                                    pTypeContext, 
@@ -1208,6 +1208,12 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                                                    dropGenericArgumentLevel,
                                                    pSubst, 
                                                    pZapSigContext);
+            }
+            else
+            {
+                // For ReadyToRunCompilation we return a null TypeHandle when we reference a non-local module
+                //
+                thRet = TypeHandle();
             }
 #else
             DacNotImpl();
@@ -1345,9 +1351,9 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
             if (!ClrSafeInt<DWORD>::multiply(ntypars, sizeof(TypeHandle), dwAllocaSize))
                 ThrowHR(COR_E_OVERFLOW);
 
-            if ((dwAllocaSize/PAGE_SIZE+1) >= 2)
+            if ((dwAllocaSize/GetOsPageSize()+1) >= 2)
             {
-                DO_INTERIOR_STACK_PROBE_FOR_NOTHROW_CHECK_THREAD((10+dwAllocaSize/PAGE_SIZE+1), NO_FORBIDGC_LOADER_USE_ThrowSO(););
+                DO_INTERIOR_STACK_PROBE_FOR_NOTHROW_CHECK_THREAD((10+dwAllocaSize/GetOsPageSize()+1), NO_FORBIDGC_LOADER_USE_ThrowSO(););
             }
             TypeHandle *thisinst = (TypeHandle*) _alloca(dwAllocaSize);
 
@@ -1463,11 +1469,7 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                
                 if (IsNilToken(typeToken))
                 {
-                    SString * fullTypeName = pOrigModule->IBCErrorNameString();
-                    fullTypeName->Clear();
-                    pOrigModule->LookupIbcTypeToken(pModule, ibcToken, fullTypeName);
-
-                    THROW_BAD_FORMAT(BFA_MISSING_IBC_EXTERNAL_TYPE, pOrigModule);
+                    COMPlusThrow(kTypeLoadException, IDS_IBC_MISSING_EXTERNAL_TYPE);
                 }
             }
 #endif
@@ -1528,12 +1530,11 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                 
                     if (typFromSigIsClass != typLoadedIsClass)
                     {
-                        if((pModule->GetMDImport()->GetMetadataStreamVersion() != MD_STREAM_VER_1X)
-                            || !Security::CanSkipVerification(pModule->GetDomainAssembly()))
+                        if (pModule->GetMDImport()->GetMetadataStreamVersion() != MD_STREAM_VER_1X)
                         {
-                                pOrigModule->GetAssembly()->ThrowTypeLoadException(pModule->GetMDImport(),
-                                                                                   typeToken, 
-                                                                                   BFA_CLASSLOAD_VALUETYPEMISMATCH);
+                            pOrigModule->GetAssembly()->ThrowTypeLoadException(pModule->GetMDImport(),
+                                                                                typeToken, 
+                                                                                BFA_CLASSLOAD_VALUETYPEMISMATCH);
                         }
                     }
                 }
@@ -1631,9 +1632,9 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                     ThrowHR(COR_E_OVERFLOW);
                 }
                 
-                if ((cAllocaSize/PAGE_SIZE+1) >= 2)
+                if ((cAllocaSize/GetOsPageSize()+1) >= 2)
                 {
-                    DO_INTERIOR_STACK_PROBE_FOR_NOTHROW_CHECK_THREAD((10+cAllocaSize/PAGE_SIZE+1), NO_FORBIDGC_LOADER_USE_ThrowSO(););
+                    DO_INTERIOR_STACK_PROBE_FOR_NOTHROW_CHECK_THREAD((10+cAllocaSize/GetOsPageSize()+1), NO_FORBIDGC_LOADER_USE_ThrowSO(););
                 }
 
                 TypeHandle *retAndArgTypes = (TypeHandle*) _alloca(cAllocaSize);
@@ -1769,11 +1770,7 @@ TypeHandle SigPointer::GetGenericInstType(Module *        pModule,
 
             if (IsNilToken(typeToken))
             {
-                SString * fullTypeName = pOrigModule->IBCErrorNameString();
-                fullTypeName->Clear();
-                pOrigModule->LookupIbcTypeToken(pModule, ibcToken, fullTypeName);
-
-                THROW_BAD_FORMAT(BFA_MISSING_IBC_EXTERNAL_TYPE, pOrigModule);
+                COMPlusThrow(kTypeLoadException, IDS_IBC_MISSING_EXTERNAL_TYPE);
             }
         }
 #endif
@@ -3241,10 +3238,6 @@ BOOL IsTypeDefEquivalent(mdToken tk, Module *pModule)
         // its module might be not fully initialized in this domain
         // take care of that possibility
         pModule->EnsureAllocated();
-
-        // 5. Type is in a fully trusted assembly
-        if (!pModule->GetSecurityDescriptor()->IsFullyTrusted())
-            return FALSE;
 
         // 6. If type is nested, nesting type must be equivalent.
         if (IsTdNested(dwAttrType))
@@ -4953,50 +4946,20 @@ void PromoteCarefully(promote_func   fn,
     (*fn) (ppObj, sc, flags);
 }
 
-void ReportByRefPointersFromByRefLikeObject(promote_func *fn, ScanContext *sc, PTR_MethodTable pMT, PTR_VOID pSrc)
-{
-    WRAPPER_NO_CONTRACT;
-
-    _ASSERTE(pMT->IsByRefLike());
-
-    // TODO: TypedReference should ideally be implemented as a by-ref-like struct containing a ByReference<T> field,
-    // in which case the check for g_TypedReferenceMT below would not be necessary
-    if (pMT == g_TypedReferenceMT || pMT->HasSameTypeDefAs(g_pByReferenceClass))
-    {
-        (*fn)(dac_cast<PTR_PTR_Object>(pSrc), sc, GC_CALL_INTERIOR);
-        return;
-    }
-
-    ApproxFieldDescIterator fieldIterator(pMT, ApproxFieldDescIterator::INSTANCE_FIELDS);
-    for (FieldDesc *pFD = fieldIterator.Next(); pFD != NULL; pFD = fieldIterator.Next())
-    {
-        if (pFD->GetFieldType() != ELEMENT_TYPE_VALUETYPE)
-        {
-            continue;
-        }
-
-        // TODO: GetApproxFieldTypeHandleThrowing may throw. This is a potential stress problem for fragile NGen of non-CoreLib
-        // assemblies. It won’t ever throw for CoreCLR with R2R. Figure out if anything needs to be done to deal with the
-        // exception.
-        PTR_MethodTable pFieldMT = pFD->GetApproxFieldTypeHandleThrowing().AsMethodTable();
-        if (!pFieldMT->IsByRefLike())
-        {
-            continue;
-        }
-
-        int fieldStartIndex = pFD->GetOffset() / sizeof(void *);
-        PTR_PTR_Object fieldRef = dac_cast<PTR_PTR_Object>(PTR_BYTE(pSrc) + fieldStartIndex);
-        ReportByRefPointersFromByRefLikeObject(fn, sc, pFieldMT, fieldRef);
-    }
-}
-
 void ReportPointersFromValueType(promote_func *fn, ScanContext *sc, PTR_MethodTable pMT, PTR_VOID pSrc)
 {
     WRAPPER_NO_CONTRACT;
 
     if (pMT->IsByRefLike())
     {
-        ReportByRefPointersFromByRefLikeObject(fn, sc, pMT, pSrc);
+        FindByRefPointerOffsetsInByRefLikeObject(
+            pMT,
+            0 /* baseOffset */,
+            [&](SIZE_T pointerOffset)
+            {
+                PTR_PTR_Object fieldRef = dac_cast<PTR_PTR_Object>(PTR_BYTE(pSrc) + pointerOffset);
+                (*fn)(fieldRef, sc, GC_CALL_INTERIOR);
+            });
     }
 
     if (!pMT->ContainsPointers())

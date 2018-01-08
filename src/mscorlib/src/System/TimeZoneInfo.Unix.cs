@@ -4,7 +4,6 @@
 
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -39,7 +38,7 @@ namespace System
             _baseUtcOffset = TimeSpan.Zero;
 
             // find the best matching baseUtcOffset and display strings based on the current utcNow value.
-            // NOTE: read the display strings from the the tzfile now in case they can't be loaded later
+            // NOTE: read the display strings from the tzfile now in case they can't be loaded later
             // from the globalization data.
             DateTime utcNow = DateTime.UtcNow;
             for (int i = 0; i < dts.Length && dts[i] <= utcNow; i++)
@@ -97,6 +96,12 @@ namespace System
 
         private void GetDisplayName(Interop.GlobalizationInterop.TimeZoneDisplayNameType nameType, ref string displayName)
         {
+            if (GlobalizationMode.Invariant)
+            {
+                displayName = _standardDisplayName;
+                return;
+            }
+
             string timeZoneDisplayName;
             bool result = Interop.CallStringMethod(
                 (locale, id, type, stringBuilder) => Interop.GlobalizationInterop.GetTimeZoneDisplayName(
@@ -213,7 +218,7 @@ namespace System
             }
             catch (IOException ex)
             {
-                e = new InvalidTimeZoneException(Environment.GetResourceString("InvalidTimeZone_InvalidFileData", id, timeZoneFilePath), ex);
+                e = new InvalidTimeZoneException(SR.Format(SR.InvalidTimeZone_InvalidFileData, id, timeZoneFilePath), ex);
                 return TimeZoneInfoResult.InvalidTimeZoneException;
             }
 
@@ -221,7 +226,7 @@ namespace System
 
             if (value == null)
             {
-                e = new InvalidTimeZoneException(Environment.GetResourceString("InvalidTimeZone_InvalidFileData", id, timeZoneFilePath));
+                e = new InvalidTimeZoneException(SR.Format(SR.InvalidTimeZone_InvalidFileData, id, timeZoneFilePath));
                 return TimeZoneInfoResult.InvalidTimeZoneException;
             }
 
@@ -378,21 +383,17 @@ namespace System
         {
             string id = null;
 
-            StringBuilder symlinkPathBuilder = StringBuilderCache.Acquire(Path.MaxPath);
-            bool result = Interop.GlobalizationInterop.ReadLink(tzFilePath, symlinkPathBuilder, (uint)symlinkPathBuilder.Capacity);
-            if (result)
+            string symlinkPath = Interop.Sys.ReadLink(tzFilePath);
+            if (symlinkPath != null)
             {
-                string symlinkPath = StringBuilderCache.GetStringAndRelease(symlinkPathBuilder);
-                // time zone Ids have to point under the time zone directory
+                // Use Path.Combine to resolve links that contain a relative path (e.g. /etc/localtime).
+                symlinkPath = Path.Combine(tzFilePath, symlinkPath);
+
                 string timeZoneDirectory = GetTimeZoneDirectory();
-                if (symlinkPath.StartsWith(timeZoneDirectory))
+                if (symlinkPath.StartsWith(timeZoneDirectory, StringComparison.Ordinal))
                 {
                     id = symlinkPath.Substring(timeZoneDirectory.Length);
                 }
-            }
-            else
-            {
-                StringBuilderCache.Release(symlinkPathBuilder);
             }
 
             return id;
@@ -425,7 +426,7 @@ namespace System
                             id = filePath;
 
                             // strip off the root time zone directory
-                            if (id.StartsWith(timeZoneDirectory))
+                            if (id.StartsWith(timeZoneDirectory, StringComparison.Ordinal))
                             {
                                 id = id.Substring(timeZoneDirectory.Length);
                             }
@@ -456,7 +457,7 @@ namespace System
                         {
                             int n = stream.Read(buffer, index, count);
                             if (n == 0)
-                                __Error.EndOfFile();
+                                throw Error.GetEndOfFile();
 
                             int end = index + n;
                             for (; index < end; index++)
@@ -563,9 +564,9 @@ namespace System
             {
                 throw new ArgumentNullException(nameof(id));
             }
-            else if (id.Length == 0 || id.Contains("\0"))
+            else if (id.Length == 0 || id.Contains('\0'))
             {
-                throw new TimeZoneNotFoundException(Environment.GetResourceString("TimeZoneNotFound_MissingData", id));
+                throw new TimeZoneNotFoundException(SR.Format(SR.TimeZoneNotFound_MissingData, id));
             }
 
             TimeZoneInfo value;
@@ -592,11 +593,11 @@ namespace System
             }
             else if (result == TimeZoneInfoResult.SecurityException)
             {
-                throw new SecurityException(Environment.GetResourceString("Security_CannotReadFileData", id), e);
+                throw new SecurityException(SR.Format(SR.Security_CannotReadFileData, id), e);
             }
             else
             {
-                throw new TimeZoneNotFoundException(Environment.GetResourceString("TimeZoneNotFound_MissingData", id), e);
+                throw new TimeZoneNotFoundException(SR.Format(SR.TimeZoneNotFound_MissingData, id), e);
             }
         }
 
@@ -920,14 +921,14 @@ namespace System
                 return transitionTypes[0];
             }
 
-            throw new InvalidTimeZoneException(Environment.GetResourceString("InvalidTimeZone_NoTTInfoStructures"));
+            throw new InvalidTimeZoneException(SR.InvalidTimeZone_NoTTInfoStructures);
         }
 
         /// <summary>
         /// Creates an AdjustmentRule given the POSIX TZ environment variable string.
         /// </summary>
         /// <remarks>
-        /// See http://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html for the format and semantics of this POSX string.
+        /// See http://man7.org/linux/man-pages/man3/tzset.3.html for the format and semantics of this POSX string.
         /// </remarks>
         private static AdjustmentRule TZif_CreateAdjustmentRuleForPosixFormat(string posixFormat, DateTime startTransitionDate, TimeSpan timeZoneBaseUtcOffset)
         {
@@ -1054,7 +1055,7 @@ namespace System
                 DayOfWeek day;
                 if (!TZif_ParseMDateRule(date, out month, out week, out day))
                 {
-                    throw new InvalidTimeZoneException(Environment.GetResourceString("InvalidTimeZone_UnparseablePosixMDateString", date));
+                    throw new InvalidTimeZoneException(SR.Format(SR.InvalidTimeZone_UnparseablePosixMDateString, date));
                 }
 
                 DateTime timeOfDay;
@@ -1097,7 +1098,7 @@ namespace System
                 // One of them *could* be supported if we relaxed the TransitionTime validation rules, and allowed
                 // "IsFixedDateRule = true, Month = 0, Day = n" to mean the nth day of the year, picking one of the rules above
 
-                throw new InvalidTimeZoneException(Environment.GetResourceString("InvalidTimeZone_JulianDayNotSupported"));
+                throw new InvalidTimeZoneException(SR.InvalidTimeZone_JulianDayNotSupported);
             }
         }
 
@@ -1109,10 +1110,6 @@ namespace System
         /// </returns>
         private static bool TZif_ParseMDateRule(string dateRule, out int month, out int week, out DayOfWeek dayOfWeek)
         {
-            month = 0;
-            week = 0;
-            dayOfWeek = default(DayOfWeek);
-
             if (dateRule[0] == 'M')
             {
                 int firstDotIndex = dateRule.IndexOf('.');
@@ -1121,26 +1118,20 @@ namespace System
                     int secondDotIndex = dateRule.IndexOf('.', firstDotIndex + 1);
                     if (secondDotIndex > 0)
                     {
-                        string monthString = dateRule.Substring(1, firstDotIndex - 1);
-                        string weekString = dateRule.Substring(firstDotIndex + 1, secondDotIndex - firstDotIndex - 1);
-                        string dayString = dateRule.Substring(secondDotIndex + 1);
-
-                        if (int.TryParse(monthString, out month))
+                        if (int.TryParse(dateRule.AsReadOnlySpan().Slice(1, firstDotIndex - 1), out month) &&
+                            int.TryParse(dateRule.AsReadOnlySpan().Slice(firstDotIndex + 1, secondDotIndex - firstDotIndex - 1), out week) &&
+                            int.TryParse(dateRule.AsReadOnlySpan().Slice(secondDotIndex + 1), out int day))
                         {
-                            if (int.TryParse(weekString, out week))
-                            {
-                                int day;
-                                if (int.TryParse(dayString, out day))
-                                {
-                                    dayOfWeek = (DayOfWeek)day;
-                                    return true;
-                                }
-                            }
+                            dayOfWeek = (DayOfWeek)day;
+                            return true;
                         }
                     }
                 }
             }
 
+            month = 0;
+            week = 0;
+            dayOfWeek = default(DayOfWeek);
             return false;
         }
 
@@ -1189,8 +1180,32 @@ namespace System
             return !string.IsNullOrEmpty(standardName) && !string.IsNullOrEmpty(standardOffset);
         }
 
-        private static string TZif_ParsePosixName(string posixFormat, ref int index) =>
-            TZif_ParsePosixString(posixFormat, ref index, c => char.IsDigit(c) || c == '+' || c == '-' || c == ',');
+        private static string TZif_ParsePosixName(string posixFormat, ref int index)
+        {
+            bool isBracketEnclosed = index < posixFormat.Length && posixFormat[index] == '<';
+            if (isBracketEnclosed)
+            {
+                // move past the opening bracket
+                index++;
+
+                string result = TZif_ParsePosixString(posixFormat, ref index, c => c == '>');
+
+                // move past the closing bracket
+                if (index < posixFormat.Length && posixFormat[index] == '>')
+                {
+                    index++;
+                }
+
+                return result;
+            }
+            else
+            {
+                return TZif_ParsePosixString(
+                    posixFormat,
+                    ref index,
+                    c => char.IsDigit(c) || c == '+' || c == '-' || c == ',');
+            }
+        }
 
         private static string TZif_ParsePosixOffset(string posixFormat, ref int index) =>
             TZif_ParsePosixString(posixFormat, ref index, c => !char.IsDigit(c) && c != '+' && c != '-' && c != ':');
@@ -1395,9 +1410,8 @@ namespace System
             {
                 if (data == null || data.Length < index + Length)
                 {
-                    throw new ArgumentException(Environment.GetResourceString("Argument_TimeZoneInfoInvalidTZif"), nameof(data));
+                    throw new ArgumentException(SR.Argument_TimeZoneInfoInvalidTZif, nameof(data));
                 }
-                Contract.EndContractBlock();
                 UtcOffset = new TimeSpan(0, 0, TZif_ToInt32(data, index + 00));
                 IsDst = (data[index + 4] != 0);
                 AbbreviationIndex = data[index + 5];
@@ -1424,14 +1438,13 @@ namespace System
                 {
                     throw new ArgumentException("bad data", nameof(data));
                 }
-                Contract.EndContractBlock();
 
                 Magic = (uint)TZif_ToInt32(data, index + 00);
 
                 if (Magic != 0x545A6966)
                 {
                     // 0x545A6966 = {0x54, 0x5A, 0x69, 0x66} = "TZif"
-                    throw new ArgumentException(Environment.GetResourceString("Argument_TimeZoneInfoBadTZif"), nameof(data));
+                    throw new ArgumentException(SR.Argument_TimeZoneInfoBadTZif, nameof(data));
                 }
 
                 byte version = data[index + 04];

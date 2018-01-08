@@ -17,13 +17,11 @@
 
 using System;
 using System.Runtime;
-using System.Runtime.Remoting;
 using System.Threading;
 using System.Runtime.CompilerServices;
 using System.Runtime.ConstrainedExecution;
 using System.Runtime.Versioning;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 
 namespace System.Threading
 {
@@ -57,7 +55,7 @@ namespace System.Threading
 
         private static void ThrowLockTakenException()
         {
-            throw new ArgumentException(Environment.GetResourceString("Argument_MustBeFalse"), "lockTaken");
+            throw new ArgumentException(SR.Argument_MustBeFalse, "lockTaken");
         }
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
@@ -122,7 +120,7 @@ namespace System.Threading
         {
             long tm = (long)timeout.TotalMilliseconds;
             if (tm < -1 || tm > (long)Int32.MaxValue)
-                throw new ArgumentOutOfRangeException(nameof(timeout), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegOrNegative1"));
+                throw new ArgumentOutOfRangeException(nameof(timeout), SR.ArgumentOutOfRange_NeedNonNegOrNegative1);
             return (int)tm;
         }
 
@@ -218,7 +216,6 @@ namespace System.Threading
             {
                 throw new ArgumentNullException(nameof(obj));
             }
-            Contract.EndContractBlock();
 
             ObjPulse(obj);
         }
@@ -234,7 +231,6 @@ namespace System.Threading
             {
                 throw new ArgumentNullException(nameof(obj));
             }
-            Contract.EndContractBlock();
 
             ObjPulseAll(obj);
         }

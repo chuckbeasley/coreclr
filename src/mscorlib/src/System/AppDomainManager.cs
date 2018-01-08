@@ -24,7 +24,7 @@ namespace System
             // By default, InitializeNewDomain does nothing. AppDomain.CreateAppDomainManager relies on this fact.
         }
 
-        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode), SuppressUnmanagedCodeSecurity]
+        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetEntryAssembly(ObjectHandleOnStack retAssembly);
 
         private Assembly m_entryAssembly = null;
@@ -54,11 +54,6 @@ namespace System
             {
                 return AppDomain.CurrentDomain.DomainManager;
             }
-        }
-
-        public virtual bool CheckSecuritySettings(SecurityState state)
-        {
-            return false;
         }
     }
 }

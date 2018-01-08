@@ -5,7 +5,6 @@
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -14,26 +13,29 @@ namespace System.Threading
 {
     public sealed partial class Semaphore : WaitHandle
     {
+        private const uint AccessRights =
+            (uint)Win32Native.MAXIMUM_ALLOWED | Win32Native.SYNCHRONIZE | Win32Native.SEMAPHORE_MODIFY_STATE;
+
         public Semaphore(int initialCount, int maximumCount) : this(initialCount, maximumCount, null) { }
 
         public Semaphore(int initialCount, int maximumCount, string name)
         {
             if (initialCount < 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(initialCount), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException(nameof(initialCount), SR.ArgumentOutOfRange_NeedNonNegNum);
             }
 
             if (maximumCount < 1)
             {
-                throw new ArgumentOutOfRangeException(nameof(maximumCount), Environment.GetResourceString("ArgumentOutOfRange_NeedPosNum"));
+                throw new ArgumentOutOfRangeException(nameof(maximumCount), SR.ArgumentOutOfRange_NeedPosNum);
             }
 
             if (initialCount > maximumCount)
             {
-                throw new ArgumentException(Environment.GetResourceString("Argument_SemaphoreInitialMaximum"));
+                throw new ArgumentException(SR.Argument_SemaphoreInitialMaximum);
             }
 
-            SafeWaitHandle myHandle = CreateSemaphone(initialCount, maximumCount, name);
+            SafeWaitHandle myHandle = CreateSemaphore(initialCount, maximumCount, name);
 
             if (myHandle.IsInvalid)
             {
@@ -41,9 +43,9 @@ namespace System.Threading
 
                 if (null != name && 0 != name.Length && Win32Native.ERROR_INVALID_HANDLE == errorCode)
                     throw new WaitHandleCannotBeOpenedException(
-                        Environment.GetResourceString("Threading.WaitHandleCannotBeOpenedException_InvalidHandle", name));
+                        SR.Format(SR.Threading_WaitHandleCannotBeOpenedException_InvalidHandle, name));
 
-                __Error.WinIOError();
+                throw Win32Marshal.GetExceptionForLastWin32Error();
             }
             this.SafeWaitHandle = myHandle;
         }
@@ -52,28 +54,28 @@ namespace System.Threading
         {
             if (initialCount < 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(initialCount), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException(nameof(initialCount), SR.ArgumentOutOfRange_NeedNonNegNum);
             }
 
             if (maximumCount < 1)
             {
-                throw new ArgumentOutOfRangeException(nameof(maximumCount), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException(nameof(maximumCount), SR.ArgumentOutOfRange_NeedNonNegNum);
             }
 
             if (initialCount > maximumCount)
             {
-                throw new ArgumentException(Environment.GetResourceString("Argument_SemaphoreInitialMaximum"));
+                throw new ArgumentException(SR.Argument_SemaphoreInitialMaximum);
             }
 
-            SafeWaitHandle myHandle = CreateSemaphone(initialCount, maximumCount, name);
+            SafeWaitHandle myHandle = CreateSemaphore(initialCount, maximumCount, name);
 
             int errorCode = Marshal.GetLastWin32Error();
             if (myHandle.IsInvalid)
             {
                 if (null != name && 0 != name.Length && Win32Native.ERROR_INVALID_HANDLE == errorCode)
                     throw new WaitHandleCannotBeOpenedException(
-                        Environment.GetResourceString("Threading.WaitHandleCannotBeOpenedException_InvalidHandle", name));
-                __Error.WinIOError();
+                        SR.Format(SR.Threading_WaitHandleCannotBeOpenedException_InvalidHandle, name));
+                throw Win32Marshal.GetExceptionForLastWin32Error();
             }
             createdNew = errorCode != Win32Native.ERROR_ALREADY_EXISTS;
             this.SafeWaitHandle = myHandle;
@@ -84,15 +86,15 @@ namespace System.Threading
             this.SafeWaitHandle = handle;
         }
 
-        private static SafeWaitHandle CreateSemaphone(int initialCount, int maximumCount, string name)
+        private static SafeWaitHandle CreateSemaphore(int initialCount, int maximumCount, string name)
         {
             if (name != null)
             {
 #if PLATFORM_UNIX
-                throw new PlatformNotSupportedException(Environment.GetResourceString("PlatformNotSupported_NamedSynchronizationPrimitives"));
+                throw new PlatformNotSupportedException(SR.PlatformNotSupported_NamedSynchronizationPrimitives);
 #else
                 if (name.Length > Path.MaxPath)
-                    throw new ArgumentException(Environment.GetResourceString("Argument_WaitHandleNameTooLong", Path.MaxPath), nameof(name));
+                    throw new ArgumentException(SR.Format(SR.Argument_WaitHandleNameTooLong, name, Path.MaxPath), nameof(name));
 #endif
             }
 
@@ -100,7 +102,7 @@ namespace System.Threading
             Debug.Assert(maximumCount >= 1);
             Debug.Assert(initialCount <= maximumCount);
 
-            return Win32Native.CreateSemaphore(null, initialCount, maximumCount, name);
+            return Win32Native.CreateSemaphoreEx(null, initialCount, maximumCount, name, 0, AccessRights);
         }
 
         public static Semaphore OpenExisting(string name)
@@ -111,9 +113,9 @@ namespace System.Threading
                 case OpenExistingResult.NameNotFound:
                     throw new WaitHandleCannotBeOpenedException();
                 case OpenExistingResult.NameInvalid:
-                    throw new WaitHandleCannotBeOpenedException(Environment.GetResourceString("Threading.WaitHandleCannotBeOpenedException_InvalidHandle", name));
+                    throw new WaitHandleCannotBeOpenedException(SR.Format(SR.Threading_WaitHandleCannotBeOpenedException_InvalidHandle, name));
                 case OpenExistingResult.PathNotFound:
-                    throw new IOException(Win32Native.GetMessage(Win32Native.ERROR_PATH_NOT_FOUND));
+                    throw new IOException(Interop.Kernel32.GetMessage(Win32Native.ERROR_PATH_NOT_FOUND));
                 default:
                     return result;
             }
@@ -127,20 +129,17 @@ namespace System.Threading
         private static OpenExistingResult OpenExistingWorker(string name, out Semaphore result)
         {
 #if PLATFORM_UNIX
-            throw new PlatformNotSupportedException(Environment.GetResourceString("PlatformNotSupported_NamedSynchronizationPrimitives"));
+            throw new PlatformNotSupportedException(SR.PlatformNotSupported_NamedSynchronizationPrimitives);
 #else
             if (name == null)
-                throw new ArgumentNullException(nameof(name), Environment.GetResourceString("ArgumentNull_WithParamName"));
+                throw new ArgumentNullException(nameof(name), SR.ArgumentNull_WithParamName);
             if (name.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), nameof(name));
+                throw new ArgumentException(SR.Argument_EmptyName, nameof(name));
             if (name.Length > Path.MaxPath)
-                throw new ArgumentException(Environment.GetResourceString("Argument_WaitHandleNameTooLong", Path.MaxPath), nameof(name));
-
-            const int SYNCHRONIZE = 0x00100000;
-            const int SEMAPHORE_MODIFY_STATE = 0x00000002;
+                throw new ArgumentException(SR.Format(SR.Argument_WaitHandleNameTooLong, name, Path.MaxPath), nameof(name));
 
             //Pass false to OpenSemaphore to prevent inheritedHandles
-            SafeWaitHandle myHandle = Win32Native.OpenSemaphore(SEMAPHORE_MODIFY_STATE | SYNCHRONIZE, false, name);
+            SafeWaitHandle myHandle = Win32Native.OpenSemaphore(AccessRights, false, name);
 
             if (myHandle.IsInvalid)
             {
@@ -155,7 +154,7 @@ namespace System.Threading
                 if (null != name && 0 != name.Length && Win32Native.ERROR_INVALID_HANDLE == errorCode)
                     return OpenExistingResult.NameInvalid;
                 //this is for passed through NativeMethods Errors
-                __Error.WinIOError();
+                throw Win32Marshal.GetExceptionForLastWin32Error();
             }
 
             result = new Semaphore(myHandle);
@@ -173,7 +172,7 @@ namespace System.Threading
         {
             if (releaseCount < 1)
             {
-                throw new ArgumentOutOfRangeException(nameof(releaseCount), Environment.GetResourceString("ArgumentOutOfRange_NeedNonNegNum"));
+                throw new ArgumentOutOfRangeException(nameof(releaseCount), SR.ArgumentOutOfRange_NeedNonNegNum);
             }
 
             //If ReleaseSempahore returns false when the specified value would cause

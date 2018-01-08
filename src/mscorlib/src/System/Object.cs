@@ -15,12 +15,12 @@
 namespace System
 {
     using System;
+    using System.Diagnostics;
     using System.Runtime;
     using System.Runtime.InteropServices;
     using System.Runtime.CompilerServices;
     using System.Runtime.ConstrainedExecution;
     using System.Runtime.Versioning;
-    using System.Diagnostics.Contracts;
     using CultureInfo = System.Globalization.CultureInfo;
     using FieldInfo = System.Reflection.FieldInfo;
     using BindingFlags = System.Reflection.BindingFlags;
@@ -34,6 +34,7 @@ namespace System
     [Serializable]
     [ClassInterface(ClassInterfaceType.AutoDual)]
     [System.Runtime.InteropServices.ComVisible(true)]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     public class Object
     {
         // Creates a new instance of an Object.
@@ -96,7 +97,6 @@ namespace System
 
         // Returns a Type object which represent this object instance.
         // 
-        [Pure]
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         public extern Type GetType();
 
@@ -120,14 +120,14 @@ namespace System
         // 
         private void FieldSetter(String typeName, String fieldName, Object val)
         {
-            Contract.Requires(typeName != null);
-            Contract.Requires(fieldName != null);
+            Debug.Assert(typeName != null);
+            Debug.Assert(fieldName != null);
 
             // Extract the field info object
             FieldInfo fldInfo = GetFieldInfo(typeName, fieldName);
 
             if (fldInfo.IsInitOnly)
-                throw new FieldAccessException(Environment.GetResourceString("FieldAccess_InitOnly"));
+                throw new FieldAccessException(SR.FieldAccess_InitOnly);
 
             // Make sure that the value is compatible with the type
             // of field
@@ -150,8 +150,8 @@ namespace System
         // 
         private void FieldGetter(String typeName, String fieldName, ref Object val)
         {
-            Contract.Requires(typeName != null);
-            Contract.Requires(fieldName != null);
+            Debug.Assert(typeName != null);
+            Debug.Assert(fieldName != null);
 
             // Extract the field info object
             FieldInfo fldInfo = GetFieldInfo(typeName, fieldName);
@@ -164,9 +164,8 @@ namespace System
         // 
         private FieldInfo GetFieldInfo(String typeName, String fieldName)
         {
-            Contract.Requires(typeName != null);
-            Contract.Requires(fieldName != null);
-            Contract.Ensures(Contract.Result<FieldInfo>() != null);
+            Debug.Assert(typeName != null);
+            Debug.Assert(fieldName != null);
 
             Type t = GetType();
             while (null != t)
@@ -201,7 +200,6 @@ namespace System
     // The name "__Canon" will never been seen by users but it will appear a lot in debugger stack traces
     // involving generics so it is kept deliberately short as to avoid being a nuisance.
 
-    [Serializable]
     [ClassInterface(ClassInterfaceType.AutoDual)]
     [System.Runtime.InteropServices.ComVisible(true)]
     internal class __Canon

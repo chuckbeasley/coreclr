@@ -20,7 +20,7 @@ enum var_types_classification
     VTF_S   = 0x0040, // is a struct type
 };
 
-DECLARE_TYPED_ENUM(var_types, BYTE)
+enum var_types : BYTE
 {
 #define DEF_TP(tn, nm, jitType, verType, sz, sze, asze, st, al, tf, howUsed) TYP_##tn,
 #include "typelist.h"
@@ -28,9 +28,8 @@ DECLARE_TYPED_ENUM(var_types, BYTE)
 
     TYP_COUNT,
 
-        TYP_lastIntrins = TYP_DOUBLE
-}
-END_DECLARE_TYPED_ENUM(var_types, BYTE)
+    TYP_lastIntrins = TYP_DOUBLE
+};
 
 /*****************************************************************************
  * C-style pointers are implemented as TYP_INT or TYP_LONG depending on the
@@ -83,9 +82,7 @@ inline bool varTypeIsSIMD(T vt)
         case TYP_SIMD8:
         case TYP_SIMD12:
         case TYP_SIMD16:
-#ifdef FEATURE_AVX_SUPPORT
         case TYP_SIMD32:
-#endif // FEATURE_AVX_SUPPORT
             return true;
         default:
             return false;
@@ -131,7 +128,6 @@ inline var_types varTypeUnsignedToSigned(var_types vt)
             case TYP_UBYTE:
                 return TYP_BYTE;
             case TYP_USHORT:
-            case TYP_CHAR:
                 return TYP_SHORT;
             case TYP_UINT:
                 return TYP_INT;
@@ -192,7 +188,7 @@ inline bool varTypeIsByte(T vt)
 template <class T>
 inline bool varTypeIsShort(T vt)
 {
-    return (TypeGet(vt) >= TYP_CHAR) && (TypeGet(vt) <= TYP_USHORT);
+    return (TypeGet(vt) == TYP_SHORT) || (TypeGet(vt) == TYP_USHORT);
 }
 
 template <class T>

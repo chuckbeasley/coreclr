@@ -23,7 +23,6 @@
 #include "comsynchronizable.h"
 #include "threads.h"
 #include "dllimport.h"
-#include "security.h"
 #include "dbginterface.h"
 #include "log.h"
 #include "eeconfig.h"
@@ -1337,6 +1336,9 @@ TypeHandle ClassLoader::LookupTypeKeyUnderLock(TypeKey *pKey,
     WRAPPER_NO_CONTRACT;
     SUPPORTS_DAC;
 
+    // m_AvailableTypesLock has to be taken in cooperative mode to avoid deadlocks during GC
+    GCX_MAYBE_COOP_NO_THREAD_BROKEN(!IsGCThread());
+
     CrstHolder ch(pLock);
     return pTable->GetValue(pKey);
 }
@@ -2071,8 +2073,7 @@ ClassLoader::LoadTypeHandleThrowing(
             BOOL fTrustTD = TRUE;
 #ifndef DACCESS_COMPILE
             CONTRACT_VIOLATION(ThrowsViolation);
-            BOOL fVerifyTD = (FoundExportedType != mdTokenNil) &&
-                             !pClsLdr->GetAssembly()->GetSecurityDescriptor()->IsFullyTrusted();
+            BOOL fVerifyTD = FALSE;
             
             // If this is an exported type with a mdTokenNil class token, then then
             // exported type did not give a typedefID hint. We won't be able to trust the typedef
@@ -3743,6 +3744,9 @@ TypeHandle ClassLoader::PublishType(TypeKey *pTypeKey, TypeHandle typeHnd)
         Module *pLoaderModule = ComputeLoaderModule(pTypeKey);
         EETypeHashTable *pTable = pLoaderModule->GetAvailableParamTypes();
 
+        // m_AvailableTypesLock has to be taken in cooperative mode to avoid deadlocks during GC
+        GCX_COOP();
+
         CrstHolder ch(&pLoaderModule->GetClassLoader()->m_AvailableTypesLock);
 
         // The type could have been loaded by a different thread as side-effect of avoiding deadlocks caused by LoadsTypeViolation
@@ -3807,6 +3811,9 @@ TypeHandle ClassLoader::PublishType(TypeKey *pTypeKey, TypeHandle typeHnd)
     {
         Module *pModule = pTypeKey->GetModule();
         mdTypeDef typeDef = pTypeKey->GetTypeToken();
+
+        // m_AvailableTypesLock has to be taken in cooperative mode to avoid deadlocks during GC
+        GCX_COOP();
 
         CrstHolder ch(&pModule->GetClassLoader()->m_AvailableTypesLock);
 
@@ -4861,27 +4868,6 @@ StaticAccessCheckContext::StaticAccessCheckContext(MethodDesc* pCallerMethod, Me
     m_pCallerAssembly = pCallerType->GetAssembly();
 }
 
-// Critical callers do not need the extra access checks
-bool StaticAccessCheckContext::IsCallerCritical()
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-    
-    if (m_pCallerMethod == NULL || !Security::IsMethodTransparent(m_pCallerMethod))
-    {
-        return true;
-    }
-    
-    return false;
-}
-
-
-
 //******************************************************************************
 
 // static
@@ -4903,8 +4889,7 @@ void AccessCheckOptions::Startup()
 //******************************************************************************
 AccessCheckOptions::AccessCheckOptions(
     const AccessCheckOptions & templateOptions,
-    BOOL                       throwIfTargetIsInaccessible,
-    BOOL                       skipCheckForCriticalCode /*=FALSE*/) :
+    BOOL                       throwIfTargetIsInaccessible) :
     m_pAccessContext(templateOptions.m_pAccessContext)
 {
     WRAPPER_NO_CONTRACT;
@@ -4914,8 +4899,7 @@ AccessCheckOptions::AccessCheckOptions(
         throwIfTargetIsInaccessible,
         templateOptions.m_pTargetMT,
         templateOptions.m_pTargetMethod, 
-        templateOptions.m_pTargetField,
-        skipCheckForCriticalCode);
+        templateOptions.m_pTargetField);
 }
 
 //******************************************************************************
@@ -4944,7 +4928,7 @@ BOOL AccessCheckOptions::DemandMemberAccess(AccessCheckContext *pContext, Method
 
         if (m_fThrowIfTargetIsInaccessible)
         {
-            ThrowAccessException(pContext, pTargetMT, NULL, FALSE);
+            ThrowAccessException(pContext, pTargetMT, NULL);
         }
 
         return FALSE;
@@ -4954,7 +4938,7 @@ BOOL AccessCheckOptions::DemandMemberAccess(AccessCheckContext *pContext, Method
     {
         if (m_fThrowIfTargetIsInaccessible)
         {
-            ThrowAccessException(pContext, pTargetMT, NULL, FALSE);
+            ThrowAccessException(pContext, pTargetMT, NULL);
         }
 
         return FALSE;
@@ -4964,50 +4948,23 @@ BOOL AccessCheckOptions::DemandMemberAccess(AccessCheckContext *pContext, Method
 
 #ifndef CROSSGEN_COMPILE
 
-    BOOL fAccessingFrameworkCode = FALSE;
-
     // In CoreCLR kRestrictedMemberAccess means that one can access private/internal
     // classes/members in app code.
     if (m_accessCheckType != kMemberAccess && pTargetMT)
     {
-        // m_accessCheckType must be kRestrictedMemberAccess if we are running in PT.
-        _ASSERTE(GetAppDomain()->GetSecurityDescriptor()->IsFullyTrusted() ||
-                 m_accessCheckType == kRestrictedMemberAccess);
-
-        if (visibilityCheck && Security::IsTransparencyEnforcementEnabled())
-        {
-            // In CoreCLR RMA means visibility checks always succeed if the target is user code.
-            if (m_accessCheckType == kRestrictedMemberAccess || m_accessCheckType == kRestrictedMemberAccessNoTransparency)
-                return TRUE;
-
-            // Accessing private types/members in platform code.
-            fAccessingFrameworkCode = TRUE;
-        }
-        else
-        {
-            // We allow all transparency checks to succeed in LCG methods and reflection invocation.
-            if (m_accessCheckType == kNormalAccessNoTransparency || m_accessCheckType == kRestrictedMemberAccessNoTransparency)
-                return TRUE;
-        }
+        // We allow all transparency checks to succeed in LCG methods and reflection invocation.
+        if (m_accessCheckType == kNormalAccessNoTransparency || m_accessCheckType == kRestrictedMemberAccessNoTransparency)
+            return TRUE;
     }
 
     // Always allow interop (NULL) callers full access.
     if (pContext->IsCalledFromInterop())
         return TRUE;
 
-    MethodDesc* pCallerMD = pContext->GetCallerMethod();
-
-    // critical code is exempted from all accessibility rules, regardless of the AccessCheckType.
-    if (pCallerMD != NULL && 
-        !Security::IsMethodTransparent(pCallerMD))
-    {
-        return TRUE;
-    }
-
     // No Access
     if (m_fThrowIfTargetIsInaccessible)
     {
-        ThrowAccessException(pContext, pTargetMT, NULL, fAccessingFrameworkCode);
+        ThrowAccessException(pContext, pTargetMT, NULL);
     }
 
 #endif // CROSSGEN_COMPILE
@@ -5023,8 +4980,7 @@ BOOL AccessCheckOptions::DemandMemberAccess(AccessCheckContext *pContext, Method
 void AccessCheckOptions::ThrowAccessException(
     AccessCheckContext* pContext,
     MethodTable*        pFailureMT,             /* = NULL  */
-    Exception*          pInnerException,        /* = NULL  */
-    BOOL                fAccessingFrameworkCode /* = FALSE */) const
+    Exception*          pInnerException         /* = NULL  */) const
 {
     CONTRACTL
     {
@@ -5046,7 +5002,7 @@ void AccessCheckOptions::ThrowAccessException(
         // If we know the specific type that caused the failure, display it.
         // Else display the whole type that we are trying to access.
         MethodTable * pMT = (pFailureMT != NULL) ? pFailureMT : m_pTargetMT;
-        ThrowTypeAccessException(pContext, pMT, 0, pInnerException, fAccessingFrameworkCode);
+        ThrowTypeAccessException(pContext, pMT, 0, pInnerException);
     }
     else if (m_pTargetMethod != NULL) 
     {
@@ -5059,17 +5015,17 @@ void AccessCheckOptions::ThrowAccessException(
         // throwing the standard MethodAccessException.
         if (pCallerMD != NULL && m_pTargetMethod == pCallerMD && pFailureMT != NULL)
         {
-            ThrowTypeAccessException(pContext, pFailureMT, 0, pInnerException, fAccessingFrameworkCode);
+            ThrowTypeAccessException(pContext, pFailureMT, 0, pInnerException);
         }
         else
         {
-            ThrowMethodAccessException(pContext, m_pTargetMethod, 0, pInnerException, fAccessingFrameworkCode);
+            ThrowMethodAccessException(pContext, m_pTargetMethod, 0, pInnerException);
         }
     }
     else
     {
         _ASSERTE(m_pTargetField != NULL);
-        ThrowFieldAccessException(pContext, m_pTargetField, 0, pInnerException, fAccessingFrameworkCode);
+        ThrowFieldAccessException(pContext, m_pTargetField, 0, pInnerException);
     }
 }
 
@@ -5085,15 +5041,6 @@ BOOL AccessCheckOptions::DemandMemberAccessOrFail(AccessCheckContext *pContext, 
         MODE_ANY;
     }
     CONTRACTL_END;
-
-    // m_fSkipCheckForCriticalCode is only ever set to true for CanAccessMemberForExtraChecks.
-    // For legacy compat we allow the access check to succeed for all AccessCheckType if the caller is critical.
-    if (m_fSkipCheckForCriticalCode)
-    {
-        if (pContext->IsCalledFromInterop() ||
-            !Security::IsMethodTransparent(pContext->GetCallerMethod()))
-            return TRUE;
-    }
 
     if (DoNormalAccessibilityChecks())
     {
@@ -5127,15 +5074,6 @@ BOOL AccessCheckOptions::FailOrThrow(AccessCheckContext *pContext) const
     }
     CONTRACTL_END;
 
-    // m_fSkipCheckForCriticalCode is only ever set to true for CanAccessMemberForExtraChecks.
-    // For legacy compat we allow the access check to succeed for all AccessCheckType if the caller is critical.
-    if (m_fSkipCheckForCriticalCode)
-    {
-        if (pContext->IsCalledFromInterop() ||
-            !Security::IsMethodTransparent(pContext->GetCallerMethod()))
-            return TRUE;
-    }
-
     if (m_fThrowIfTargetIsInaccessible)
     {
         ThrowAccessException(pContext);
@@ -5144,83 +5082,10 @@ BOOL AccessCheckOptions::FailOrThrow(AccessCheckContext *pContext) const
     return FALSE;
 }
 
-// Generate access exception context strings that are due to potential security misconfiguration
-void GetAccessExceptionAdditionalContextForSecurity(Assembly *pAccessingAssembly,
-                                                    Assembly *pTargetAssembly,
-                                                    BOOL isTransparencyError,
-                                                    BOOL fAccessingFrameworkCode,
-                                                    StringArrayList *pContextInformation)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-        PRECONDITION(CheckPointer(pAccessingAssembly));
-        PRECONDITION(CheckPointer(pTargetAssembly));
-        PRECONDITION(CheckPointer(pContextInformation));
-    }
-    CONTRACTL_END;
-
-    if (fAccessingFrameworkCode)
-    {
-        SString accessingFrameworkCodeError;
-        EEException::GetResourceMessage(IDS_E_ACCESSING_PRIVATE_FRAMEWORK_CODE, accessingFrameworkCodeError);
-
-        pContextInformation->Append(accessingFrameworkCodeError);
-    }
-
-
-}
-
-// Generate additional context about the root cause of an access exception which may help in debugging it (for
-// instance v4 APTCA implying transparnecy, or conditional APTCA not being enabled). If no additional
-// context is available, then this returns SString.Empty.
-SString GetAdditionalAccessExceptionContext(Assembly *pAccessingAssembly,
-                                            Assembly *pTargetAssembly,
-                                            BOOL isTransparencyError,
-                                            BOOL fAccessingFrameworkCode)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-        PRECONDITION(CheckPointer(pAccessingAssembly));
-        PRECONDITION(CheckPointer(pTargetAssembly));
-    }
-    CONTRACTL_END;
-
-    StringArrayList contextComponents;
-
-    // See if the exception may have been caused by security
-    GetAccessExceptionAdditionalContextForSecurity(pAccessingAssembly,
-                                                   pTargetAssembly,
-                                                   isTransparencyError,
-                                                   fAccessingFrameworkCode,
-                                                   &contextComponents);
-
-    // Append each component of additional context we found into the additional context string in its own
-    // paragraph.
-    SString additionalContext;
-    for (DWORD i = 0; i < contextComponents.GetCount(); ++i)
-    {
-        SString contextComponent = contextComponents.Get(i);
-        if (!contextComponent.IsEmpty())
-        {
-            additionalContext.Append(W("\n\n"));
-            additionalContext.Append(contextComponent);
-        }
-    }
-
-    return additionalContext;
-}
-
 void DECLSPEC_NORETURN ThrowFieldAccessException(AccessCheckContext* pContext,
                                                  FieldDesc *pFD,
                                                  UINT messageID /* = 0 */,
-                                                 Exception *pInnerException /* = NULL */,
-                                                 BOOL fAccessingFrameworkCode /* = FALSE */)
+                                                 Exception *pInnerException /* = NULL */)
 {
     CONTRACTL
     {
@@ -5232,26 +5097,18 @@ void DECLSPEC_NORETURN ThrowFieldAccessException(AccessCheckContext* pContext,
     }
     CONTRACTL_END;
 
-    BOOL isTransparencyError = FALSE;
-
     MethodDesc* pCallerMD = pContext->GetCallerMethod();
-    if (pCallerMD != NULL)
-        isTransparencyError = !Security::CheckCriticalAccess(pContext, NULL, pFD, NULL);
     
     ThrowFieldAccessException(pCallerMD,
                               pFD,
-                              isTransparencyError,
                               messageID,
-                              pInnerException,
-                              fAccessingFrameworkCode);
+                              pInnerException);
 }
 
 void DECLSPEC_NORETURN ThrowFieldAccessException(MethodDesc* pCallerMD,
                                                  FieldDesc *pFD,
-                                                 BOOL isTransparencyError,
                                                  UINT messageID /* = 0 */,
-                                                 Exception *pInnerException /* = NULL */,
-                                                 BOOL fAccessingFrameworkCode /* = FALSE */)
+                                                 Exception *pInnerException /* = NULL */)
 {
     CONTRACTL
     {
@@ -5267,25 +5124,10 @@ void DECLSPEC_NORETURN ThrowFieldAccessException(MethodDesc* pCallerMD,
     {
         if (messageID == 0)
         {
-            // Figure out if we can give a specific reason why this field access was rejected - for instance, if
-            // we see that the caller is transparent and accessing a critical field, then we can put that
-            // information into the exception message.
-            if (isTransparencyError)
-            {
-                messageID = IDS_E_CRITICAL_FIELD_ACCESS_DENIED;
-            }
-            else
-            {
-                messageID = IDS_E_FIELDACCESS;
-            }
+            messageID = IDS_E_FIELDACCESS;
         }
 
-        SString strAdditionalContext = GetAdditionalAccessExceptionContext(pCallerMD->GetAssembly(),
-                                                                           pFD->GetApproxEnclosingMethodTable()->GetAssembly(),
-                                                                           isTransparencyError,
-                                                                           fAccessingFrameworkCode);
-
-        EX_THROW_WITH_INNER(EEFieldException, (pFD, pCallerMD, strAdditionalContext, messageID), pInnerException);
+        EX_THROW_WITH_INNER(EEFieldException, (pFD, pCallerMD, SString::Empty(), messageID), pInnerException);
     }
     else
     {
@@ -5296,8 +5138,7 @@ void DECLSPEC_NORETURN ThrowFieldAccessException(MethodDesc* pCallerMD,
 void DECLSPEC_NORETURN ThrowMethodAccessException(AccessCheckContext* pContext,
                                                   MethodDesc *pCalleeMD,
                                                   UINT messageID /* = 0 */,
-                                                  Exception *pInnerException /* = NULL */,
-                                                  BOOL fAccessingFrameworkCode /* = FALSE */)
+                                                  Exception *pInnerException /* = NULL */)
 {
     CONTRACTL
     {
@@ -5309,26 +5150,18 @@ void DECLSPEC_NORETURN ThrowMethodAccessException(AccessCheckContext* pContext,
     }
     CONTRACTL_END;
 
-    BOOL isTransparencyError = FALSE;
-
     MethodDesc* pCallerMD = pContext->GetCallerMethod();
-    if (pCallerMD != NULL)
-        isTransparencyError = !Security::CheckCriticalAccess(pContext, pCalleeMD, NULL, NULL);
     
     ThrowMethodAccessException(pCallerMD,
                                pCalleeMD,
-                               isTransparencyError,
                                messageID,
-                               pInnerException,
-                               fAccessingFrameworkCode);
+                               pInnerException);
 }
 
 void DECLSPEC_NORETURN ThrowMethodAccessException(MethodDesc* pCallerMD,
                                                   MethodDesc *pCalleeMD,
-                                                  BOOL isTransparencyError,
                                                   UINT messageID /* = 0 */,
-                                                  Exception *pInnerException /* = NULL */,
-                                                  BOOL fAccessingFrameworkCode /* = FALSE */)
+                                                  Exception *pInnerException /* = NULL */)
 {
     CONTRACTL
     {
@@ -5344,25 +5177,10 @@ void DECLSPEC_NORETURN ThrowMethodAccessException(MethodDesc* pCallerMD,
     {
         if (messageID == 0)
         {
-            // Figure out if we can give a specific reason why this method access was rejected - for instance, if
-            // we see that the caller is transparent and the callee is critical, then we can put that
-            // information into the exception message.
-            if (isTransparencyError)
-            {
-                messageID = IDS_E_CRITICAL_METHOD_ACCESS_DENIED;
-            }
-            else
-            {
-                messageID = IDS_E_METHODACCESS;
-            }
+            messageID = IDS_E_METHODACCESS;
         }
 
-        SString strAdditionalContext = GetAdditionalAccessExceptionContext(pCallerMD->GetAssembly(),
-                                                                           pCalleeMD->GetAssembly(),
-                                                                           isTransparencyError,
-                                                                           fAccessingFrameworkCode);
-
-        EX_THROW_WITH_INNER(EEMethodException, (pCalleeMD, pCallerMD, strAdditionalContext, messageID), pInnerException);
+        EX_THROW_WITH_INNER(EEMethodException, (pCalleeMD, pCallerMD, SString::Empty(), messageID), pInnerException);
     }
     else
     {
@@ -5373,8 +5191,7 @@ void DECLSPEC_NORETURN ThrowMethodAccessException(MethodDesc* pCallerMD,
 void DECLSPEC_NORETURN ThrowTypeAccessException(AccessCheckContext* pContext,
                                                 MethodTable *pMT,
                                                 UINT messageID /* = 0 */,
-                                                Exception *pInnerException /* = NULL */,
-                                                BOOL fAccessingFrameworkCode /* = FALSE */)
+                                                Exception *pInnerException /* = NULL */)
 {
     CONTRACTL
     {
@@ -5386,26 +5203,18 @@ void DECLSPEC_NORETURN ThrowTypeAccessException(AccessCheckContext* pContext,
     }
     CONTRACTL_END;
 
-    BOOL isTransparencyError = FALSE;
-
     MethodDesc* pCallerMD = pContext->GetCallerMethod();
-    if (pCallerMD != NULL)
-        isTransparencyError = !Security::CheckCriticalAccess(pContext, NULL, NULL, pMT);
     
     ThrowTypeAccessException(pCallerMD,
                              pMT,
-                             isTransparencyError,
                              messageID,
-                             pInnerException,
-                             fAccessingFrameworkCode);
+                             pInnerException);
 }
 
 void DECLSPEC_NORETURN ThrowTypeAccessException(MethodDesc* pCallerMD,
                                                 MethodTable *pMT,
-                                                BOOL isTransparencyError,
                                                 UINT messageID /* = 0 */,
-                                                Exception *pInnerException /* = NULL */,
-                                                BOOL fAccessingFrameworkCode /* = FALSE */)
+                                                Exception *pInnerException /* = NULL */)
 {
     CONTRACTL
     {
@@ -5421,82 +5230,16 @@ void DECLSPEC_NORETURN ThrowTypeAccessException(MethodDesc* pCallerMD,
     {
         if (messageID == 0)
         {
-            // Figure out if we can give a specific reason why this type access was rejected - for instance, if
-            // we see that the caller is transparent and is accessing a critical type, then we can put that
-            // information into the exception message.
-            if (isTransparencyError)
-            {
-                messageID = IDS_E_CRITICAL_TYPE_ACCESS_DENIED;
-            }
-            else
-            {
-                messageID = IDS_E_TYPEACCESS;
-            }
+            messageID = IDS_E_TYPEACCESS;
         }
 
-        SString strAdditionalContext = GetAdditionalAccessExceptionContext(pCallerMD->GetAssembly(),
-                                                                           pMT->GetAssembly(),
-                                                                           isTransparencyError,
-                                                                           fAccessingFrameworkCode);
-
-        EX_THROW_WITH_INNER(EETypeAccessException, (pMT, pCallerMD, strAdditionalContext, messageID), pInnerException);
+        EX_THROW_WITH_INNER(EETypeAccessException, (pMT, pCallerMD, SString::Empty(), messageID), pInnerException);
     }
     else
     {
         EX_THROW_WITH_INNER(EETypeAccessException, (pMT), pInnerException);
     }
 }
-
-//******************************************************************************
-// This function determines whether a method [if transparent]
-//  can access a specified target (e.g. Type, Method, Field)
-static BOOL CheckTransparentAccessToCriticalCode(
-    AccessCheckContext* pContext,
-    DWORD               dwMemberAccess,
-    MethodTable*        pTargetMT,
-    MethodDesc*         pOptionalTargetMethod,
-    FieldDesc*          pOptionalTargetField,
-    MethodTable*        pOptionalTargetType,
-    const AccessCheckOptions & accessCheckOptions)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-        PRECONDITION(CheckPointer(pContext));
-        PRECONDITION(accessCheckOptions.TransparencyCheckNeeded());
-    }
-    CONTRACTL_END;
-
-    if (!Security::IsTransparencyEnforcementEnabled())
-        return TRUE;
-
-    // At most one of these should be non-NULL
-    _ASSERTE(1 >= ((pOptionalTargetMethod ? 1 : 0) +
-                   (pOptionalTargetField ? 1 : 0) +
-                   (pOptionalTargetType ? 1 : 0)));
-
-
-    // if the caller [Method] is transparent, do special security checks
-    // check if security disallows access to target member
-    if (!Security::CheckCriticalAccess(
-                pContext, 
-                pOptionalTargetMethod, 
-                pOptionalTargetField, 
-                pOptionalTargetType))
-    {
-#ifdef _DEBUG
-        if (g_pConfig->LogTransparencyErrors())
-        {
-            SecurityTransparent::LogTransparencyError(pContext->GetCallerMethod(), "Transparent code accessing a critical type, method, or field", pOptionalTargetMethod);
-        }
-#endif // _DEBUG
-        return accessCheckOptions.DemandMemberAccessOrFail(pContext, pTargetMT, FALSE /*visibilityCheck*/);
-    }
-
-    return TRUE;
-} // static BOOL CheckTransparentAccessToCriticalCode
 
 //---------------------------------------------------------------------------------------
 //
@@ -5622,8 +5365,7 @@ BOOL ClassLoader::CanAccessClass(                   // True if access is legal, 
     AccessCheckContext* pContext,                   // The caller context
     MethodTable*        pTargetClass,               // The desired target class.
     Assembly*           pTargetAssembly,            // Assembly containing the target class.    
-    const AccessCheckOptions & accessCheckOptions,
-    BOOL                checkTargetTypeTransparency)// = TRUE
+    const AccessCheckOptions & accessCheckOptions)// = TRUE
 {                                           
     CONTRACTL
     {
@@ -5640,26 +5382,6 @@ BOOL ClassLoader::CanAccessClass(                   // True if access is legal, 
     // @todo: what does that mean?
     //if (!pTargetClass)
     //    return TRUE;
-
-    // check transparent/critical on type
-    // Note that dwMemberAccess is of no use here since we don't have a target method yet. It really should be made an optional arg.
-    // For now, we pass in mdPublic.
-    if (checkTargetTypeTransparency && accessCheckOptions.TransparencyCheckNeeded())
-    {
-        if (!CheckTransparentAccessToCriticalCode(
-                pContext,
-                mdPublic,
-                pTargetClass,
-                NULL,
-                NULL,
-                pTargetClass,
-                accessCheckOptions))
-        {
-            // no need to call accessCheckOptions.DemandMemberAccessOrFail here because
-            // CheckTransparentAccessToCriticalCode does that already
-            return FALSE;
-        }
-    }
 
     // Step 2: Recursively call CanAccessClass on the generic type arguments
     // Is the desired target a generic instantiation?
@@ -5681,8 +5403,7 @@ BOOL ClassLoader::CanAccessClass(                   // True if access is legal, 
                     pContext, 
                     pMT, 
                     th.GetAssembly(), 
-                    accessCheckOptions,
-                    checkTargetTypeTransparency))
+                    accessCheckOptions))
             {
                 // no need to call accessCheckOptions.DemandMemberAccessOrFail here because the base case in
                 // CanAccessClass does that already
@@ -5782,23 +5503,14 @@ BOOL ClassLoader::CanAccessClass(                   // True if access is legal, 
         dwProtection,
         NULL,
         NULL,
-        accessCheckOptions,
-        FALSE,
-        FALSE);
+        accessCheckOptions);
 } // BOOL ClassLoader::CanAccessClass()
 
 //******************************************************************************
 // This is a front-end to CheckAccessMember that handles the nested class scope. If can't access
 // from the current point and are a nested class, then try from the enclosing class.
-// It does two things in addition to CanAccessMember:
-//   1. If the caller class doesn't have access to the caller, see if the enclosing class does.
-//   2. CanAccessMemberForExtraChecks which checks whether the caller class has access to 
-//      the signature of the target method or field.
+// In addition to CanAccessMember, if the caller class doesn't have access to the caller, see if the enclosing class does.
 //
-// checkTargetMethodTransparency is set to FALSE only when the check is for JIT-compilation
-// because the JIT has a mechanism to insert a callout for the case where
-// we need to perform the currentMD <-> TargetMD check at runtime.
-
 /* static */
 BOOL ClassLoader::CanAccess(                            // TRUE if access is allowed, FALSE otherwise.
     AccessCheckContext* pContext,                       // The caller context
@@ -5808,9 +5520,7 @@ BOOL ClassLoader::CanAccess(                            // TRUE if access is all
     MethodDesc*         pOptionalTargetMethod,          // The target method; NULL if the target is a not a method or
                                                         // there is no need to check the method's instantiation.
     FieldDesc*          pOptionalTargetField,           // or The desired field; if NULL, return TRUE
-    const AccessCheckOptions & accessCheckOptions,      // = s_NormalAccessChecks
-    BOOL                checkTargetMethodTransparency,  // = TRUE
-    BOOL                checkTargetTypeTransparency)    // = TRUE
+    const AccessCheckOptions & accessCheckOptions)      // = s_NormalAccessChecks
 {
     CONTRACT(BOOL)
     {
@@ -5835,9 +5545,7 @@ BOOL ClassLoader::CanAccess(                            // TRUE if access is all
                            pOptionalTargetField,
                            // Suppress exceptions for nested classes since this is not a hard-failure,
                            // and we can do additional checks
-                           accessCheckOptionsNoThrow,
-                           checkTargetMethodTransparency,
-                           checkTargetTypeTransparency))
+                           accessCheckOptionsNoThrow))
     {
         // If we're here, CheckAccessMember didn't allow access.
         BOOL canAccess = FALSE;
@@ -5871,9 +5579,7 @@ BOOL ClassLoader::CanAccess(                            // TRUE if access is all
                                  dwMemberAccess,
                                  pOptionalTargetMethod,
                                  pOptionalTargetField,
-                                 accessCheckOptionsNoThrow,
-                                 checkTargetMethodTransparency,
-                                 checkTargetTypeTransparency);
+                                 accessCheckOptionsNoThrow);
         }
 
         if (!canAccess)
@@ -5883,210 +5589,10 @@ BOOL ClassLoader::CanAccess(                            // TRUE if access is all
         }
     }
 
-    // For member access, we do additional checks to ensure that the specific member can
-    // be accessed
-
-    if (!CanAccessMemberForExtraChecks(
-                pContext,
-                pTargetMT,
-                pOptionalTargetMethod,
-                pOptionalTargetField,
-                accessCheckOptions,
-                checkTargetMethodTransparency))
-    {
-        RETURN_FROM_INTERIOR_PROBE(FALSE);
-    }
-
     RETURN_FROM_INTERIOR_PROBE(TRUE);
 
     END_INTERIOR_STACK_PROBE;
 } // BOOL ClassLoader::CanAccess()
-
-//******************************************************************************
-// Performs additional checks for member access
-
-BOOL ClassLoader::CanAccessMemberForExtraChecks(
-        AccessCheckContext* pContext,
-        MethodTable*        pTargetExactMT,
-        MethodDesc*         pOptionalTargetMethod,
-        FieldDesc*          pOptionalTargetField,
-        const AccessCheckOptions & accessCheckOptions,
-        BOOL                checkTargetMethodTransparency)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-        PRECONDITION(CheckPointer(pContext));
-    }
-    CONTRACTL_END;
-
-    // Critical callers do not need the extra checks
-    // This early-out saves the cost of all the subsequent work
-    if (pContext->IsCallerCritical())
-    {
-        return TRUE;
-    }
-    
-    if (pOptionalTargetMethod == NULL && pOptionalTargetField == NULL)
-        return TRUE;
-
-    _ASSERTE((pOptionalTargetMethod == NULL) != (pOptionalTargetField == NULL));
-
-    // We should always do checks on member signatures. But for backward compatibility we skip this check
-    // for critical callers. And since we don't want to look for the caller here which might incur a stack walk,
-    // we delay the check to DemandMemberAccessOrFail time.
-    AccessCheckOptions legacyAccessCheckOptions(accessCheckOptions, accessCheckOptions.Throws(), TRUE);
-
-    if (pOptionalTargetMethod)
-    {
-        // A method is accessible only if all the types in the signature
-        // are also accessible.
-        if (!CanAccessSigForExtraChecks(pContext,
-                                        pOptionalTargetMethod,
-                                        pTargetExactMT,
-                                        legacyAccessCheckOptions,
-                                        checkTargetMethodTransparency))
-        {
-            return FALSE;
-        }
-    }
-    else
-    {
-        _ASSERTE(pOptionalTargetField != NULL);
-
-        // A field is accessible only if the field type is also accessible
-
-        TypeHandle fieldType = pOptionalTargetField->GetExactFieldType(TypeHandle(pTargetExactMT));
-        CorElementType fieldCorType = fieldType.GetSignatureCorElementType();
-        
-        MethodTable * pFieldTypeMT = fieldType.GetMethodTableOfElementType();
-
-        // No access check needed on a generic variable or a function pointer
-        if (pFieldTypeMT != NULL)
-        {
-            if (!CanAccessClassForExtraChecks(pContext,
-                                              pFieldTypeMT,
-                                              pFieldTypeMT->GetAssembly(),
-                                              legacyAccessCheckOptions,
-                                              TRUE))
-            {
-                return FALSE;
-            }
-        }
-    }
-
-    return TRUE;
-}
-
-//******************************************************************************
-// Can all the types in the signature of the pTargetMethodSig be accessed?
-//
-// "ForExtraChecks" means that we only do extra checks (security and transparency)
-// instead of the usual loader visibility checks. Post V2, we can enable all checks.
-
-BOOL ClassLoader::CanAccessSigForExtraChecks(   // TRUE if access is allowed, FALSE otherwise.
-    AccessCheckContext* pContext,
-    MethodDesc*         pTargetMethodSig,       // The target method. If this is a shared method, pTargetExactMT gives 
-                                                // additional information about the exact type
-    MethodTable*        pTargetExactMT,         // or The desired field; if NULL, return TRUE
-    const AccessCheckOptions & accessCheckOptions,
-    BOOL                checkTargetTransparency)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-        PRECONDITION(CheckPointer(pContext));
-    }
-    CONTRACTL_END;
-
-    MetaSig sig(pTargetMethodSig, TypeHandle(pTargetExactMT));
-
-    // First, check the return type
-
-    TypeHandle retType = sig.GetRetTypeHandleThrowing();
-    MethodTable * pRetMT = retType.GetMethodTableOfElementType();
-
-    // No access check needed on a generic variable or a function pointer
-    if (pRetMT != NULL)
-    {
-        if (!CanAccessClassForExtraChecks(pContext,
-                                          pRetMT,
-                                          retType.GetAssembly(),
-                                          accessCheckOptions,
-                                          checkTargetTransparency))
-        {
-            return FALSE;
-        }
-    }
-
-    //
-    // Now walk all the arguments in the signature
-    //
-
-    for (CorElementType argType = sig.NextArg(); argType != ELEMENT_TYPE_END; argType = sig.NextArg())
-    {
-        TypeHandle thArg = sig.GetLastTypeHandleThrowing();
-
-        MethodTable * pArgMT = thArg.GetMethodTableOfElementType();
-
-        // Either a TypeVarTypeDesc or a FnPtrTypeDesc. No access check needed.
-        if (pArgMT == NULL)
-            continue;
-
-        BOOL canAcesssElement = CanAccessClassForExtraChecks(
-                                        pContext,
-                                        pArgMT,
-                                        thArg.GetAssembly(),
-                                        accessCheckOptions,
-                                        checkTargetTransparency);
-        if (!canAcesssElement)
-        {
-            return FALSE;
-        }
-    }
-
-    return TRUE;
-}
-
-//******************************************************************************
-// Can the type be accessed?
-//
-// "ForExtraChecks" means that we only do extra checks (security and transparency)
-// instead of the usual loader visibility checks. Post V2, we can enable all checks.
-
-BOOL ClassLoader::CanAccessClassForExtraChecks( // True if access is legal, false otherwise.
-    AccessCheckContext* pContext,
-    MethodTable*        pTargetClass,           // The desired target class.
-    Assembly*           pTargetAssembly,        // Assembly containing that class.
-    const AccessCheckOptions & accessCheckOptions,
-    BOOL                checkTargetTypeTransparency)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-        PRECONDITION(CheckPointer(pContext));
-    }
-    CONTRACTL_END;
-
-    // ------------- Old comments begins ------------
-    // Critical callers do not need the extra checks
-    // TODO: can we enable full access checks now?
-    // ------------- Old comments ends   ------------
-
-    // We shouldn't bypass accessibility check on member signature for FT/Critical callers
-
-    return CanAccessClass(pContext,
-                          pTargetClass,
-                          pTargetAssembly,
-                          accessCheckOptions,
-                          checkTargetTypeTransparency);
-}
 
 //******************************************************************************
 // This is the helper function for the corresponding CanAccess()
@@ -6105,9 +5611,7 @@ BOOL ClassLoader::CheckAccessMember(                // TRUE if access is allowed
     MethodDesc*             pOptionalTargetMethod,  // The target method; NULL if the target is a not a method or
                                                     // there is no need to check the method's instantiation.
     FieldDesc*              pOptionalTargetField,   // target field, NULL if there is no Target field
-    const AccessCheckOptions & accessCheckOptions,
-    BOOL                    checkTargetMethodTransparency,
-    BOOL                    checkTargetTypeTransparency
+    const AccessCheckOptions & accessCheckOptions
     )             
 {
     CONTRACTL
@@ -6126,17 +5630,13 @@ BOOL ClassLoader::CheckAccessMember(                // TRUE if access is allowed
     if (!CanAccessClass(pContext,
                         pTargetMT,
                         pTargetAssembly,
-                        accessCheckOptions,
-                        checkTargetTypeTransparency))
+                        accessCheckOptions))
     {
         return FALSE;
     }
     
     // If we are trying to access a generic method, we have to ensure its instantiation is accessible.
     // Note that we need to perform transparency checks on the instantiation even if we have
-    // checkTargetMethodTransparency set to false, since generic type parameters by design do not effect
-    // the transparency of the generic method that is closing over them.  This means standard transparency
-    // checks between caller and closed callee may succeed even if the callee's closure includes a critical type.
     if (!CanAccessMethodInstantiation(
             pContext, 
             pOptionalTargetMethod, 
@@ -6151,23 +5651,6 @@ BOOL ClassLoader::CheckAccessMember(                // TRUE if access is allowed
     // Perform transparency checks
     // We don't need to do transparency check against pTargetMT here because
     // it was already done in CanAccessClass above.
-
-    if (accessCheckOptions.TransparencyCheckNeeded() &&
-        ((checkTargetMethodTransparency && pOptionalTargetMethod) ||
-         pOptionalTargetField))
-    {
-        if (!CheckTransparentAccessToCriticalCode(
-                pContext,
-                dwMemberAccess,
-                pTargetMT,
-                pOptionalTargetMethod, 
-                pOptionalTargetField, 
-                NULL,
-                accessCheckOptions))
-        {
-            return FALSE;
-        }
-    }
 
     if (IsMdPublic(dwMemberAccess))
     {
@@ -6336,19 +5819,35 @@ BOOL ClassLoader::CanAccessFamily(
     _ASSERTE(pCurrentClass);
     _ASSERTE(pTargetClass);
 
+    BOOL bIsInterface = pTargetClass->IsInterface();
+
     //Look to see if Current is a child of the Target.
     while (pCurrentClass) {
-        MethodTable *pCurInstance = pCurrentClass;
-
-        while (pCurInstance) {
-            //This is correct.  csc is incredibly lax about generics.  Essentially if you are a subclass of
-            //any type of generic it lets you access it.  Since the standard is totally unclear, mirror that
-            //behavior here.
-            if (pCurInstance->HasSameTypeDefAs(pTargetClass)) {
-                return TRUE;
+        if (bIsInterface)
+        {
+            // Calling a protected interface member
+            MethodTable::InterfaceMapIterator it = pCurrentClass->IterateInterfaceMap();
+            while (it.Next())
+            {
+                // We only loosely check if they are of the same generic type
+                if (it.GetInterface()->HasSameTypeDefAs(pTargetClass))
+                    return TRUE;
             }
+        }
+        else
+        {
+            MethodTable *pCurInstance = pCurrentClass;
 
-            pCurInstance = pCurInstance->GetParentMethodTable();
+            while (pCurInstance) {
+                //This is correct.  csc is incredibly lax about generics.  Essentially if you are a subclass of
+                //any type of generic it lets you access it.  Since the standard is totally unclear, mirror that
+                //behavior here.
+                if (pCurInstance->HasSameTypeDefAs(pTargetClass)) {
+                    return TRUE;
+                }
+
+                pCurInstance = pCurInstance->GetParentMethodTable();
+            }
         }
 
         ///Looking at 8.5.3, it looks like a protected member of a nested class in a parent type is also

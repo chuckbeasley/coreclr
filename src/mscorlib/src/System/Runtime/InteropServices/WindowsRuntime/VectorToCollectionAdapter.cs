@@ -9,9 +9,9 @@ using System.Security;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
+using Internal.Runtime.CompilerServices;
 
 namespace System.Runtime.InteropServices.WindowsRuntime
 {
@@ -27,18 +27,17 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     {
         private VectorToCollectionAdapter()
         {
-            Debug.Assert(false, "This class is never instantiated");
+            Debug.Fail("This class is never instantiated");
         }
 
         // int Count { get }
-        [Pure]
         internal int Count<T>()
         {
-            IVector<T> _this = JitHelpers.UnsafeCast<IVector<T>>(this);
+            IVector<T> _this = Unsafe.As<IVector<T>>(this);
             uint size = _this.Size;
             if (((uint)Int32.MaxValue) < size)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CollectionBackingListTooLarge"));
+                throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
             }
 
             return (int)size;
@@ -53,21 +52,21 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         // void Add(T item)
         internal void Add<T>(T item)
         {
-            IVector<T> _this = JitHelpers.UnsafeCast<IVector<T>>(this);
+            IVector<T> _this = Unsafe.As<IVector<T>>(this);
             _this.Append(item);
         }
 
         // void Clear()
         internal void Clear<T>()
         {
-            IVector<T> _this = JitHelpers.UnsafeCast<IVector<T>>(this);
+            IVector<T> _this = Unsafe.As<IVector<T>>(this);
             _this.Clear();
         }
 
         // bool Contains(T item)
         internal bool Contains<T>(T item)
         {
-            IVector<T> _this = JitHelpers.UnsafeCast<IVector<T>>(this);
+            IVector<T> _this = Unsafe.As<IVector<T>>(this);
 
             uint index;
             return _this.IndexOf(item, out index);
@@ -83,14 +82,13 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 throw new ArgumentOutOfRangeException(nameof(arrayIndex));
 
             if (array.Length <= arrayIndex && Count<T>() > 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_IndexOutOfArrayBounds"));
+                throw new ArgumentException(SR.Argument_IndexOutOfArrayBounds);
 
             if (array.Length - arrayIndex < Count<T>())
-                throw new ArgumentException(Environment.GetResourceString("Argument_InsufficientSpaceToCopyCollection"));
+                throw new ArgumentException(SR.Argument_InsufficientSpaceToCopyCollection);
 
-            Contract.EndContractBlock();
 
-            IVector<T> _this = JitHelpers.UnsafeCast<IVector<T>>(this);
+            IVector<T> _this = Unsafe.As<IVector<T>>(this);
             int count = Count<T>();
             for (int i = 0; i < count; i++)
             {
@@ -101,7 +99,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         // bool Remove(T item)
         internal bool Remove<T>(T item)
         {
-            IVector<T> _this = JitHelpers.UnsafeCast<IVector<T>>(this);
+            IVector<T> _this = Unsafe.As<IVector<T>>(this);
 
             uint index;
             bool exists = _this.IndexOf(item, out index);
@@ -111,7 +109,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
             if (((uint)Int32.MaxValue) < index)
             {
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_CollectionBackingListTooLarge"));
+                throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
             }
 
             VectorToListAdapter.RemoveAtHelper<T>(_this, index);

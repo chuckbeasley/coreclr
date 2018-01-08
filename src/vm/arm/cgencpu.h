@@ -57,7 +57,7 @@ EXTERN_C void checkStack(void);
 #define JUMP_ALLOCATE_SIZE                      8   // # bytes to allocate for a jump instruction
 #define BACK_TO_BACK_JUMP_ALLOCATE_SIZE         8   // # bytes to allocate for a back to back jump instruction
 
-//#define HAS_COMPACT_ENTRYPOINTS                 1
+#define HAS_COMPACT_ENTRYPOINTS                 1
 
 #define HAS_NDIRECT_IMPORT_PRECODE              1
 
@@ -83,12 +83,15 @@ EXTERN_C void setFPReturn(int fpSize, INT64 retVal);
 #define CALLDESCR_ARGREGS                       1   // CallDescrWorker has ArgumentRegister parameter
 #define CALLDESCR_FPARGREGS                     1   // CallDescrWorker has FloatArgumentRegisters parameter
 
-// Max size of optimized TLS helpers
-#define TLS_GETTER_MAX_SIZE 0x10
-
 // Given a return address retrieved during stackwalk,
 // this is the offset by which it should be decremented to arrive at the callsite.
 #define STACKWALK_CONTROLPC_ADJUST_OFFSET 2
+
+// Max offset for unconditional thumb branch
+#define MAX_OFFSET_UNCONDITIONAL_BRANCH_THUMB 2048
+
+// Offset of pc register
+#define PC_REG_RELATIVE_OFFSET 4
 
 //=======================================================================
 // IMPORTANT: This value is used to figure out how much to allocate
@@ -234,6 +237,53 @@ inline void ClearITState(T_CONTEXT *context) {
 #ifdef FEATURE_COMINTEROP
 void emitCOMStubCall (ComCallMethodDesc *pCOMMethod, PCODE target);
 #endif // FEATURE_COMINTEROP
+
+//------------------------------------------------------------------------
+inline void emitUnconditionalBranchThumb(LPBYTE pBuffer, int16_t offset)
+{
+    LIMITED_METHOD_CONTRACT;
+
+    uint16_t *pInstr = (uint16_t *) pBuffer;
+
+    // offset from -2KB to +2KB
+    _ASSERTE (offset >= - MAX_OFFSET_UNCONDITIONAL_BRANCH_THUMB && offset < MAX_OFFSET_UNCONDITIONAL_BRANCH_THUMB);
+
+    if (offset >= 0)
+    {
+        offset = offset >> 1;
+    }
+    else
+    {
+        offset = ((MAX_OFFSET_UNCONDITIONAL_BRANCH_THUMB + offset) >> 1) | 0x400;
+    }
+
+    *pInstr = 0xE000 | offset;
+}
+
+//------------------------------------------------------------------------
+inline int16_t decodeUnconditionalBranchThumb(LPBYTE pBuffer)
+{
+    LIMITED_METHOD_CONTRACT;
+
+    uint16_t *pInstr = (uint16_t *) pBuffer;
+
+    int16_t offset = (~0xE000) & (*pInstr);
+
+    if ((offset & 0x400) == 0)
+    {
+        offset = offset << 1;
+    }
+    else
+    {
+        offset = (~0x400) & offset;
+        offset = (offset << 1) - MAX_OFFSET_UNCONDITIONAL_BRANCH_THUMB;
+    }
+
+    // offset from -2KB to +2KB
+    _ASSERTE (offset >= - MAX_OFFSET_UNCONDITIONAL_BRANCH_THUMB && offset < MAX_OFFSET_UNCONDITIONAL_BRANCH_THUMB);
+
+    return offset;
+}
 
 //------------------------------------------------------------------------
 inline void emitJump(LPBYTE pBuffer, LPVOID target)
@@ -499,7 +549,7 @@ public:
         ThumbEmitJumpRegister(thumbRegLr);
     }
 
-    void ThumbEmitGetThread(TLSACCESSMODE mode, ThumbReg dest);
+    void ThumbEmitGetThread(ThumbReg dest);
 
     void ThumbEmitNop()
     {
@@ -513,7 +563,11 @@ public:
         // a reasonable breakpoint substitute (it's what DebugBreak uses). Bkpt #0, on the other hand, always
         // seems to flow directly to the kernel debugger (even if we ignore it there it doesn't seem to be
         // picked up by the user mode debugger).
+#ifdef __linux__
+        Emit16(0xde01);
+#else
         Emit16(0xdefe);
+#endif
     }
 
     void ThumbEmitMovConstant(ThumbReg dest, int constant)
@@ -935,6 +989,7 @@ struct DECLSPEC_ALIGN(4) UMEntryThunkCode
     TADDR       m_pvSecretParam;
 
     void Encode(BYTE* pTargetCode, void* pvSecretParam);
+    void Poison();
 
     LPCBYTE GetEntryPoint() const
     {
@@ -998,19 +1053,15 @@ inline BOOL ClrFlushInstructionCache(LPCVOID pCodeAddr, size_t sizeOfCode)
 #endif
 }
 
-#ifndef FEATURE_IMPLICIT_TLS
 //
 // JIT HELPER ALIASING FOR PORTABILITY.
 //
 // Create alias for optimized implementations of helpers provided on this platform
 //
-// optimized static helpers 
-#define JIT_GetSharedGCStaticBase           JIT_GetSharedGCStaticBase_InlineGetAppDomain
-#define JIT_GetSharedNonGCStaticBase        JIT_GetSharedNonGCStaticBase_InlineGetAppDomain
-#define JIT_GetSharedGCStaticBaseNoCtor     JIT_GetSharedGCStaticBaseNoCtor_InlineGetAppDomain
-#define JIT_GetSharedNonGCStaticBaseNoCtor  JIT_GetSharedNonGCStaticBaseNoCtor_InlineGetAppDomain
-
-#endif
+#define JIT_GetSharedGCStaticBase           JIT_GetSharedGCStaticBase_SingleAppDomain
+#define JIT_GetSharedNonGCStaticBase        JIT_GetSharedNonGCStaticBase_SingleAppDomain
+#define JIT_GetSharedGCStaticBaseNoCtor     JIT_GetSharedGCStaticBaseNoCtor_SingleAppDomain
+#define JIT_GetSharedNonGCStaticBaseNoCtor  JIT_GetSharedNonGCStaticBaseNoCtor_SingleAppDomain
 
 #ifndef FEATURE_PAL
 #define JIT_Stelem_Ref                      JIT_Stelem_Ref

@@ -93,10 +93,10 @@ elseif(PAL_CMAKE_PLATFORM_ARCH_I386)
   set(PAL_ARCH_SOURCES_DIR i386)
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL Linux AND NOT CLR_CMAKE_PLATFORM_ALPINE_LINUX)
+if(PAL_CMAKE_PLATFORM_ARCH_AMD64 AND CMAKE_SYSTEM_NAME STREQUAL Linux AND NOT CLR_CMAKE_PLATFORM_ALPINE_LINUX)
   # Currently the _xstate is not available on Alpine Linux
   add_definitions(-DXSTATE_SUPPORTED)
-endif(CMAKE_SYSTEM_NAME STREQUAL Linux AND NOT CLR_CMAKE_PLATFORM_ALPINE_LINUX)
+endif(PAL_CMAKE_PLATFORM_ARCH_AMD64 AND CMAKE_SYSTEM_NAME STREQUAL Linux AND NOT CLR_CMAKE_PLATFORM_ALPINE_LINUX)
 
 if(CLR_CMAKE_PLATFORM_ALPINE_LINUX)
   # Setting RLIMIT_NOFILE breaks debugging of coreclr on Alpine Linux for some reason
@@ -147,8 +147,8 @@ set(SOURCES
   debug/debug.cpp
   exception/seh.cpp
   exception/signal.cpp
+  exception/remote-unwind.cpp
   file/directory.cpp
-  file/disk.cpp
   file/file.cpp
   file/filetime.cpp
   file/find.cpp
@@ -168,19 +168,20 @@ set(SOURCES
   map/virtual.cpp
   memory/heap.cpp
   memory/local.cpp
+  misc/cgroup.cpp
   misc/dbgmsg.cpp
   misc/environ.cpp
   misc/error.cpp
   misc/errorstrings.cpp
   misc/fmtmessage.cpp
-  misc/identity.cpp
+  misc/jitsupport.cpp
   misc/miscpalapi.cpp
   misc/msgbox.cpp
   misc/strutil.cpp
   misc/sysinfo.cpp
   misc/time.cpp
   misc/utils.cpp
-  misc/version.cpp
+  numa/numa.cpp
   objmgr/palobjbase.cpp
   objmgr/shmobject.cpp
   objmgr/shmobjectmanager.cpp
@@ -238,10 +239,14 @@ add_library(coreclrpal
   ${PLATFORM_SOURCES}
 )
 
-add_library(tracepointprovider
-  STATIC
-  misc/tracepointprovider.cpp
-)
+# This builds in functionality to load LTTng tracepoints at runtime
+# Needed when using LTTng to support event tracing on Linux
+if(CLR_CMAKE_PLATFORM_LINUX)
+    add_library(tracepointprovider
+      STATIC
+      misc/tracepointprovider.cpp
+    )
+endif(CLR_CMAKE_PLATFORM_LINUX)
 
 if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
   find_library(COREFOUNDATION CoreFoundation)
@@ -375,7 +380,7 @@ endif(CMAKE_SYSTEM_NAME STREQUAL NetBSD)
 add_subdirectory(examples)
 
 if(FEATURE_EVENT_TRACE)
-    add_subdirectory($ENV{__IntermediatesDir}/Generated/eventprovider ${CMAKE_CURRENT_BINARY_DIR}/eventprovider)
+  add_subdirectory(${GENERATED_EVENTING_DIR}/eventprovider ${CMAKE_CURRENT_BINARY_DIR}/eventprovider)
 endif(FEATURE_EVENT_TRACE)
 
 # Install the static PAL library for VS

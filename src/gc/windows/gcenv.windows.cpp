@@ -11,6 +11,8 @@
 #include "env/gcenv.structs.h"
 #include "env/gcenv.base.h"
 #include "env/gcenv.os.h"
+#include "env/gcenv.windows.inl"
+#include "env/volatile.h"
 
 GCSystemInfo g_SystemInfo;
 
@@ -138,6 +140,8 @@ bool GCToOSInterface::Initialize()
     g_SystemInfo.dwNumberOfProcessors = systemInfo.dwNumberOfProcessors;
     g_SystemInfo.dwPageSize = systemInfo.dwPageSize;
     g_SystemInfo.dwAllocationGranularity = systemInfo.dwAllocationGranularity;
+
+    assert(systemInfo.dwPageSize == 0x1000);
 
     return true;
 }
@@ -383,6 +387,48 @@ size_t GCToOSInterface::GetLargestOnDieCacheSize(bool trueSize)
     return 0;
 }
 
+// Sets the calling thread's affinity to only run on the processor specified
+// in the GCThreadAffinity structure.
+// Parameters:
+//  affinity - The requested affinity for the calling thread. At most one processor
+//             can be provided.
+// Return:
+//  true if setting the affinity was successful, false otherwise.
+bool GCToOSInterface::SetThreadAffinity(GCThreadAffinity* affinity)
+{
+    assert(affinity != nullptr);
+    if (affinity->Group != GCThreadAffinity::None)
+    {
+        assert(affinity->Processor != GCThreadAffinity::None);
+
+        GROUP_AFFINITY ga;
+        ga.Group = (WORD)affinity->Group;
+        ga.Reserved[0] = 0; // reserve must be filled with zero
+        ga.Reserved[1] = 0; // otherwise call may fail
+        ga.Reserved[2] = 0;
+        ga.Mask = (size_t)1 << affinity->Processor;
+        return !!SetThreadGroupAffinity(GetCurrentThread(), &ga, nullptr);
+    }
+    else if (affinity->Processor != GCThreadAffinity::None)
+    {
+        return !!SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1 << affinity->Processor);
+    }
+
+    // Given affinity must specify at least one processor to use.
+    return false;
+}
+
+// Boosts the calling thread's thread priority to a level higher than the default
+// for new threads.
+// Parameters:
+//  None.
+// Return:
+//  true if the priority boost was successful, false otherwise.
+bool GCToOSInterface::BoostThreadPriority()
+{
+    return !!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+}
+
 // Get affinity mask of the current process
 // Parameters:
 //  processMask - affinity mask for the specified process
@@ -541,63 +587,13 @@ static DWORD GCThreadStub(void* param)
     return 0;
 }
 
-
-// Create a new thread for GC use
-// Parameters:
-//  function - the function to be executed by the thread
-//  param    - parameters of the thread
-//  affinity - processor affinity of the thread
+// Gets the total number of processors on the machine, not taking
+// into account current process affinity.
 // Return:
-//  true if it has succeeded, false if it has failed
-bool GCToOSInterface::CreateThread(GCThreadFunction function, void* param, GCThreadAffinity* affinity)
+//  Number of processors on the machine
+uint32_t GCToOSInterface::GetTotalProcessorCount()
 {
-    uint32_t thread_id;
-
-    std::unique_ptr<GCThreadStubParam> stubParam(new (std::nothrow) GCThreadStubParam());
-    if (!stubParam)
-    {
-        return false;
-    }
-
-    stubParam->GCThreadFunction = function;
-    stubParam->GCThreadParam = param;
-
-    HANDLE gc_thread = ::CreateThread(
-        nullptr, 
-        512 * 1024 /* Thread::StackSize_Medium */, 
-        (LPTHREAD_START_ROUTINE)GCThreadStub, 
-        stubParam.get(), 
-        CREATE_SUSPENDED | STACK_SIZE_PARAM_IS_A_RESERVATION, 
-        (DWORD*)&thread_id);
-
-    if (!gc_thread)
-    {
-        return false;
-    }
-
-    stubParam.release();
-    bool result = !!::SetThreadPriority(gc_thread, /* THREAD_PRIORITY_ABOVE_NORMAL );*/ THREAD_PRIORITY_HIGHEST );
-    assert(result && "failed to set thread priority");  
-
-    if (affinity->Group != GCThreadAffinity::None)
-    {
-        assert(affinity->Processor != GCThreadAffinity::None);
-        GROUP_AFFINITY ga;
-        ga.Group = (WORD)affinity->Group;
-        ga.Reserved[0] = 0; // reserve must be filled with zero
-        ga.Reserved[1] = 0; // otherwise call may fail
-        ga.Reserved[2] = 0;
-        ga.Mask = (size_t)1 << affinity->Processor;
-
-        bool result = !!::SetThreadGroupAffinity(gc_thread, &ga, nullptr);
-        assert(result && "failed to set thread affinity");
-    }
-    else if (affinity->Processor != GCThreadAffinity::None)
-    {
-        ::SetThreadAffinityMask(gc_thread, (DWORD_PTR)1 << affinity->Processor);
-    }
-
-    return true;
+    return g_SystemInfo.dwNumberOfProcessors;
 }
 
 // Initialize the critical section
@@ -623,3 +619,145 @@ void CLRCriticalSection::Leave()
 {
     ::LeaveCriticalSection(&m_cs);
 }
+
+// WindowsEvent is an implementation of GCEvent that forwards
+// directly to Win32 APIs.
+class GCEvent::Impl
+{
+private:
+    HANDLE m_hEvent;
+
+public:
+    Impl() : m_hEvent(INVALID_HANDLE_VALUE) {}
+
+    bool IsValid() const
+    {
+        return m_hEvent != INVALID_HANDLE_VALUE;
+    }
+
+    void Set()
+    {
+        assert(IsValid());
+        BOOL result = SetEvent(m_hEvent);
+        assert(result && "SetEvent failed");
+    }
+
+    void Reset()
+    {
+        assert(IsValid());
+        BOOL result = ResetEvent(m_hEvent);
+        assert(result && "ResetEvent failed");
+    }
+
+    uint32_t Wait(uint32_t timeout, bool alertable)
+    {
+        UNREFERENCED_PARAMETER(alertable);
+        assert(IsValid());
+
+        return WaitForSingleObject(m_hEvent, timeout);
+    }
+
+    void CloseEvent()
+    {
+        assert(IsValid());
+        BOOL result = CloseHandle(m_hEvent);
+        assert(result && "CloseHandle failed");
+        m_hEvent = INVALID_HANDLE_VALUE;
+    }
+
+    bool CreateAutoEvent(bool initialState)
+    {
+        m_hEvent = CreateEvent(nullptr, false, initialState, nullptr);
+        return IsValid();
+    }
+
+    bool CreateManualEvent(bool initialState)
+    {
+        m_hEvent = CreateEvent(nullptr, true, initialState, nullptr);
+        return IsValid();
+    }
+};
+
+GCEvent::GCEvent()
+  : m_impl(nullptr)
+{
+}
+
+void GCEvent::CloseEvent()
+{
+    assert(m_impl != nullptr);
+    m_impl->CloseEvent();
+}
+
+void GCEvent::Set()
+{
+    assert(m_impl != nullptr);
+    m_impl->Set();
+}
+
+void GCEvent::Reset()
+{
+    assert(m_impl != nullptr);
+    m_impl->Reset();
+}
+
+uint32_t GCEvent::Wait(uint32_t timeout, bool alertable)
+{
+    assert(m_impl != nullptr);
+    return m_impl->Wait(timeout, alertable);
+}
+
+bool GCEvent::CreateAutoEventNoThrow(bool initialState)
+{
+    // [DESKTOP TODO] The difference between events and OS events is
+    // whether or not the hosting API is made aware of them. When (if)
+    // we implement hosting support for Local GC, we will need to be
+    // aware of the host here.
+    return CreateOSAutoEventNoThrow(initialState);
+}
+
+bool GCEvent::CreateManualEventNoThrow(bool initialState)
+{
+    // [DESKTOP TODO] The difference between events and OS events is
+    // whether or not the hosting API is made aware of them. When (if)
+    // we implement hosting support for Local GC, we will need to be
+    // aware of the host here.
+    return CreateOSManualEventNoThrow(initialState);
+}
+
+bool GCEvent::CreateOSAutoEventNoThrow(bool initialState)
+{
+    assert(m_impl == nullptr);
+    std::unique_ptr<GCEvent::Impl> event(new (std::nothrow) GCEvent::Impl());
+    if (!event)
+    {
+        return false;
+    }
+
+    if (!event->CreateAutoEvent(initialState))
+    {
+        return false;
+    }
+
+    m_impl = event.release();
+    return true;
+}
+
+bool GCEvent::CreateOSManualEventNoThrow(bool initialState)
+{
+    assert(m_impl == nullptr);
+    std::unique_ptr<GCEvent::Impl> event(new (std::nothrow) GCEvent::Impl());
+    if (!event)
+    {
+        return false;
+    }
+
+    if (!event->CreateManualEvent(initialState))
+    {
+        return false;
+    }
+
+    m_impl = event.release();
+    return true;
+}
+

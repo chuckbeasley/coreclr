@@ -4,7 +4,6 @@
 
 using System;
 using System.Diagnostics;
-using System.Diagnostics.Contracts;
 using System.IO;
 using System.Reflection;
 using System.Security;
@@ -21,7 +20,6 @@ namespace System
     {
         #region QCalls
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void _ReleaseTypeNameParser(IntPtr pTypeNameParser);
         #endregion
 
@@ -42,23 +40,18 @@ namespace System
     {
         #region QCalls
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void _CreateTypeNameParser(string typeName, ObjectHandleOnStack retHandle, bool throwOnError);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void _GetNames(SafeTypeNameParserHandle pTypeNameParser, ObjectHandleOnStack retArray);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void _GetTypeArguments(SafeTypeNameParserHandle pTypeNameParser, ObjectHandleOnStack retArray);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void _GetModifiers(SafeTypeNameParserHandle pTypeNameParser, ObjectHandleOnStack retArray);
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        [SuppressUnmanagedCodeSecurity]
         private static extern void _GetAssemblyName(SafeTypeNameParserHandle pTypeNameParser, StringHandleOnStack retString);
         #endregion
 
@@ -74,8 +67,7 @@ namespace System
             if (typeName == null)
                 throw new ArgumentNullException(nameof(typeName));
             if (typeName.Length > 0 && typeName[0] == '\0')
-                throw new ArgumentException(Environment.GetResourceString("Format_StringZeroLength"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Format_StringZeroLength);
 
             Type ret = null;
 
@@ -143,7 +135,7 @@ namespace System
             {
                 // This can only happen if the type name is an empty string or if the first char is '\0'
                 if (throwOnError)
-                    throw new TypeLoadException(Environment.GetResourceString("Arg_TypeLoadNullStr"));
+                    throw new TypeLoadException(SR.Arg_TypeLoadNullStr);
 
                 return null;
             }
@@ -192,7 +184,7 @@ namespace System
 
         private static Assembly ResolveAssembly(string asmName, Func<AssemblyName, Assembly> assemblyResolver, bool throwOnError, ref StackCrawlMark stackMark)
         {
-            Contract.Requires(asmName != null && asmName.Length > 0);
+            Debug.Assert(asmName != null && asmName.Length > 0);
 
             Assembly assembly = null;
 
@@ -200,7 +192,7 @@ namespace System
             {
                 if (throwOnError)
                 {
-                    assembly = RuntimeAssembly.InternalLoad(asmName, null, ref stackMark, false /*forIntrospection*/);
+                    assembly = RuntimeAssembly.InternalLoad(asmName, ref stackMark);
                 }
                 else
                 {
@@ -208,7 +200,7 @@ namespace System
                     // Other exceptions like BadImangeFormatException should still fly.
                     try
                     {
-                        assembly = RuntimeAssembly.InternalLoad(asmName, null, ref stackMark, false /*forIntrospection*/);
+                        assembly = RuntimeAssembly.InternalLoad(asmName, ref stackMark);
                     }
                     catch (FileNotFoundException)
                     {
@@ -221,7 +213,7 @@ namespace System
                 assembly = assemblyResolver(new AssemblyName(asmName));
                 if (assembly == null && throwOnError)
                 {
-                    throw new FileNotFoundException(Environment.GetResourceString("FileNotFound_ResolveAssembly", asmName));
+                    throw new FileNotFoundException(SR.Format(SR.FileNotFound_ResolveAssembly, asmName));
                 }
             }
 
@@ -230,7 +222,7 @@ namespace System
 
         private static Type ResolveType(Assembly assembly, string[] names, Func<Assembly, string, bool, Type> typeResolver, bool throwOnError, bool ignoreCase, ref StackCrawlMark stackMark)
         {
-            Contract.Requires(names != null && names.Length > 0);
+            Debug.Assert(names != null && names.Length > 0);
 
             Type type = null;
 
@@ -245,8 +237,8 @@ namespace System
                 if (type == null && throwOnError)
                 {
                     string errorString = assembly == null ?
-                        Environment.GetResourceString("TypeLoad_ResolveType", OuterMostTypeName) :
-                        Environment.GetResourceString("TypeLoad_ResolveTypeFromAssembly", OuterMostTypeName, assembly.FullName);
+                        SR.Format(SR.TypeLoad_ResolveType, OuterMostTypeName):
+                        SR.Format(SR.TypeLoad_ResolveTypeFromAssembly, OuterMostTypeName, assembly.FullName);
 
                     throw new TypeLoadException(errorString);
                 }
@@ -277,7 +269,7 @@ namespace System
                     if (type == null)
                     {
                         if (throwOnError)
-                            throw new TypeLoadException(Environment.GetResourceString("TypeLoad_ResolveNestedType", names[i], names[i - 1]));
+                            throw new TypeLoadException(SR.Format(SR.TypeLoad_ResolveNestedType, names[i], names[i - 1]));
                         else
                             break;
                     }

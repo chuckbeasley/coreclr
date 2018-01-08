@@ -1526,30 +1526,28 @@ BOOL RunWatson(
         return false;
     }
 
+    {
+        BOOL ret = WszCreateProcess(watsonAppName,
+                                    watsonCommandLine,
+                                    NULL,
+                                    NULL,
+                                    TRUE,
+                                    NULL,
+                                    NULL,
+                                    NULL,
+                                    &startupInfo,
+                                    &processInformation);
+
+        if (FALSE == ret)
         {
-            BOOL ret = WszCreateProcess(watsonAppName,
-                                        watsonCommandLine,
-                                        NULL,
-                                        NULL,
-                                        TRUE,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        &startupInfo,
-                                        &processInformation);
-
-            if (FALSE == ret)
-            {
-                //
-                // Watson failed to start up.
-                //
-                // This can happen if e.g. Watson wasn't installed on the machine.
-                //
-                 return  E_FAIL;
-                 
-            }
-
+            //
+            // Watson failed to start up.
+            //
+            // This can happen if e.g. Watson wasn't installed on the machine.
+            //
+            return FALSE;
         }
+    }
 
     
 
@@ -2468,7 +2466,7 @@ FaultReportResult DoFaultReportWorker(      // Was Watson attempted, successful?
             {   // Look for final '\'
                 pName = wcsrchr(buf, W('\\'));
                 // If found, skip it; if not, point to full name.
-                pName = pName ? pName+1 : buf;
+                pName = pName ? pName+1 : (LPCWSTR)buf;
             }
         }
 

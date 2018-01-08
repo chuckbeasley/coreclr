@@ -143,6 +143,25 @@ PALIMPORT double __cdecl PAL_acos(double x)
 
 /*++
 Function:
+    acosh
+
+See MSDN.
+--*/
+PALIMPORT double __cdecl PAL_acosh(double x)
+{
+    double ret;
+    PERF_ENTRY(acosh);
+    ENTRY("acosh (x=%f)\n", x);
+
+    ret = acosh(x);
+
+    LOGEXIT("acosh returns double %f\n", ret);
+    PERF_EXIT(acosh);
+    return ret;
+}
+
+/*++
+Function:
     asin
 
 See MSDN.
@@ -168,6 +187,25 @@ PALIMPORT double __cdecl PAL_asin(double x)
 
     LOGEXIT("asin returns double %f\n", ret);
     PERF_EXIT(asin);
+    return ret;
+}
+
+/*++
+Function:
+    asinh
+
+See MSDN.
+--*/
+PALIMPORT double __cdecl PAL_asinh(double x)
+{
+    double ret;
+    PERF_ENTRY(asinh);
+    ENTRY("asinh (x=%f)\n", x);
+
+    ret = asinh(x);
+
+    LOGEXIT("asinh returns double %f\n", ret);
+    PERF_EXIT(asinh);
     return ret;
 }
 
@@ -343,7 +381,7 @@ PALIMPORT double __cdecl PAL_pow(double x, double y)
         }
         else if (x == -1.0)
         {
-            ret = PAL_NAN_DBL;    // NaN
+            ret = 1.0;
         }
         else if ((x > -1.0) && (x < 1.0))
         {
@@ -362,7 +400,7 @@ PALIMPORT double __cdecl PAL_pow(double x, double y)
         }
         else if (x == -1.0)
         {
-            ret = PAL_NAN_DBL;    // NaN
+            ret = 1.0;
         }
         else if ((x > -1.0) && (x < 1.0))
         {
@@ -384,17 +422,7 @@ PALIMPORT double __cdecl PAL_pow(double x, double y)
     else
 #endif  // !HAVE_COMPATIBLE_POW
 
-    if ((y == 0.0) && isnan(x))
-    {
-        // Windows returns NaN for pow(NaN, 0), but POSIX specifies
-        // a return value of 1 for that case.  We need to return
-        // the same result as Windows.
-        ret = PAL_NAN_DBL;
-    }
-    else
-    {
-        ret = pow(x, y);
-    }
+    ret = pow(x, y);
 
 #if !HAVE_VALID_NEGATIVE_INF_POW
     if ((ret == PAL_POSINF_DBL) && (x < 0) && isfinite(x) && (ceil(y / 2) != floor(y / 2)))
@@ -525,6 +553,25 @@ PALIMPORT float __cdecl PAL_acosf(float x)
 
 /*++
 Function:
+    acoshf
+
+See MSDN.
+--*/
+PALIMPORT float __cdecl PAL_acoshf(float x)
+{
+    float ret;
+    PERF_ENTRY(acoshf);
+    ENTRY("acoshf (x=%f)\n", x);
+
+    ret = acoshf(x);
+
+    LOGEXIT("acoshf returns float %f\n", ret);
+    PERF_EXIT(acoshf);
+    return ret;
+}
+
+/*++
+Function:
     asinf
 
 See MSDN.
@@ -552,6 +599,26 @@ PALIMPORT float __cdecl PAL_asinf(float x)
     PERF_EXIT(asinf);
     return ret;
 }
+
+/*++
+Function:
+    asinhf
+
+See MSDN.
+--*/
+PALIMPORT float __cdecl PAL_asinhf(float x)
+{
+    float ret;
+    PERF_ENTRY(asinhf);
+    ENTRY("asinhf (x=%f)\n", x);
+
+    ret = asinhf(x);
+
+    LOGEXIT("asinhf returns float %f\n", ret);
+    PERF_EXIT(asinhf);
+    return ret;
+}
+
 
 /*++
 Function:
@@ -706,7 +773,7 @@ PALIMPORT float __cdecl PAL_powf(float x, float y)
         }
         else if (x == -1.0f)
         {
-            ret = PAL_NAN_FLT;    // NaN
+            ret = 1.0f;
         }
         else if ((x > -1.0f) && (x < 1.0f))
         {
@@ -725,7 +792,7 @@ PALIMPORT float __cdecl PAL_powf(float x, float y)
         }
         else if (x == -1.0f)
         {
-            ret = PAL_NAN_FLT;    // NaN
+            ret = 1.0f;
         }
         else if ((x > -1.0f) && (x < 1.0f))
         {
@@ -747,18 +814,8 @@ PALIMPORT float __cdecl PAL_powf(float x, float y)
     else
 #endif  // !HAVE_COMPATIBLE_POW
 
-    if ((y == 0.0f) && isnan(x))
-    {
-        // Windows returns NaN for powf(NaN, 0), but POSIX specifies
-        // a return value of 1 for that case.  We need to return
-        // the same result as Windows.
-        ret = PAL_NAN_FLT;
-    }
-    else
-    {
-        ret = powf(x, y);
-    }
-    
+    ret = powf(x, y);
+		
 #if !HAVE_VALID_NEGATIVE_INF_POW
     if ((ret == PAL_POSINF_FLT) && (x < 0) && isfinite(x) && (ceilf(y / 2) != floorf(y / 2)))
     {

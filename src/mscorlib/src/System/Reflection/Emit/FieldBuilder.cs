@@ -10,7 +10,6 @@ namespace System.Reflection.Emit
     using System;
     using CultureInfo = System.Globalization.CultureInfo;
     using System.Reflection;
-    using System.Diagnostics.Contracts;
 
     public sealed class FieldBuilder : FieldInfo
     {
@@ -31,17 +30,16 @@ namespace System.Reflection.Emit
                 throw new ArgumentNullException(nameof(fieldName));
 
             if (fieldName.Length == 0)
-                throw new ArgumentException(Environment.GetResourceString("Argument_EmptyName"), nameof(fieldName));
+                throw new ArgumentException(SR.Argument_EmptyName, nameof(fieldName));
 
             if (fieldName[0] == '\0')
-                throw new ArgumentException(Environment.GetResourceString("Argument_IllegalName"), nameof(fieldName));
+                throw new ArgumentException(SR.Argument_IllegalName, nameof(fieldName));
 
             if (type == null)
                 throw new ArgumentNullException(nameof(type));
 
             if (type == typeof(void))
-                throw new ArgumentException(Environment.GetResourceString("Argument_BadFieldType"));
-            Contract.EndContractBlock();
+                throw new ArgumentException(SR.Argument_BadFieldType);
 
             m_fieldName = fieldName;
             m_typeBuilder = typeBuilder;
@@ -121,7 +119,7 @@ namespace System.Reflection.Emit
             // a NotSupportedException for Save-only dynamic assemblies.
             // Otherwise, it could cause the .cctor to be executed.
 
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override void SetValue(Object obj, Object val, BindingFlags invokeAttr, Binder binder, CultureInfo culture)
@@ -130,12 +128,12 @@ namespace System.Reflection.Emit
             // a NotSupportedException for Save-only dynamic assemblies.
             // Otherwise, it could cause the .cctor to be executed.
 
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override RuntimeFieldHandle FieldHandle
         {
-            get { throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule")); }
+            get { throw new NotSupportedException(SR.NotSupported_DynamicModule); }
         }
 
         public override FieldAttributes Attributes
@@ -148,17 +146,17 @@ namespace System.Reflection.Emit
         #region ICustomAttributeProvider Implementation
         public override Object[] GetCustomAttributes(bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override Object[] GetCustomAttributes(Type attributeType, bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         public override bool IsDefined(Type attributeType, bool inherit)
         {
-            throw new NotSupportedException(Environment.GetResourceString("NotSupported_DynamicModule"));
+            throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
 
         #endregion
@@ -191,7 +189,6 @@ namespace System.Reflection.Emit
 
             if (binaryAttribute == null)
                 throw new ArgumentNullException(nameof(binaryAttribute));
-            Contract.EndContractBlock();
 
             ModuleBuilder module = m_typeBuilder.Module as ModuleBuilder;
 
@@ -205,7 +202,6 @@ namespace System.Reflection.Emit
         {
             if (customBuilder == null)
                 throw new ArgumentNullException(nameof(customBuilder));
-            Contract.EndContractBlock();
 
             m_typeBuilder.ThrowIfCreated();
 

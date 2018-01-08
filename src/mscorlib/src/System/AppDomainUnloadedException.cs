@@ -17,17 +17,15 @@ using System.Runtime.Serialization;
 namespace System
 {
     [Serializable]
+    [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
     internal class AppDomainUnloadedException : SystemException
     {
         public AppDomainUnloadedException()
-            : base(Environment.GetResourceString("Arg_AppDomainUnloadedException"))
+            : base(SR.Arg_AppDomainUnloadedException)
         {
-            SetErrorCode(__HResults.COR_E_APPDOMAINUNLOADED);
+            HResult = HResults.COR_E_APPDOMAINUNLOADED;
         }
 
-        //
-        //This constructor is required for serialization.
-        //
         protected AppDomainUnloadedException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }

@@ -6,7 +6,11 @@ include_directories("../inc")
 
 if (CLR_CMAKE_TARGET_ARCH_AMD64 OR (CLR_CMAKE_TARGET_ARCH_I386 AND NOT CLR_CMAKE_PLATFORM_UNIX))
   add_definitions(-DFEATURE_SIMD)
-  add_definitions(-DFEATURE_AVX_SUPPORT)
+  add_definitions(-DFEATURE_HW_INTRINSICS)
+endif ()
+
+if (CLR_CMAKE_TARGET_ARCH_ARM64)
+  add_definitions(-DFEATURE_SIMD)
 endif ()
 
 # JIT_BUILD disables certain PAL_TRY debugging features
@@ -100,14 +104,19 @@ set( JIT_AMD64_SOURCES
   simdcodegenxarch.cpp
   targetamd64.cpp
   unwindamd64.cpp
+  hwintrinsicxarch.cpp
+  hwintrinsiccodegenxarch.cpp
 )
 
 set( JIT_ARM_SOURCES
   ${JIT_ARM_LEGACY_SOURCES}
+  codegenarmarch.cpp
   codegenarm.cpp
   decomposelongs.cpp
   emitarm.cpp
+  lowerarmarch.cpp
   lowerarm.cpp
+  lsraarmarch.cpp
   lsraarm.cpp
   targetarm.cpp
   unwindarm.cpp
@@ -124,13 +133,19 @@ set( JIT_I386_SOURCES
   simdcodegenxarch.cpp
   targetx86.cpp
   unwindx86.cpp
+  hwintrinsicxarch.cpp
+  hwintrinsiccodegenxarch.cpp
 )
 
 set( JIT_ARM64_SOURCES
+  codegenarmarch.cpp
   codegenarm64.cpp
   emitarm64.cpp
+  lowerarmarch.cpp
   lowerarm64.cpp
+  lsraarmarch.cpp
   lsraarm64.cpp
+  simd.cpp
   targetarm64.cpp
   unwindarm.cpp
   unwindarm64.cpp
@@ -206,6 +221,35 @@ endif()
 
 add_custom_target(jit_exports DEPENDS ${JIT_EXPORTS_FILE})
 
+set(RYUJIT_LINK_LIBRARIES
+   utilcodestaticnohost
+   gcinfo
+)
+
+if(CLR_CMAKE_PLATFORM_UNIX)
+    list(APPEND RYUJIT_LINK_LIBRARIES
+       mscorrc_debug
+       coreclrpal
+       palrt
+    )
+else()
+    list(APPEND RYUJIT_LINK_LIBRARIES
+       ${STATIC_MT_CRT_LIB}
+       ${STATIC_MT_VCRT_LIB}
+       kernel32.lib
+       advapi32.lib
+       ole32.lib
+       oleaut32.lib
+       uuid.lib
+       user32.lib
+       version.lib
+       shlwapi.lib
+       bcrypt.lib
+       crypt32.lib
+       RuntimeObject.lib
+    )
+endif(CLR_CMAKE_PLATFORM_UNIX)
+
 if (FEATURE_MERGE_JIT_AND_ENGINE)
   # Despite the directory being named "dll", it creates a static library "clrjit_static" to link into the VM.
   add_subdirectory(dll)
@@ -214,22 +258,31 @@ endif (FEATURE_MERGE_JIT_AND_ENGINE)
 
 add_subdirectory(standalone)
 
-if (CLR_CMAKE_PLATFORM_ARCH_ARM)
-    add_subdirectory(protojit)
-endif (CLR_CMAKE_PLATFORM_ARCH_ARM)
+if (CLR_CMAKE_TARGET_ARCH_ARM)
+    # Build arm32 legacy_backend to run on both x86 host (crossgen build) and arm host (native).
+    add_subdirectory(legacyjit)
+endif (CLR_CMAKE_TARGET_ARCH_ARM)
 
-if ((CLR_CMAKE_PLATFORM_ARCH_I386 OR CLR_CMAKE_PLATFORM_ARCH_AMD64) AND WIN32)
+if (CLR_CMAKE_PLATFORM_ARCH_I386 OR CLR_CMAKE_PLATFORM_ARCH_AMD64)
     # On x86, build RyuJIT/ARM32 cross-compiling altjit.
     # On amd64, build RyuJIT/ARM64 cross-compiling altjit.
     add_subdirectory(protononjit)
+endif ()
 
-    # Build Linux/x86-running-on-Windows altjit or
-    # Linux/AMD64-running-on-Windows altjit..
+if (CLR_CMAKE_PLATFORM_ARCH_I386)
+     # On x86, build RyuJIT/ARM32 cross-compiling altjit for ARM_SOFTFP (armel).
+    add_subdirectory(armelnonjit)
+endif ()
+
+if ((CLR_CMAKE_PLATFORM_ARCH_I386 OR CLR_CMAKE_PLATFORM_ARCH_AMD64) AND WIN32)
+    # On Windows, build altjit that targets the Linux ABI:
+    #   On x86, build Linux/x86 altjit. This enables UNIX_X86_ABI.
+    #   On amd64, build Linux/AMD64 altjit. This enables UNIX_AMD64_ABI and FEATURE_UNIX_AMD64_STRUCT_PASSING.
     add_subdirectory(linuxnonjit)
 endif ()
 
 if (CLR_CMAKE_PLATFORM_ARCH_I386 AND WIN32)
-    if (NOT CLR_BUILD_JIT32)
-        add_subdirectory(compatjit)
-    endif ()
+    # On Windows x86, build altjit generating Windows/ARM32 code using LEGACY_BACKEND.
+    # (Note: we could also create linuxlegacynonjit for generating Linux/ARM32 code using LEGACY_BACKEND, if needed.)
+    add_subdirectory(legacynonjit)
 endif (CLR_CMAKE_PLATFORM_ARCH_I386 AND WIN32)

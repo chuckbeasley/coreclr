@@ -170,6 +170,11 @@ public:
             align = 8;
 #endif // _TARGET_X86_ && HAS_FIXUP_PRECODE
 
+#if defined(_TARGET_ARM_) && defined(HAS_COMPACT_ENTRYPOINTS)
+        // Precodes have to be aligned to allow fast compact entry points check
+        _ASSERTE (align >= sizeof(void*));
+#endif // _TARGET_ARM_ && HAS_COMPACT_ENTRYPOINTS
+
         return align;
     }
 
@@ -256,7 +261,7 @@ public:
     void Init(PrecodeType t, MethodDesc* pMD, LoaderAllocator *pLoaderAllocator);
 
 #ifndef DACCESS_COMPILE
-    BOOL SetTargetInterlocked(PCODE target);
+    BOOL SetTargetInterlocked(PCODE target, BOOL fOnlyRedirectFromPrestub = TRUE);
 
     // Reset precode to point to prestub
     void Reset();

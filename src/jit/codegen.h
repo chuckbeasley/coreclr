@@ -51,18 +51,17 @@ public:
 private:
 #if defined(_TARGET_XARCH_) && !FEATURE_STACK_FP_X87
     // Bit masks used in negating a float or double number.
-    // The below gentrees encapsulate the data offset to the bitmasks as GT_CLS_VAR nodes.
     // This is to avoid creating more than one data constant for these bitmasks when a
     // method has more than one GT_NEG operation on floating point values.
-    GenTreePtr negBitmaskFlt;
-    GenTreePtr negBitmaskDbl;
+    CORINFO_FIELD_HANDLE negBitmaskFlt;
+    CORINFO_FIELD_HANDLE negBitmaskDbl;
 
     // Bit masks used in computing Math.Abs() of a float or double number.
-    GenTreePtr absBitmaskFlt;
-    GenTreePtr absBitmaskDbl;
+    CORINFO_FIELD_HANDLE absBitmaskFlt;
+    CORINFO_FIELD_HANDLE absBitmaskDbl;
 
     // Bit mask used in U8 -> double conversion to adjust the result.
-    GenTreePtr u8ToDblBitmask;
+    CORINFO_FIELD_HANDLE u8ToDblBitmask;
 
     // Generates SSE2 code for the given tree as "Operand BitWiseOp BitMask"
     void genSSE2BitwiseOp(GenTreePtr treeNode);
@@ -110,10 +109,6 @@ private:
     // branch to on condition being false.
     static void genJumpKindsForTree(GenTreePtr cmpTree, emitJumpKind jmpKind[2], bool jmpToTrueLabel[2]);
 
-#if !defined(_TARGET_64BIT_)
-    static void genJumpKindsForTreeLongHi(GenTreePtr cmpTree, emitJumpKind jmpKind[2]);
-#endif //! defined(_TARGET_64BIT_)
-
     static bool genShouldRoundFP();
 
     GenTreeIndir indirForm(var_types type, GenTree* base);
@@ -145,6 +140,7 @@ private:
     }
 #endif // REG_OPT_RSVD
 
+#ifdef LEGACY_BACKEND
     regNumber findStkLclInReg(unsigned lclNum)
     {
 #ifdef DEBUG
@@ -152,6 +148,7 @@ private:
 #endif
         return regTracker.rsLclIsInReg(lclNum);
     }
+#endif
 
     //-------------------------------------------------------------------------
 
@@ -284,11 +281,9 @@ protected:
 
     void genExitCode(BasicBlock* block);
 
-    //-------------------------------------------------------------------------
-
+#ifdef LEGACY_BACKEND
     GenTreePtr genMakeConst(const void* cnsAddr, var_types cnsType, GenTreePtr cnsTree, bool dblAlign);
-
-    //-------------------------------------------------------------------------
+#endif
 
     void genJumpToThrowHlpBlk(emitJumpKind jumpKind, SpecialCodeKind codeKind, GenTreePtr failBlk = nullptr);
 
@@ -360,6 +355,10 @@ protected:
     void genFreeLclFrame(unsigned           frameSize,
                          /* IN OUT */ bool* pUnwindStarted,
                          bool               jmpEpilog);
+
+    void genMov32RelocatableDisplacement(BasicBlock* block, regNumber reg);
+    void genMov32RelocatableDataLabel(unsigned value, regNumber reg);
+    void genMov32RelocatableImmediate(emitAttr size, unsigned value, regNumber reg);
 
     bool genUsedPopToReturn; // True if we use the pop into PC to return,
                              // False if we didn't and must branch to LR to return.
@@ -817,7 +816,9 @@ protected:
 public:
     void instInit();
 
+#ifdef LEGACY_BACKEND
     regNumber genGetZeroRegister();
+#endif
 
     void instGen(instruction ins);
 #ifdef _TARGET_XARCH_
@@ -959,7 +960,11 @@ public:
 
     void instGen_Return(unsigned stkArgSize);
 
+#ifdef _TARGET_ARM64_
+    void instGen_MemoryBarrier(insBarrier barrierType = INS_BARRIER_ISH);
+#else
     void instGen_MemoryBarrier();
+#endif
 
     void instGen_Set_Reg_To_Zero(emitAttr size, regNumber reg, insFlags flags = INS_FLAGS_DONT_CARE);
 

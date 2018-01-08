@@ -1,8 +1,5 @@
 project(mcs)
 
-remove_definitions(-DUNICODE)
-remove_definitions(-D_UNICODE)
-
 add_definitions(-DFEATURE_NO_HOST)
 add_definitions(-DSELF_NO_HOST)
 
@@ -27,7 +24,6 @@ set(MCS_SOURCES
     verbinteg.cpp
     verbmerge.cpp
     verbremovedup.cpp
-    verbsmarty.cpp
     verbstat.cpp
     verbstrip.cpp
     verbtoc.cpp
@@ -44,6 +40,7 @@ set(MCS_SOURCES
     ../superpmi-shared/spmiutil.cpp
     ../superpmi-shared/tocfile.cpp
     ../superpmi-shared/typeutils.cpp
+    ../superpmi-shared/spmidumphelper.cpp
 )
 
 add_precompiled_header(
@@ -52,7 +49,7 @@ add_precompiled_header(
     MCS_SOURCES
 )
 
-add_executable(mcs
+_add_executable(mcs
     ${MCS_SOURCES}
 )
 

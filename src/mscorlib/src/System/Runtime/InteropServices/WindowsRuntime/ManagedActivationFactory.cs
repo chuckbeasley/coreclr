@@ -5,7 +5,6 @@
 //
 
 using System;
-using System.Diagnostics.Contracts;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -41,7 +40,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             // Check whether the type is "exported to WinRT", i.e. it is declared in a managed .winmd and is decorated
             // with at least one ActivatableAttribute or StaticAttribute.
             if (!(type is RuntimeType) || !type.IsExportedToWindowsRuntime)
-                throw new ArgumentException(Environment.GetResourceString("Argument_TypeNotActivatableViaWindowsRuntime", type), nameof(type));
+                throw new ArgumentException(SR.Format(SR.Argument_TypeNotActivatableViaWindowsRuntime, type), nameof(type));
 
             m_type = type;
         }

@@ -10,10 +10,8 @@
 
 struct CnsVal
 {
-    int cnsVal;
-#ifdef RELOC_SUPPORT
+    int  cnsVal;
     bool cnsReloc;
-#endif
 };
 
 insSize emitInsSize(insFormat insFmt);
@@ -112,6 +110,7 @@ bool emitInsIsLoadOrStore(instruction ins);
 // Generate code for a load or store operation and handle the case
 // of contained GT_LEA op1 with [base + index<<scale + offset]
 void emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataReg, GenTreeIndir* indir);
+void emitInsLoadStoreOp(instruction ins, emitAttr attr, regNumber dataReg, GenTreeIndir* indir, int offset);
 
 /*****************************************************************************
 *
@@ -234,6 +233,13 @@ inline static bool insOptsROR(insOpts opt)
     return (opt == INS_OPTS_ROR);
 }
 
+// Returns the number of bits used by the given 'size'.
+inline static unsigned getBitWidth(emitAttr size)
+{
+    assert(size <= EA_8BYTE);
+    return (unsigned)size * BITS_PER_BYTE;
+}
+
 /************************************************************************/
 /*           The public entry points to output instructions             */
 /************************************************************************/
@@ -242,8 +248,11 @@ public:
 static bool emitIns_valid_imm_for_alu(int imm);
 static bool emitIns_valid_imm_for_mov(int imm);
 static bool emitIns_valid_imm_for_small_mov(regNumber reg, int imm, insFlags flags);
-static bool emitIns_valid_imm_for_add(int imm, insFlags flags);
+static bool emitIns_valid_imm_for_add(int imm, insFlags flags = INS_FLAGS_DONT_CARE);
+static bool emitIns_valid_imm_for_cmp(int imm, insFlags flags);
 static bool emitIns_valid_imm_for_add_sp(int imm);
+static bool emitIns_valid_imm_for_ldst_offset(int imm, emitAttr size);
+static bool emitIns_valid_imm_for_vldst_offset(int imm);
 
 void emitIns(instruction ins);
 
@@ -316,16 +325,13 @@ void emitIns_R_D(instruction ins, emitAttr attr, unsigned offs, regNumber reg);
 
 void emitIns_J_R(instruction ins, emitAttr attr, BasicBlock* dst, regNumber reg);
 
-void emitIns_I_AR(
-    instruction ins, emitAttr attr, int val, regNumber reg, int offs, int memCookie = 0, void* clsCookie = NULL);
+void emitIns_I_AR(instruction ins, emitAttr attr, int val, regNumber reg, int offs);
 
-void emitIns_R_AR(
-    instruction ins, emitAttr attr, regNumber ireg, regNumber reg, int offs, int memCookie = 0, void* clsCookie = NULL);
+void emitIns_R_AR(instruction ins, emitAttr attr, regNumber ireg, regNumber reg, int offs);
 
 void emitIns_R_AI(instruction ins, emitAttr attr, regNumber ireg, ssize_t disp);
 
-void emitIns_AR_R(
-    instruction ins, emitAttr attr, regNumber ireg, regNumber reg, int offs, int memCookie = 0, void* clsCookie = NULL);
+void emitIns_AR_R(instruction ins, emitAttr attr, regNumber ireg, regNumber reg, int offs);
 
 void emitIns_R_ARR(instruction ins, emitAttr attr, regNumber ireg, regNumber reg, regNumber rg2, int disp);
 

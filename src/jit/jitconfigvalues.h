@@ -94,12 +94,14 @@ CONFIG_INTEGER(JitNoRegLoc, W("JitNoRegLoc"), 0)
 CONFIG_INTEGER(JitNoStructPromotion, W("JitNoStructPromotion"), 0) // Disables struct promotion in Jit32
 CONFIG_INTEGER(JitNoUnroll, W("JitNoUnroll"), 0)
 CONFIG_INTEGER(JitOrder, W("JitOrder"), 0)
+CONFIG_INTEGER(JitReportFastTailCallDecisions, W("JitReportFastTailCallDecisions"), 0)
 CONFIG_INTEGER(JitPInvokeCheckEnabled, W("JITPInvokeCheckEnabled"), 0)
 CONFIG_INTEGER(JitPInvokeEnabled, W("JITPInvokeEnabled"), 1)
 CONFIG_INTEGER(JitPrintInlinedMethods, W("JitPrintInlinedMethods"), 0)
 CONFIG_INTEGER(JitPrintDevirtualizedMethods, W("JitPrintDevirtualizedMethods"), 0)
 CONFIG_INTEGER(JitRequired, W("JITRequired"), -1)
 CONFIG_INTEGER(JitRoundFloat, W("JITRoundFloat"), DEFAULT_ROUND_LEVEL)
+CONFIG_INTEGER(JitStackAllocToLocalSize, W("JitStackAllocToLocalSize"), DEFAULT_MAX_LOCALLOC_TO_LOCAL_SIZE)
 CONFIG_INTEGER(JitSkipArrayBoundCheck, W("JitSkipArrayBoundCheck"), 0)
 CONFIG_INTEGER(JitSlowDebugChecksEnabled, W("JitSlowDebugChecksEnabled"), 1) // Turn on slow debug checks
 CONFIG_INTEGER(JitSplitFunctionSize, W("JitSplitFunctionSize"), 0) // On ARM, use this as the maximum function/funclet
@@ -185,7 +187,28 @@ CONFIG_STRING(NgenDumpFgDir, W("NgenDumpFgDir"))                 // Ngen Xml Flo
 CONFIG_STRING(NgenDumpFgFile, W("NgenDumpFgFile"))               // Ngen Xml Flowgraph support
 CONFIG_STRING(NgenDumpIRFormat, W("NgenDumpIRFormat"))           // Same as JitDumpIRFormat, but for ngen
 CONFIG_STRING(NgenDumpIRPhase, W("NgenDumpIRPhase"))             // Same as JitDumpIRPhase, but for ngen
-#endif                                                           // defined(DEBUG)
+
+#if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
+CONFIG_INTEGER(EnableSSE, W("EnableSSE"), 1)     // Enable SSE
+CONFIG_INTEGER(EnableSSE2, W("EnableSSE2"), 1)   // Enable SSE2
+CONFIG_INTEGER(EnableSSE3, W("EnableSSE3"), 1)   // Enable SSE3
+CONFIG_INTEGER(EnableSSSE3, W("EnableSSSE3"), 1) // Enable SSSE3
+CONFIG_INTEGER(EnableSSE41, W("EnableSSE41"), 1) // Enable SSE41
+CONFIG_INTEGER(EnableSSE42, W("EnableSSE42"), 1) // Enable SSE42
+// EnableAVX is already defined for DEBUG and non-DEBUG mode both
+CONFIG_INTEGER(EnableAVX2, W("EnableAVX2"), 1) // Enable AVX2
+
+CONFIG_INTEGER(EnableAES, W("EnableAES"), 1)             // Enable AES
+CONFIG_INTEGER(EnableBMI1, W("EnableBMI1"), 1)           // Enable BMI1
+CONFIG_INTEGER(EnableBMI2, W("EnableBMI2"), 1)           // Enable BMI2
+CONFIG_INTEGER(EnableFMA, W("EnableFMA"), 1)             // Enable FMA
+CONFIG_INTEGER(EnableLZCNT, W("EnableLZCNT"), 1)         // Enable AES
+CONFIG_INTEGER(EnablePCLMULQDQ, W("EnablePCLMULQDQ"), 1) // Enable PCLMULQDQ
+CONFIG_INTEGER(EnablePOPCNT, W("EnablePOPCNT"), 1)       // Enable POPCNT
+#endif                                                   // defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
+CONFIG_INTEGER(EnableIncompleteISAClass, W("EnableIncompleteISAClass"), 0) // Enable testing not-yet-implemented
+                                                                           // intrinsic classes
+#endif                                                                     // defined(DEBUG)
 
 #ifdef FEATURE_ENABLE_NO_RANGE_CHECKS
 CONFIG_INTEGER(JitNoRangeChks, W("JitNoRngChks"), 0) // If 1, don't generate range checks
@@ -218,14 +241,16 @@ CONFIG_INTEGER(JitEnableNoWayAssert, W("JitEnableNoWayAssert"), 0)
 CONFIG_INTEGER(JitEnableNoWayAssert, W("JitEnableNoWayAssert"), 1)
 #endif // !defined(DEBUG) && !defined(_DEBUG)
 
-#if !defined(JIT32_GCENCODER)
-#if defined(_TARGET_AMD64_) && defined(FEATURE_CORECLR)
+// It was originally intended that JitMinOptsTrackGCrefs only be enabled for amd64 on CoreCLR. A mistake was
+// made, and it was enabled for x86 as well. However, it doesn't currently work with x86 legacy back-end, so
+// disable it for that. Whether it should continue to be enabled for x86 non-legacy-backend should be investigated.
+// This is tracked by issue https://github.com/dotnet/coreclr/issues/12415.
+#if (defined(_TARGET_AMD64_) && defined(FEATURE_CORECLR)) || (defined(_TARGET_X86_) && !defined(LEGACY_BACKEND))
 #define JitMinOptsTrackGCrefs_Default 0 // Not tracking GC refs in MinOpts is new behavior
 #else
 #define JitMinOptsTrackGCrefs_Default 1
 #endif
 CONFIG_INTEGER(JitMinOptsTrackGCrefs, W("JitMinOptsTrackGCrefs"), JitMinOptsTrackGCrefs_Default) // Track GC roots
-#endif // !defined(JIT32_GCENCODER)
 
 // The following should be wrapped inside "#if MEASURE_MEM_ALLOC / #endif", but
 // some files include this one without bringing in the definitions from "jit.h"
@@ -257,11 +282,13 @@ CONFIG_METHODSET(JitOptRepeat, W("JitOptRepeat"))            // Runs optimizer m
 CONFIG_INTEGER(JitOptRepeatCount, W("JitOptRepeatCount"), 2) // Number of times to repeat opts when repeating
 #endif                                                       // defined(OPT_CONFIG)
 
-CONFIG_INTEGER(JitRegisterFP, W("JitRegisterFP"), 3)           // Control FP enregistration
-CONFIG_INTEGER(JitTelemetry, W("JitTelemetry"), 1)             // If non-zero, gather JIT telemetry data
-CONFIG_INTEGER(JitVNMapSelBudget, W("JitVNMapSelBudget"), 100) // Max # of MapSelect's considered for a particular
-                                                               // top-level invocation.
-CONFIG_INTEGER(TailCallLoopOpt, W("TailCallLoopOpt"), 1)       // Convert recursive tail calls to loops
+CONFIG_INTEGER(JitRegisterFP, W("JitRegisterFP"), 3) // Control FP enregistration
+CONFIG_INTEGER(JitTelemetry, W("JitTelemetry"), 1)   // If non-zero, gather JIT telemetry data
+
+// Max # of MapSelect's considered for a particular top-level invocation.
+CONFIG_INTEGER(JitVNMapSelBudget, W("JitVNMapSelBudget"), DEFAULT_MAP_SELECT_BUDGET)
+
+CONFIG_INTEGER(TailCallLoopOpt, W("TailCallLoopOpt"), 1) // Convert recursive tail calls to loops
 CONFIG_METHODSET(AltJit, W("AltJit")) // Enables AltJit and selectively limits it to the specified methods.
 CONFIG_METHODSET(AltJitNgen,
                  W("AltJitNgen")) // Enables AltJit for NGEN and selectively limits it to the specified methods.
@@ -279,10 +306,17 @@ CONFIG_STRING(JitTimeLogCsv, W("JitTimeLogCsv")) // If set, gather JIT throughpu
                                                  // mode must be used in internal retail builds.
 CONFIG_STRING(TailCallOpt, W("TailCallOpt"))
 
+CONFIG_INTEGER(JitMeasureNowayAssert, W("JitMeasureNowayAssert"), 0) // Set to 1 to measure noway_assert usage. Only
+                                                                     // valid if MEASURE_NOWAY is defined.
+CONFIG_STRING(JitMeasureNowayAssertFile,
+              W("JitMeasureNowayAssertFile")) // Set to file to write noway_assert usage to a file (if not
+                                              // set: stdout). Only valid if MEASURE_NOWAY is defined.
+
 #if defined(DEBUG) || defined(INLINE_DATA)
 CONFIG_INTEGER(JitInlineDumpData, W("JitInlineDumpData"), 0)
-CONFIG_INTEGER(JitInlineDumpXml, W("JitInlineDumpXml"), 0) // 1 = full xml (all methods), 2 = minimal xml (only method
-                                                           // with inlines)
+CONFIG_INTEGER(JitInlineDumpXml, W("JitInlineDumpXml"), 0) // 1 = full xml (+ failures in DEBUG)
+                                                           // 2 = only methods with inlines (+ failures in DEBUG)
+                                                           // 3 = only methods with inlines, no failures
 CONFIG_INTEGER(JitInlineLimit, W("JitInlineLimit"), -1)
 CONFIG_INTEGER(JitInlinePolicyDiscretionary, W("JitInlinePolicyDiscretionary"), 0)
 CONFIG_INTEGER(JitInlinePolicyFull, W("JitInlinePolicyFull"), 0)
@@ -294,7 +328,6 @@ CONFIG_STRING(JitNoInlineRange, W("JitNoInlineRange"))
 CONFIG_STRING(JitInlineReplayFile, W("JitInlineReplayFile"))
 #endif // defined(DEBUG) || defined(INLINE_DATA)
 
-CONFIG_INTEGER(JitInlinePolicyLegacy, W("JitInlinePolicyLegacy"), 0)
 CONFIG_INTEGER(JitInlinePolicyModel, W("JitInlinePolicyModel"), 0)
 
 CONFIG_INTEGER(JitEECallTimingInfo, W("JitEECallTimingInfo"), 0)

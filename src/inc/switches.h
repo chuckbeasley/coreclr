@@ -64,19 +64,10 @@
 #define GC_STATS
 #endif
 
-
-#if defined(_DEBUG) && !defined(DACCESS_COMPILE) && (defined(_TARGET_X86_) || defined(_TARGET_AMD64_))
-// On x86/x64 Windows debug builds, respect the COMPlus_EnforceEEThreadNotRequiredContracts
-// runtime switch. See code:InitThreadManager and code:GetThreadGenericFullCheck
-#define ENABLE_GET_THREAD_GENERIC_FULL_CHECK
-#endif
-
 #if defined(_TARGET_X86_) || defined(_TARGET_ARM_)
-    #define PAGE_SIZE               0x1000
     #define USE_UPPER_ADDRESS       0
 
 #elif defined(_TARGET_AMD64_) || defined(_TARGET_ARM64_)
-    #define PAGE_SIZE               0x1000
     #define UPPER_ADDRESS_MAPPING_FACTOR 2
     #define CLR_UPPER_ADDRESS_MIN   0x64400000000
     #define CODEHEAP_START_ADDRESS  0x64480000000
@@ -90,10 +81,6 @@
 
 #else
     #error Please add a new #elif clause and define all portability macros for the new platform
-#endif
-
-#ifndef OS_PAGE_SIZE
-#define OS_PAGE_SIZE PAGE_SIZE
 #endif
 
 #if defined(_WIN64)
@@ -235,3 +222,6 @@
 
 #endif // !defined(CROSSGEN_COMPILE)
 
+#if defined(FEATURE_INTERPRETER) && defined(CROSSGEN_COMPILE)
+#undef FEATURE_INTERPRETER
+#endif

@@ -19,7 +19,6 @@
 #include "dllimport.h"
 #include "method.hpp"
 #include "siginfo.hpp"
-#include "security.h"
 #include "comdelegate.h"
 #include "ceeload.h"
 #include "mlinfo.h"
@@ -1183,7 +1182,6 @@ public:
 #endif // FEATURE_COMINTEROP
         LogOneFlag(dwStubFlags, NDIRECTSTUB_FL_NGENEDSTUBFORPROFILING,  "   NDIRECTSTUB_FL_NGENEDSTUBFORPROFILING\n", facility, level);
         LogOneFlag(dwStubFlags, NDIRECTSTUB_FL_GENERATEDEBUGGABLEIL,    "   NDIRECTSTUB_FL_GENERATEDEBUGGABLEIL\n", facility, level);
-        LogOneFlag(dwStubFlags, NDIRECTSTUB_FL_HASDECLARATIVESECURITY,  "   NDIRECTSTUB_FL_HASDECLARATIVESECURITY\n", facility, level);
         LogOneFlag(dwStubFlags, NDIRECTSTUB_FL_UNMANAGED_CALLI,         "   NDIRECTSTUB_FL_UNMANAGED_CALLI\n", facility, level);
         LogOneFlag(dwStubFlags, NDIRECTSTUB_FL_TRIGGERCCTOR,            "   NDIRECTSTUB_FL_TRIGGERCCTOR\n", facility, level);
 #ifdef FEATURE_COMINTEROP
@@ -1214,7 +1212,6 @@ public:
             NDIRECTSTUB_FL_REVERSE_INTEROP          |
             NDIRECTSTUB_FL_NGENEDSTUBFORPROFILING   |
             NDIRECTSTUB_FL_GENERATEDEBUGGABLEIL     |
-            NDIRECTSTUB_FL_HASDECLARATIVESECURITY   |
             NDIRECTSTUB_FL_UNMANAGED_CALLI          |
             NDIRECTSTUB_FL_TRIGGERCCTOR             |
 #ifdef FEATURE_COMINTEROP
@@ -2294,7 +2291,19 @@ void NDirectStubLinker::DoNDirect(ILCodeStream *pcsEmit, DWORD dwStubFlags, Meth
                     //pcsEmit->EmitCALL(METHOD__STUBHELPERS__GET_NDIRECT_TARGET, 1, 1);
                     pcsEmit->EmitLDC(offsetof(NDirectMethodDesc, ndirect.m_pWriteableData));
                     pcsEmit->EmitADD();
+
+                    if (decltype(NDirectMethodDesc::ndirect.m_pWriteableData)::isRelative)
+                    {
+                        pcsEmit->EmitDUP();
+                    }
+
                     pcsEmit->EmitLDIND_I();
+
+                    if (decltype(NDirectMethodDesc::ndirect.m_pWriteableData)::isRelative)
+                    {
+                        pcsEmit->EmitADD();
+                    }
+
                     pcsEmit->EmitLDIND_I();
                 }
             }
@@ -3684,8 +3693,15 @@ static void CreateNDirectStubWorker(StubState*         pss,
         // return buffer in correct register.
         // The return structure secret arg comes first, however byvalue return is processed at
         // the end because it could be the HRESULT-swapped argument which always comes last.
+
+#ifdef UNIX_X86_ABI
+        // For functions with value type class, managed and unmanaged calling convention differ
+        fMarshalReturnValueFirst = HasRetBuffArgUnmanagedFixup(&msig);
+#else // UNIX_X86_ABI
         fMarshalReturnValueFirst = HasRetBuffArg(&msig);
-#endif
+#endif // UNIX_X86_ABI
+
+#endif // defined(_TARGET_X86_) || defined(_TARGET_ARM_)
 
     }
     
@@ -4361,8 +4377,8 @@ void NDirect::PopulateNDirectMethodDesc(NDirectMethodDesc* pNMD, PInvokeStaticSi
     else
     {
         EnsureWritablePages(&pNMD->ndirect);
-        pNMD->ndirect.m_pszLibName = szLibName;
-        pNMD->ndirect.m_pszEntrypointName = szEntryPointName;
+        pNMD->ndirect.m_pszLibName.SetValueMaybeNull(szLibName);
+        pNMD->ndirect.m_pszEntrypointName.SetValueMaybeNull(szEntryPointName);
     }
 
 #ifdef _TARGET_X86_
@@ -4991,44 +5007,7 @@ MethodDesc* NDirect::CreateCLRToNativeILStub(
     pParamTokenArray = (mdParamDef*)_alloca(numParamTokens * sizeof(mdParamDef));
     CollateParamTokens(pModule->GetMDImport(), pSigDesc->m_tkMethodDef, numArgs, pParamTokenArray);
 
-    // for interop vectors that have declarative security, we need
-    //      to update the stub flags to ensure a unique stub hash
-    //      is generated based on the marshalling signature AND
-    //      any declarative security.
-    // IMPORTANT: This will only inject the security callouts for
-    //      interop functionality which has a non-null target MethodDesc.
-    //      Currently, this is known to exclude things like native
-    //      function ptrs. It is assumed that if the target is not
-    //      attribute'able for metadata, then it cannot have declarative
-    //      security - and that the target is not attributable if it was
-    //      not passed to this function.
     MethodDesc *pMD = pSigDesc->m_pMD;
-    if (pMD != NULL && SF_IsForwardStub(dwStubFlags))
-    {
-        // In an AppX process there is only one fully trusted AppDomain, so there is never any need to insert
-        // a security callout on the stubs.
-        if (!AppX::IsAppXProcess())
-        {
-#ifdef FEATURE_COMINTEROP
-            if (pMD->IsComPlusCall() || pMD->IsGenericComPlusCall())
-            {
-                // To preserve Whidbey behavior, we only enforce the implicit demand for
-                // unmanaged code permission.
-                MethodTable* pMT = ComPlusCallInfo::FromMethodDesc(pMD)->m_pInterfaceMT;
-                if (pMT->ClassRequiresUnmanagedCodeCheck() &&
-                    !pMD->HasSuppressUnmanagedCodeAccessAttr())
-                {
-                    dwStubFlags |= NDIRECTSTUB_FL_HASDECLARATIVESECURITY;
-                }
-            }
-            else
-#endif // FEATURE_COMPINTEROP
-            if (pMD->IsInterceptedForDeclSecurity())
-            {
-                dwStubFlags |= NDIRECTSTUB_FL_HASDECLARATIVESECURITY;
-            }
-        }
-    }
 
     NewHolder<ILStubState> pStubState;
 
@@ -5394,8 +5373,7 @@ PCODE JitILStub(MethodDesc* pStubMD)
             // A dynamically generated IL stub
             //
             
-            CORJIT_FLAGS jitFlags = pStubMD->AsDynamicMethodDesc()->GetILStubResolver()->GetJitFlags();
-            pCode = pStubMD->MakeJitWorker(NULL, jitFlags);
+            pCode = pStubMD->PrepareInitialCode();
 
             _ASSERTE(pCode == pStubMD->GetNativeCode());            
         }
@@ -5881,67 +5859,12 @@ static HMODULE LocalLoadLibraryDirectHelper(LPCWSTR name, DWORD flags, LoadLibEr
 #endif // !FEATURE_PAL
 }
 
-
-#if !defined(FEATURE_CORESYSTEM)
-
-#define NATIVE_DLL(d) L#d, L#d W(".dll")
-
-const LPCWSTR wellKnownModules[] =
-{
-    NATIVE_DLL(advapi32),
-    NATIVE_DLL(gdi32),
-    NATIVE_DLL(gdiplus),
-    NATIVE_DLL(kernel32),
-    NATIVE_DLL(mscoree),
-    NATIVE_DLL(ole32),
-    NATIVE_DLL(shfolder),
-    NATIVE_DLL(user32),
-    NATIVE_DLL(version)
-};
-
-BOOL CompareLibNames (UPTR val1, UPTR val2)
-{
-    CONTRACTL {
-        MODE_ANY;
-        NOTHROW;
-        GC_NOTRIGGER;
-    }
-    CONTRACTL_END;
-
-    LPCWSTR wszStr1 = (LPCWSTR)(val1 << 1);
-    LPCWSTR wszStr2 = (LPCWSTR)val2;
-
-    if (SString::_wcsicmp(wszStr1, wszStr2) == 0)
-        return TRUE;
-
-    return FALSE;
-}
-
-PtrHashMap * NDirect::s_pWellKnownNativeModules  = NULL;
+#if !defined(FEATURE_PAL)
 bool         NDirect::s_fSecureLoadLibrarySupported = false;
-
-HINSTANCE NDirect::CheckForWellKnownModules(LPCWSTR wszLibName, LoadLibErrorTracker *pErrorTracker)
-{
-    STANDARD_VM_CONTRACT;
-
-    ModuleHandleHolder hMod;
-    ULONG hash = HashiString(wszLibName);
-    LPCWSTR     wszName = NULL;
-    wszName = (LPCWSTR) s_pWellKnownNativeModules->LookupValue((UPTR) hash, (LPVOID)wszLibName);
-
-    if (wszName != (LPCWSTR)INVALIDENTRY)
-    {
-        hMod = LocalLoadLibraryHelper(wszLibName, 0, pErrorTracker);
-    }
-
-    return hMod.Extract();
-}
-
-#endif  // !FEATURE_CORESYSTEM
+#endif
 
 #define TOLOWER(a) (((a) >= W('A') && (a) <= W('Z')) ? (W('a') + (a - W('A'))) : (a))
 #define TOHEX(a)   ((a)>=10 ? W('a')+(a)-10 : W('0')+(a))
-
 
 // static
 HMODULE NDirect::LoadLibraryFromPath(LPCWSTR libraryPath)
@@ -5986,19 +5909,7 @@ HMODULE NDirect::LoadLibraryModuleViaHost(NDirectMethodDesc * pMD, AppDomain* pD
     //        The Binding Context can be null or an overridden TPA context
     if (pBindingContext == NULL)
     {
-        pBindingContext = nullptr;
-
-        // If the assembly does not have a binder associated with it explicitly, then check if it is
-        // a dynamic assembly, or not, since they can have a fallback load context associated with them.
-        if (pManifestFile->IsDynamic())
-        {
-            pBindingContext = pManifestFile->GetFallbackLoadContextBinder();
-        } 
-    }
-
-    // If we do not have any binder associated, then return to the default resolution mechanism.
-    if (pBindingContext == nullptr)
-    {
+        // If we do not have any binder associated, then return to the default resolution mechanism.
         return NULL;
     }    
 
@@ -6147,10 +6058,6 @@ HINSTANCE NDirect::LoadLibraryModule(NDirectMethodDesc * pMD, LoadLibErrorTracke
     {
        return hmod.Extract();
     }
-
-#if !defined(FEATURE_CORESYSTEM)
-    hmod = CheckForWellKnownModules(wszLibName, pErrorTracker);
-#endif
 
 #ifdef FEATURE_PAL
     // In the PAL version of CoreCLR, the CLR module itself exports the functionality
@@ -6425,6 +6332,17 @@ VOID NDirect::NDirectLink(NDirectMethodDesc *pMD)
     }
     CONTRACTL_END;
 
+#if !defined(FEATURE_PAL)
+    // Check if the OS supports the new secure LoadLibraryEx flags introduced in KB2533623
+    HMODULE hMod = CLRGetModuleHandle(WINDOWS_KERNEL32_DLLNAME_W);
+    _ASSERTE(hMod != NULL);
+
+    if (GetProcAddress(hMod, "AddDllDirectory") != NULL)
+    {
+        // The AddDllDirectory export was added in KB2533623 together with the new flag support
+        s_fSecureLoadLibrarySupported = true;
+    }
+#endif // !FEATURE_PAL
 }
 
 
@@ -6471,9 +6389,6 @@ EXTERN_C LPVOID STDCALL NDirectImportWorker(NDirectMethodDesc* pMD)
             //
             // With IL stubs, we don't have to do anything but ensure the DLL is loaded.
             //
-
-            if (!pMD->GetModule()->GetSecurityDescriptor()->CanCallUnmanagedCode())
-                Security::ThrowSecurityException(g_SecurityPermissionClassName, SPFLAGSUNMANAGEDCODE);
 
             if (!pMD->IsZapped())
             {

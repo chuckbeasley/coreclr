@@ -20,7 +20,6 @@
 #include "excep.h"
 #include "vars.hpp"
 #include "field.h"
-#include "security.h"
 #include "comsynchronizable.h"
 #include "dbginterface.h"
 #include "comdelegate.h"
@@ -28,6 +27,10 @@
 #include "callhelpers.h"
 #include "appdomain.hpp"
 #include "appdomain.inl"
+
+#ifndef FEATURE_PAL
+#include "utilcode.h"
+#endif
 
 #include "newapis.h"
 
@@ -235,7 +238,7 @@ void ThreadNative::KickOffThread_Worker(LPVOID ptr)
     delete args->share;
     args->share = 0;
 
-    MethodDesc *pMeth = ((DelegateEEClass*)( gc.orDelegate->GetMethodTable()->GetClass() ))->m_pInvokeMethod;
+    MethodDesc *pMeth = ((DelegateEEClass*)( gc.orDelegate->GetMethodTable()->GetClass() ))->GetInvokeMethod();
     _ASSERTE(pMeth);
     MethodDescCallSite invokeMethod(pMeth, &gc.orDelegate);
 
@@ -926,18 +929,8 @@ FCIMPL1(INT32, ThreadNative::GetThreadState, ThreadBaseObject* pThisUNSAFE)
     if (state & Thread::TS_Interruptible)
         res |= ThreadWaitSleepJoin;
 
-    // Don't report a SuspendRequested if the thread has actually Suspended.
-    if ((state & Thread::TS_UserSuspendPending) &&
-        (state & Thread::TS_SyncSuspended)
-       )
-    {
-        res |= ThreadSuspended;
-    }
-    else
-    if (state & Thread::TS_UserSuspendPending)
-    {
-        res |= ThreadSuspendRequested;
-    }
+    // CoreCLR does not support user-requested thread suspension
+    _ASSERTE(!(state & Thread::TS_UserSuspendPending));
 
     HELPER_METHOD_POLL();
     HELPER_METHOD_FRAME_END();
@@ -1116,13 +1109,10 @@ FCIMPL1(void, ThreadNative::StartupSetApartmentState, ThreadBaseObject* pThisUNS
     // Assert that the thread hasn't been started yet.
     _ASSERTE(Thread::TS_Unstarted & thread->GetSnapshotState());
 
-    if ((g_pConfig != NULL) && !g_pConfig->LegacyApartmentInitPolicy())
+    Thread::ApartmentState as = thread->GetExplicitApartment();
+    if (as == Thread::AS_Unknown)
     {
-        Thread::ApartmentState as = thread->GetExplicitApartment();
-        if (as == Thread::AS_Unknown)
-        {
-            thread->SetApartment(Thread::AS_InMTA, TRUE);
-        }
+        thread->SetApartment(Thread::AS_InMTA, TRUE);
     }
 
     HELPER_METHOD_FRAME_END();
@@ -1553,8 +1543,17 @@ void QCALLTYPE ThreadNative::InformThreadNameChange(QCall::ThreadHandle thread, 
     QCALL_CONTRACT;
 
     BEGIN_QCALL;
-
+    
     Thread* pThread = &(*thread);
+
+#ifndef FEATURE_PAL
+    // Set on Windows 10 Creators Update and later machines the unmanaged thread name as well. That will show up in ETW traces and debuggers which is very helpful
+    // if more and more threads get a meaningful name
+    if (len > 0 && name != NULL)
+    {
+        SetThreadName(pThread->GetThreadHandle(), name);
+    }
+#endif
 
 #ifdef PROFILING_SUPPORTED
     {
@@ -1622,22 +1621,41 @@ FCIMPL1(FC_BOOL_RET, ThreadNative::IsThreadpoolThread, ThreadBaseObject* thread)
 }
 FCIMPLEND
 
+INT32 QCALLTYPE ThreadNative::GetOptimalMaxSpinWaitsPerSpinIteration()
+{
+    QCALL_CONTRACT;
+
+    INT32 optimalMaxNormalizedYieldsPerSpinIteration;
+
+    BEGIN_QCALL;
+
+    // RuntimeThread calls this function only once lazily and caches the result, so ensure initialization
+    EnsureYieldProcessorNormalizedInitialized();
+    optimalMaxNormalizedYieldsPerSpinIteration = g_optimalMaxNormalizedYieldsPerSpinIteration;
+
+    END_QCALL;
+
+    return optimalMaxNormalizedYieldsPerSpinIteration;
+}
 
 FCIMPL1(void, ThreadNative::SpinWait, int iterations)
 {
     FCALL_CONTRACT;
 
+    if (iterations <= 0)
+    {
+        return;
+    }
+
     //
     // If we're not going to spin for long, it's ok to remain in cooperative mode.
     // The threshold is determined by the cost of entering preemptive mode; if we're
     // spinning for less than that number of cycles, then switching to preemptive
-    // mode won't help a GC start any faster.  That number is right around 1000000 
-    // on my machine.
+    // mode won't help a GC start any faster.
     //
-    if (iterations <= 1000000)
+    if (iterations <= 100000)
     {
-        for(int i = 0; i < iterations; i++)
-            YieldProcessor();
+        YieldProcessorNormalized(YieldProcessorNormalizationInfo(), iterations);
         return;
     }
 
@@ -1647,8 +1665,7 @@ FCIMPL1(void, ThreadNative::SpinWait, int iterations)
     HELPER_METHOD_FRAME_BEGIN_NOPOLL();
     GCX_PREEMP();
 
-    for(int i = 0; i < iterations; i++)
-        YieldProcessor();
+    YieldProcessorNormalized(YieldProcessorNormalizationInfo(), iterations);
 
     HELPER_METHOD_FRAME_END();
 }
@@ -1668,16 +1685,6 @@ BOOL QCALLTYPE ThreadNative::YieldThread()
 
     return ret;
 }
-
-
-FCIMPL0(void, ThreadNative::FCMemoryBarrier)
-{
-    FCALL_CONTRACT;
-
-    MemoryBarrier();
-    FC_GC_POLL();
-}
-FCIMPLEND
 
 FCIMPL2(void, ThreadNative::SetAbortReason, ThreadBaseObject* pThisUNSAFE, Object* pObject)
 {

@@ -7,7 +7,6 @@ namespace System.Runtime.InteropServices
     using System;
     using System.Runtime.CompilerServices;
     using System.Threading;
-    using System.Diagnostics.Contracts;
 #if BIT64
     using nint = System.Int64;
 #else
@@ -18,7 +17,6 @@ namespace System.Runtime.InteropServices
     // IMPORTANT: These must match the definitions in ObjectHandle.h in the EE. 
     // IMPORTANT: If new values are added to the enum the GCHandle::MaxHandleType
     //            constant must be updated.
-    [Serializable]
     public enum GCHandleType
     {
         Weak = 0,
@@ -62,7 +60,6 @@ namespace System.Runtime.InteropServices
             // Make sure the type parameter is within the valid range for the enum.
             if ((uint)type > (uint)MaxHandleType)
                 ThrowArgumentOutOfRangeException_ArgumentOutOfRange_Enum();
-            Contract.EndContractBlock();
 
             IntPtr handle = InternalAlloc(value, type);
 
@@ -140,7 +137,7 @@ namespace System.Runtime.InteropServices
                 ValidateHandle();
 
                 // You can only get the address of pinned handles.
-                throw new InvalidOperationException(Environment.GetResourceString("InvalidOperation_HandleIsNotPinned"));
+                throw new InvalidOperationException(SR.InvalidOperation_HandleIsNotPinned);
             }
 
             // Get the address.
@@ -148,7 +145,7 @@ namespace System.Runtime.InteropServices
         }
 
         // Determine whether this handle has been allocated or not.
-        public bool IsAllocated => !m_handle.IsNull();
+        public bool IsAllocated => m_handle != IntPtr.Zero;
 
         // Used to create a GCHandle from an int.  This is intended to
         // be used with the reverse conversion.
@@ -161,7 +158,6 @@ namespace System.Runtime.InteropServices
         public static GCHandle FromIntPtr(IntPtr value)
         {
             ValidateHandle(value);
-            Contract.EndContractBlock();
 
 #if MDA_SUPPORTED
             IntPtr handle = value;
@@ -271,14 +267,14 @@ namespace System.Runtime.InteropServices
         private void ValidateHandle()
         {
             // Check if the handle was never initialized or was freed.
-            if (m_handle.IsNull())
+            if (m_handle == IntPtr.Zero)
                 ThrowInvalidOperationException_HandleIsNotInitialized();
         }
 
         private static void ValidateHandle(IntPtr handle)
         {
             // Check if the handle was never initialized or was freed.
-            if (handle.IsNull())
+            if (handle == IntPtr.Zero)
                 ThrowInvalidOperationException_HandleIsNotInitialized();
         }
 

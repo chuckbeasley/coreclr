@@ -276,9 +276,22 @@ mdToken Assembler::GetAsmRef(__in __nullterminated const char* szName)
 
 mdToken Assembler::GetBaseAsmRef()
 {
-    if(RidFromToken(m_pManifest->GetAsmRefTokByName("System.Runtime")) != 0)
+    AsmManAssembly* sysRuntime = m_pManifest->GetAsmRefByAsmName("System.Runtime");
+    if(sysRuntime != NULL)
     {
-        return GetAsmRef("System.Runtime");
+        return GetAsmRef(sysRuntime->szAlias ? sysRuntime->szAlias : sysRuntime->szName);
+    }
+
+    AsmManAssembly* mscorlibAsm = m_pManifest->GetAsmRefByAsmName("mscorlib");
+    if(mscorlibAsm != NULL)
+    {
+        return GetAsmRef(mscorlibAsm->szAlias ? mscorlibAsm->szAlias : mscorlibAsm->szName);
+    }
+
+    AsmManAssembly* netstandardAsm = m_pManifest->GetAsmRefByAsmName("netstandard");
+    if (netstandardAsm != NULL)
+    {
+        return GetAsmRef(netstandardAsm->szAlias ? netstandardAsm->szAlias : netstandardAsm->szName);
     }
 
     return GetAsmRef("mscorlib");
@@ -692,24 +705,6 @@ void Assembler::StartMethod(__in __nullterminated char* name, BinStr* sig, CorMe
             {
                 flags = (CorMethodAttr)(flags | mdSpecialName);
                 if(IsTdInterface(m_pCurClass->m_Attr)) report->error("Instance constructor in interface\n");
-
-            }
-            if(!IsMdStatic(flags))
-            {
-                if(IsTdInterface(m_pCurClass->m_Attr))
-                {
-                    if(!IsMdPublic(flags)) report->error("Non-public instance method in interface\n");
-                    if((!(IsMdVirtual(flags) && IsMdAbstract(flags))))
-                    {
-                        if(OnErrGo) report->error("Non-virtual, non-abstract instance method in interface\n");
-                        else
-                        {
-                            report->warn("Non-virtual, non-abstract instance method in interface, set to such\n");
-                            flags = (CorMethodAttr)(flags |mdVirtual | mdAbstract);
-                        }
-                    }
-    
-                }
             }
             m_pCurMethod = new Method(this, m_pCurClass, name, sig, flags);
         }

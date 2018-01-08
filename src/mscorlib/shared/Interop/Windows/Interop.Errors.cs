@@ -4,6 +4,7 @@
 
 internal partial class Interop
 {
+    // As defined in winerror.h and https://msdn.microsoft.com/en-us/library/windows/desktop/ms681382.aspx
     internal partial class Errors
     {
         internal const int ERROR_SUCCESS = 0x0;
@@ -39,5 +40,6 @@ internal partial class Interop
         internal const int ERROR_NOT_FOUND = 0x490;
         internal const int ERROR_BAD_IMPERSONATION_LEVEL = 0x542;
         internal const int E_FILENOTFOUND = unchecked((int)0x80070002);
+        internal const int ERROR_TIMEOUT = 0x000005B4;
     }
 }

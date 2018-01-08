@@ -19,7 +19,6 @@
 #include "eeconfig.h"
 #include "gcheaputilities.h"
 #include "field.h"
-#include "gcscan.h"
 #include "argdestination.h"
 
 
@@ -1522,11 +1521,17 @@ void STDCALL CopyValueClassUnchecked(void* dest, void* src, MethodTable *pMT)
 
     _ASSERTE(!pMT->IsArray());  // bunch of assumptions about arrays wrong. 
 
+    // <TODO> @todo Only call MemoryBarrier() if needed.
+    // Reflection is a known use case where this is required.
+    // Unboxing is a use case where this should not be required.
+    // </TODO>
+    MemoryBarrier();
+
         // Copy the bulk of the data, and any non-GC refs. 
     switch (pMT->GetNumInstanceFieldBytes())
     {        
     case 1:
-        VolatileStore((UINT8*)dest, *(UINT8*)src);
+        *(UINT8*)dest = *(UINT8*)src;
         break;
 #ifndef ALIGN_ACCESS
         // we can hit an alignment fault if the value type has multiple 
@@ -1534,13 +1539,13 @@ void STDCALL CopyValueClassUnchecked(void* dest, void* src, MethodTable *pMT)
         // value class can be aligned to 4-byte boundaries, yet the 
         // NumInstanceFieldBytes is 8
     case 2:
-        VolatileStore((UINT16*)dest, *(UINT16*)src);
+        *(UINT16*)dest = *(UINT16*)src;
         break;
     case 4:
-        VolatileStore((UINT32*)dest, *(UINT32*)src);
+        *(UINT32*)dest = *(UINT32*)src;
         break;
     case 8:
-        VolatileStore((UINT64*)dest, *(UINT64*)src);
+        *(UINT64*)dest = *(UINT64*)src;
         break;
 #endif // !ALIGN_ACCESS
     default:
@@ -1590,6 +1595,14 @@ void STDCALL CopyValueClassArgUnchecked(ArgDestination *argDest, void* src, Meth
     if (argDest->IsStructPassedInRegs())
     {
         argDest->CopyStructToRegisters(src, pMT->GetNumInstanceFieldBytes(), destOffset);
+        return;
+    }
+
+#elif defined(_TARGET_ARM64_)
+
+    if (argDest->IsHFA())
+    {
+        argDest->CopyHFAStructToRegister(src, pMT->GetAlignedNumInstanceFieldBytes());
         return;
     }
 
@@ -1727,7 +1740,7 @@ VOID Object::ValidateInner(BOOL bDeep, BOOL bVerifyNextHeader, BOOL bVerifySyncB
         BOOL bSmallObjectHeapPtr = FALSE, bLargeObjectHeapPtr = FALSE;
         if (!noRangeChecks)
         {
-            bSmallObjectHeapPtr = GCHeapUtilities::GetGCHeap()->IsHeapPointer(this, TRUE);
+            bSmallObjectHeapPtr = GCHeapUtilities::GetGCHeap()->IsHeapPointer(this, true);
             if (!bSmallObjectHeapPtr)
                 bLargeObjectHeapPtr = GCHeapUtilities::GetGCHeap()->IsHeapPointer(this);
                 
@@ -1773,12 +1786,13 @@ VOID Object::ValidateInner(BOOL bDeep, BOOL bVerifyNextHeader, BOOL bVerifySyncB
 
         lastTest = 7;
 
+        _ASSERTE(GCHeapUtilities::IsGCHeapInitialized());
         // try to validate next object's header
         if (bDeep 
             && bVerifyNextHeader 
-            && GCScan::GetGcRuntimeStructuresValid ()
+            && GCHeapUtilities::GetGCHeap()->RuntimeStructuresValid()
             //NextObj could be very slow if concurrent GC is going on
-            && !(GCHeapUtilities::IsGCHeapInitialized() && GCHeapUtilities::GetGCHeap ()->IsConcurrentGCInProgress ()))
+            && !GCHeapUtilities::GetGCHeap ()->IsConcurrentGCInProgress ())
         {
             Object * nextObj = GCHeapUtilities::GetGCHeap ()->NextObj (this);
             if ((nextObj != NULL) &&
@@ -1809,6 +1823,24 @@ VOID Object::ValidateInner(BOOL bDeep, BOOL bVerifyNextHeader, BOOL bVerifySyncB
 
 
 #endif   // VERIFY_HEAP
+
+#ifndef DACCESS_COMPILE
+#ifdef _DEBUG
+void ArrayBase::AssertArrayTypeDescLoaded()
+{
+    _ASSERTE (m_pMethTab->IsArray());
+
+    // The type should already be loaded
+    // See also: MethodTable::DoFullyLoad
+    TypeHandle th = ClassLoader::LoadArrayTypeThrowing(m_pMethTab->GetApproxArrayElementTypeHandle(),
+                                                       m_pMethTab->GetInternalCorElementType(),
+                                                       m_pMethTab->GetRank(),
+                                                       ClassLoader::DontLoadTypes);
+
+    _ASSERTE(!th.IsNull());
+}
+#endif // DEBUG
+#endif // !DACCESS_COMPILE
 
 /*==================================NewString===================================
 **Action:  Creates a System.String object.
@@ -2946,8 +2978,9 @@ void __fastcall ZeroMemoryInGCHeap(void* mem, size_t size)
         *memBytes++ = 0;
 
     // now write pointer sized pieces
+    // volatile ensures that this doesn't get optimized back into a memset call (see #12207)
     size_t nPtrs = (endBytes - memBytes) / sizeof(PTR_PTR_VOID);
-    PTR_PTR_VOID memPtr = (PTR_PTR_VOID) memBytes;
+    volatile PTR_PTR_VOID memPtr = (PTR_PTR_VOID) memBytes;
     for (size_t i = 0; i < nPtrs; i++)
         *memPtr++ = 0;
 
@@ -2964,6 +2997,7 @@ void StackTraceArray::Append(StackTraceElement const * begin, StackTraceElement 
         THROWS;
         GC_TRIGGERS;
         MODE_COOPERATIVE;
+        PRECONDITION(IsProtectedByGCFrame((OBJECTREF*)this));
     }
     CONTRACTL_END;
 
@@ -2988,6 +3022,7 @@ void StackTraceArray::AppendSkipLast(StackTraceElement const * begin, StackTrace
         THROWS;
         GC_TRIGGERS;
         MODE_COOPERATIVE;
+        PRECONDITION(IsProtectedByGCFrame((OBJECTREF*)this));
     }
     CONTRACTL_END;
 
@@ -3015,8 +3050,9 @@ void StackTraceArray::AppendSkipLast(StackTraceElement const * begin, StackTrace
     else
     {
         // slow path: create a copy and append
-        StackTraceArray copy(*this);
+        StackTraceArray copy;
         GCPROTECT_BEGIN(copy);
+            copy.CopyFrom(*this);
             copy.SetSize(copy.Size() - 1);
             copy.Append(begin, end);
             this->Swap(copy);
@@ -3058,6 +3094,7 @@ void StackTraceArray::Grow(size_t grow_size)
         GC_TRIGGERS;
         MODE_COOPERATIVE;
         INJECT_FAULT(ThrowOutOfMemory(););
+        PRECONDITION(IsProtectedByGCFrame((OBJECTREF*)this));
     }
     CONTRACTL_END;
 
@@ -3099,37 +3136,17 @@ void StackTraceArray::EnsureThreadAffinity()
     {
         // object is being changed by a thread different from the one which created it
         // make a copy of the array to prevent a race condition when two different threads try to change it
-        StackTraceArray copy(*this);
-        this->Swap(copy);
+        StackTraceArray copy;
+        GCPROTECT_BEGIN(copy);
+            copy.CopyFrom(*this);
+            this->Swap(copy);
+        GCPROTECT_END();
     }
 }
 
 #ifdef _MSC_VER
 #pragma warning(disable: 4267) 
 #endif
-
-StackTraceArray::StackTraceArray(StackTraceArray const & rhs)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_COOPERATIVE;
-        INJECT_FAULT(ThrowOutOfMemory(););
-    }
-    CONTRACTL_END;
-
-    m_array = (I1ARRAYREF) AllocatePrimitiveArray(ELEMENT_TYPE_I1, static_cast<DWORD>(rhs.Capacity()));
-
-    GCPROTECT_BEGIN(m_array);
-        Volatile<size_t> size = rhs.Size();
-        memcpyNoGCRefs(GetRaw(), rhs.GetRaw(), size * sizeof(StackTraceElement) + sizeof(ArrayHeader));
-
-        SetSize(size);  // set size to the exact value which was used when we copied the data
-                        // another thread might have changed it at the time of copying
-        SetObjectThread();  // affinitize the newly created array with the current thread
-    GCPROTECT_END();
-}
 
 // Deep copies the stack trace array
 void StackTraceArray::CopyFrom(StackTraceArray const & src)
@@ -3140,19 +3157,19 @@ void StackTraceArray::CopyFrom(StackTraceArray const & src)
         GC_TRIGGERS;
         MODE_COOPERATIVE;
         INJECT_FAULT(ThrowOutOfMemory(););
+        PRECONDITION(IsProtectedByGCFrame((OBJECTREF*)this));
+        PRECONDITION(IsProtectedByGCFrame((OBJECTREF*)&src));
     }
     CONTRACTL_END;
 
     m_array = (I1ARRAYREF) AllocatePrimitiveArray(ELEMENT_TYPE_I1, static_cast<DWORD>(src.Capacity()));
 
-    GCPROTECT_BEGIN(m_array);
     Volatile<size_t> size = src.Size();
     memcpyNoGCRefs(GetRaw(), src.GetRaw(), size * sizeof(StackTraceElement) + sizeof(ArrayHeader));
 
     SetSize(size);  // set size to the exact value which was used when we copied the data
                     // another thread might have changed it at the time of copying
     SetObjectThread();  // affinitize the newly created array with the current thread
-    GCPROTECT_END();
 }
 
 #ifdef _MSC_VER

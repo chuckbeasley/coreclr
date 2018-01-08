@@ -36,6 +36,11 @@
     IMPORT DynamicHelperWorker
 #endif
 
+    IMPORT ObjIsInstanceOfNoGC
+    IMPORT ArrayStoreCheck	
+    SETALIAS g_pObjectClass,  ?g_pObjectClass@@3PEAVMethodTable@@EA 
+    IMPORT  $g_pObjectClass
+
     IMPORT  g_ephemeral_low
     IMPORT  g_ephemeral_high
     IMPORT  g_lowest_address
@@ -51,6 +56,9 @@
     IMPORT $g_GCShadow
     IMPORT $g_GCShadowEnd
 #endif // WRITE_BARRIER_CHECK
+
+    IMPORT JIT_GetSharedNonGCStaticBase_Helper
+    IMPORT JIT_GetSharedGCStaticBase_Helper
 
     TEXTAREA
 
@@ -159,6 +167,7 @@
         RestoreRegMS 26, X26
         RestoreRegMS 27, X27
         RestoreRegMS 28, X28
+        RestoreRegMS 29, X29
 
 Done
         ; Its imperative that the return value of HelperMethodFrameRestoreState is zero
@@ -322,8 +331,7 @@ NotInHeap
 ;   x15  : trashed
 ;
     WRITE_BARRIER_ENTRY JIT_WriteBarrier
-        dmb      ST
-        str      x15, [x14]
+        stlr     x15, [x14]
 
 #ifdef WRITE_BARRIER_CHECK
         ; Update GC Shadow Heap  
@@ -351,7 +359,7 @@ NotInHeap
 
         ; Ensure that the write to the shadow heap occurs before the read from the GC heap so that race
         ; conditions are caught by INVALIDGCVALUE.
-        dmb      sy
+        dmb      ish
 
         ; if ([x14] == x15) goto end
         ldr      x13, [x14]
@@ -977,8 +985,6 @@ UM2MThunk_WrapperHelper_RegArgumentsSetup
         GenerateRedirectedHandledJITCaseStub DbgThreadControl
 ;; ------------------------------------------------------------------
         GenerateRedirectedHandledJITCaseStub UserSuspend
-;; ------------------------------------------------------------------
-        GenerateRedirectedHandledJITCaseStub YieldTask
 
 #ifdef _DEBUG
 ; ------------------------------------------------------------------
@@ -991,16 +997,6 @@ UM2MThunk_WrapperHelper_RegArgumentsSetup
 
         ; This helper enables us to call into a funclet after restoring Fp register
         NESTED_ENTRY CallEHFunclet
-
-        ; Using below prolog instead of PROLOG_SAVE_REG_PAIR fp,lr, #-16!
-        ; is intentional. Above statement would also emit instruction to save
-        ; sp in fp. If sp is saved in fp in prolog then it is not expected that fp can change in the body
-        ; of method. However, this method needs to be able to change fp before calling funclet.
-        ; This is required to access locals in funclet.
-        PROLOG_SAVE_REG_PAIR x19,x20, #-16!
-        PROLOG_SAVE_REG   fp, #0
-        PROLOG_SAVE_REG   lr, #8
-
         ; On entry:
         ;
         ; X0 = throwable        
@@ -1008,17 +1004,42 @@ UM2MThunk_WrapperHelper_RegArgumentsSetup
         ; X2 = address of X19 register in CONTEXT record; used to restore the non-volatile registers of CrawlFrame
         ; X3 = address of the location where the SP of funclet's caller (i.e. this helper) should be saved.
         ;
+
+        ; Using below prolog instead of PROLOG_SAVE_REG_PAIR fp,lr, #-16!
+        ; is intentional. Above statement would also emit instruction to save
+        ; sp in fp. If sp is saved in fp in prolog then it is not expected that fp can change in the body
+        ; of method. However, this method needs to be able to change fp before calling funclet.
+        ; This is required to access locals in funclet.
+        PROLOG_SAVE_REG_PAIR_NO_FP fp,lr, #-96!
+
+        ; Spill callee saved registers
+        PROLOG_SAVE_REG_PAIR   x19, x20, 16
+        PROLOG_SAVE_REG_PAIR   x21, x22, 32
+        PROLOG_SAVE_REG_PAIR   x23, x24, 48
+        PROLOG_SAVE_REG_PAIR   x25, x26, 64
+        PROLOG_SAVE_REG_PAIR   x27, x28, 80
+
         ; Save the SP of this function. We cannot store SP directly.
         mov fp, sp
         str fp, [x3]
 
+        ldp x19, x20, [x2, #0]
+        ldp x21, x22, [x2, #16]
+        ldp x23, x24, [x2, #32]
+        ldp x25, x26, [x2, #48]
+        ldp x27, x28, [x2, #64]
         ldr fp, [x2, #80] ; offset of fp in CONTEXT relative to X19
 
         ; Invoke the funclet
         blr x1
         nop
 
-        EPILOG_RESTORE_REG_PAIR   fp, lr, #16!
+        EPILOG_RESTORE_REG_PAIR   x19, x20, 16
+        EPILOG_RESTORE_REG_PAIR   x21, x22, 32
+        EPILOG_RESTORE_REG_PAIR   x23, x24, 48
+        EPILOG_RESTORE_REG_PAIR   x25, x26, 64
+        EPILOG_RESTORE_REG_PAIR   x27, x28, 80
+        EPILOG_RESTORE_REG_PAIR   fp, lr, #96!
         EPILOG_RETURN
 
         NESTED_END CallEHFunclet
@@ -1180,8 +1201,9 @@ Success
 Promote
                                   ; Move this entry to head postion of the chain
         mov     x16, #256
-        str     x16, [x13]         ; be quick to reset the counter so we don't get a bunch of contending threads
+        str     x16, [x13]        ; be quick to reset the counter so we don't get a bunch of contending threads
         orr     x11, x11, #PROMOTE_CHAIN_FLAG   ; set PROMOTE_CHAIN_FLAG 
+        mov     x12, x9           ; We pass the ResolveCacheElem to ResolveWorkerAsmStub instead of the DispatchToken
 
 Fail           
         b       ResolveWorkerAsmStub ; call the ResolveWorkerAsmStub method to transition into the VM
@@ -1310,5 +1332,158 @@ Fail
     LEAF_END
 #endif
 
+;
+; JIT Static access helpers when coreclr host specifies single appdomain flag 
+;
+
+; ------------------------------------------------------------------
+; void* JIT_GetSharedNonGCStaticBase(SIZE_T moduleDomainID, DWORD dwClassDomainID)
+
+    LEAF_ENTRY JIT_GetSharedNonGCStaticBase_SingleAppDomain
+    ; If class is not initialized, bail to C++ helper
+    add x2, x0, #DomainLocalModule__m_pDataBlob
+    ldrb w2, [x2, w1]
+    tst w2, #1
+    beq CallHelper1
+
+    ret lr
+
+CallHelper1
+    ; Tail call JIT_GetSharedNonGCStaticBase_Helper
+    b JIT_GetSharedNonGCStaticBase_Helper
+    LEAF_END
+
+
+; ------------------------------------------------------------------
+; void* JIT_GetSharedNonGCStaticBaseNoCtor(SIZE_T moduleDomainID, DWORD dwClassDomainID)
+
+    LEAF_ENTRY JIT_GetSharedNonGCStaticBaseNoCtor_SingleAppDomain
+    ret lr
+    LEAF_END
+
+
+; ------------------------------------------------------------------
+; void* JIT_GetSharedGCStaticBase(SIZE_T moduleDomainID, DWORD dwClassDomainID)
+
+    LEAF_ENTRY JIT_GetSharedGCStaticBase_SingleAppDomain
+    ; If class is not initialized, bail to C++ helper
+    add x2, x0, #DomainLocalModule__m_pDataBlob
+    ldrb w2, [x2, w1]
+    tst w2, #1
+    beq CallHelper2
+
+    ldr x0, [x0, #DomainLocalModule__m_pGCStatics]
+    ret lr
+
+CallHelper2
+    ; Tail call Jit_GetSharedGCStaticBase_Helper
+    b JIT_GetSharedGCStaticBase_Helper
+    LEAF_END
+
+
+; ------------------------------------------------------------------
+; void* JIT_GetSharedGCStaticBaseNoCtor(SIZE_T moduleDomainID, DWORD dwClassDomainID)
+
+    LEAF_ENTRY JIT_GetSharedGCStaticBaseNoCtor_SingleAppDomain
+    ldr x0, [x0, #DomainLocalModule__m_pGCStatics]
+    ret lr
+    LEAF_END
+
+; ------------------------------------------------------------------
+;__declspec(naked) void F_CALL_CONV JIT_Stelem_Ref(PtrArray* array, unsigned idx, Object* val)
+    LEAF_ENTRY JIT_Stelem_Ref
+    ; We retain arguments as they were passed and use x0 == array x1 == idx x2 == val
+
+    ; check for null array
+    cbz     x0, ThrowNullReferenceException
+
+    ; idx bounds check
+    ldr     x3,[x0,#ArrayBase__m_NumComponents]
+    cmp     x3, x1
+    bls     ThrowIndexOutOfRangeException
+
+    ; fast path to null assignment (doesn't need any write-barriers)
+    cbz     x2, AssigningNull
+
+    ; Verify the array-type and val-type matches before writing
+    ldr     x12, [x0] ; x12 = array MT
+    ldr     x3, [x2] ; x3 = val->GetMethodTable()
+    ldr     x12, [x12, #MethodTable__m_ElementType] ; array->GetArrayElementTypeHandle()
+    cmp     x3, x12
+    beq     JIT_Stelem_DoWrite
+
+    ; Types didnt match but allow writing into an array of objects
+    ldr     x3, =$g_pObjectClass
+    ldr     x3, [x3]  ; x3 = *g_pObjectClass
+    cmp     x3, x12   ; array type matches with Object*
+    beq     JIT_Stelem_DoWrite
+
+    ; array type and val type do not exactly match. Raise frame and do detailed match
+    b       JIT_Stelem_Ref_NotExactMatch
+
+AssigningNull
+    ; Assigning null doesn't need write barrier
+    add     x0, x0, x1, LSL #3           ; x0 = x0 + (x1 x 8) = array->m_array[idx]
+    str     x2, [x0, #PtrArray__m_Array] ; array->m_array[idx] = val
+    ret
+
+ThrowNullReferenceException
+    ; Tail call JIT_InternalThrow(NullReferenceException)
+    ldr     x0, =CORINFO_NullReferenceException_ASM
+    b       JIT_InternalThrow
+
+ThrowIndexOutOfRangeException
+    ; Tail call JIT_InternalThrow(NullReferenceException)
+    ldr     x0, =CORINFO_IndexOutOfRangeException_ASM
+    b       JIT_InternalThrow
+
+   LEAF_END 
+
+; ------------------------------------------------------------------
+; __declspec(naked) void F_CALL_CONV JIT_Stelem_Ref_NotExactMatch(PtrArray* array,
+;                                                       unsigned idx, Object* val)
+;   x12 = array->GetArrayElementTypeHandle()
+;
+    NESTED_ENTRY JIT_Stelem_Ref_NotExactMatch    
+    PROLOG_SAVE_REG_PAIR           fp, lr, #-48!    
+    stp     x0, x1, [sp, #16]
+    str     x2, [sp, #32]
+
+    ; allow in case val can be casted to array element type
+    ; call ObjIsInstanceOfNoGC(val, array->GetArrayElementTypeHandle())
+    mov     x1, x12 ; array->GetArrayElementTypeHandle()
+    mov     x0, x2
+    bl      ObjIsInstanceOfNoGC
+    cmp     x0, TypeHandle_CanCast
+    beq     DoWrite             ; ObjIsInstance returned TypeHandle::CanCast
+
+    ; check via raising frame
+NeedFrame
+    add     x1, sp, #16             ; x1 = &array
+    add     x0, sp, #32             ; x0 = &val
+
+    bl      ArrayStoreCheck ; ArrayStoreCheck(&val, &array)
+
+DoWrite        
+    ldp     x0, x1, [sp, #16]
+    ldr     x2, [sp, #32]	
+    EPILOG_RESTORE_REG_PAIR           fp, lr, #48!
+    EPILOG_BRANCH JIT_Stelem_DoWrite    
+    NESTED_END 
+
+; ------------------------------------------------------------------
+; __declspec(naked) void F_CALL_CONV JIT_Stelem_DoWrite(PtrArray* array, unsigned idx, Object* val)
+    LEAF_ENTRY  JIT_Stelem_DoWrite
+
+    ; Setup args for JIT_WriteBarrier. x14 = &array->m_array[idx] x15 = val
+    add     x14, x0, #PtrArray__m_Array ; x14 = &array->m_array
+    add     x14, x14, x1, LSL #3
+    mov     x15, x2                     ; x15 = val
+
+    ; Branch to the write barrier (which is already correctly overwritten with
+    ; single or multi-proc code based on the current CPU
+    b       JIT_WriteBarrier
+    LEAF_END 
+	
 ; Must be at very end of file
     END
